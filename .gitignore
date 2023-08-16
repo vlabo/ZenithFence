@@ -97,6 +97,7 @@ StyleCopReport.xml
 *.pidb
 *.svclog
 *.scc
+*.exe
 
 # Chutzpah Test files
 _Chutzpah*
@@ -396,3 +397,8 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+pm_kext/RCa04400
+pm_kext/RCa05788
+pm_kext/RCa06452
+target
+kext.sys
