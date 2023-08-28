@@ -1,4 +1,5 @@
-#![allow(dead_code)]
+extern crate alloc;
+
 use core::alloc::{GlobalAlloc, Layout};
 
 use alloc::alloc::handle_alloc_error;
@@ -63,13 +64,13 @@ extern "system" {
     pub fn MmFreeContiguousMemory(BaseAddress: *mut u64);
 }
 
-struct PortmasterAllocator {}
+pub struct WindowsAllocator {}
 
-unsafe impl Sync for PortmasterAllocator {}
+unsafe impl Sync for WindowsAllocator {}
 
 const POOL_TAG: u32 = u32::from_ne_bytes(*b"srMP");
 
-unsafe impl GlobalAlloc for PortmasterAllocator {
+unsafe impl GlobalAlloc for WindowsAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let pool = ExAllocatePoolWithTag(NON_PAGED_POOL, layout.size(), POOL_TAG);
         if pool.is_null() {
@@ -110,7 +111,3 @@ unsafe impl GlobalAlloc for PortmasterAllocator {
         new_ptr
     }
 }
-
-// Declaration of the global memory allocator
-#[global_allocator]
-static HEAP: PortmasterAllocator = PortmasterAllocator {};

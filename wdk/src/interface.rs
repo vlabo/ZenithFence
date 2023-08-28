@@ -1,4 +1,4 @@
-use self::layer::Layer;
+use crate::layer::Layer;
 use alloc::{ffi::CString, string};
 use core::ptr;
 use widestring::U16CString;
@@ -12,9 +12,9 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS},
 };
 
-pub mod consts;
-pub mod ioctl;
-pub mod layer;
+// pub mod consts;
+// pub mod ioctl;
+// pub mod layer;
 
 extern "C" {
     // Debug

@@ -6,6 +6,7 @@ import (
 	"os"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -163,7 +164,6 @@ func createKextService(driverName string, driverPath string) (*KextService, erro
 	if err != nil {
 		return nil, err
 	}
-
 	return &KextService{handle: service}, nil
 }
 
@@ -203,7 +203,7 @@ func openDriver(filename string) (windows.Handle, error) {
 		return winInvalidHandleValue, fmt.Errorf("failed to convert driver filename to UTF16 string %w", err)
 	}
 
-	handle, err := windows.CreateFile(&u16filename[0], windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED, 0)
+	handle, err := windows.CreateFile(&u16filename[0], windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		return winInvalidHandleValue, err
 	}
@@ -217,7 +217,7 @@ func main() {
 	service, err := createKextService(driverName, sysPath)
 	if err != nil {
 		fmt.Printf("Failed to create service: %s\n", err)
-		// return
+		return
 	}
 
 	defer service.delete()
@@ -225,10 +225,12 @@ func main() {
 	err = service.start(true)
 	if err == nil {
 		fmt.Println("Service started correctly")
-		defer service.stop(true)
 	} else {
 		fmt.Printf("Faield to start service: %s\n", err)
+		return
 	}
+
+	defer service.stop(true)
 
 	isRunning, err := service.isRunning()
 
@@ -240,10 +242,21 @@ func main() {
 	fmt.Printf("Service is running: %v\n", isRunning)
 
 	filename := `\\.\` + driverName
-	_, err = openDriver(filename)
+	fileHandle, err := openDriver(filename)
 	if err != nil {
 		fmt.Printf("Faield to open driver: %s\n", err)
 		return
+	}
+	packet := PacketInfo{}
+	data := unsafe.Slice((*byte)(unsafe.Pointer(&packet)), unsafe.Sizeof(packet))
+
+	// data := make([]uint8, 1000)
+	var done uint32
+	err = windows.ReadFile(fileHandle, data, &done, nil)
+	if err == nil {
+		fmt.Printf("Reading packet %d : %+v\n", done, packet)
+	} else {
+		fmt.Printf("Faield to read from driver: %s\n", err)
 	}
 
 	fmt.Print("Press enter to exit")

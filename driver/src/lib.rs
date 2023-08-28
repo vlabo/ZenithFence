@@ -1,22 +1,27 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
 #![feature(lang_items)]
-mod allocator;
+// mod allocator;
 // mod cache;
 // mod common;
-mod debug;
+// mod debug;
 mod driver;
-mod register_engine;
-// mod ioqueue;
-// pub mod lock;
-// mod packet_info;
-mod wdk;
+mod filter_engine;
+mod packet_info;
+// mod wdk;
 extern crate alloc;
+// extern crate windows_allocator;
+
+use wdk::allocator::WindowsAllocator;
 
 // use common::Verdict;
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;
+
+// Declaration of the global memory allocator
+#[global_allocator]
+static HEAP: WindowsAllocator = WindowsAllocator {};
 
 // #[no_mangle]
 // pub extern "C" fn respondWithVerdict(packet_id: u32, verdict: Verdict) {

@@ -37,7 +37,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\c\helper.c">
+    <ClCompile Include="..\driver\src\c\helper.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

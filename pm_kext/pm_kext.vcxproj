@@ -182,7 +182,7 @@
     <ClInclude Include="include\version.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\c\helper.c" />
+    <ClCompile Include="..\driver\src\c\helper.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

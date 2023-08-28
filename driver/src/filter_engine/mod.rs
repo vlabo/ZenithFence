@@ -1,10 +1,10 @@
-use crate::{alloc::borrow::ToOwned, log};
+use crate::alloc::borrow::ToOwned;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
+use wdk::layer::Layer;
+use wdk::{interface, log};
 use winapi::km::wdm::DEVICE_OBJECT;
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-
-use crate::wdk::{self, layer::Layer};
 
 // const OUTBOUND_V4_NAME: &str = "PortmasterOutboundV4Filter";
 // const OUTBOUND_V4_DESCRIPTION: &str =
@@ -17,7 +17,7 @@ use crate::wdk::{self, layer::Layer};
 // const INBOUND_V4_GUID: GUID = GUID::from_u128(0x05c55149_4732_4857_8d10_f178f3a06f8c);
 
 #[no_mangle]
-unsafe extern "C" fn test_callout(
+extern "C" fn test_callout(
     _infixed_values: *const u8,
     _in_meta_values: *const u8,
     _layer_data: *mut u8,
@@ -26,7 +26,7 @@ unsafe extern "C" fn test_callout(
     _flow_context: u64,
     _classify_out: *mut u8,
 ) {
-    log!("callout called");
+    // log!("callout called");
 }
 
 type Guid = u128;
@@ -52,7 +52,7 @@ pub struct FilterEngine {
 impl FilterEngine {
     pub fn new(device_object: *mut DEVICE_OBJECT) -> Result<Self, String> {
         let filter_engine_handle: HANDLE;
-        match wdk::create_filter_engine() {
+        match interface::create_filter_engine() {
             Ok(handle) => {
                 filter_engine_handle = handle;
             }
@@ -73,7 +73,8 @@ impl FilterEngine {
     }
 
     pub fn commit(&mut self) -> Result<(), String> {
-        if let Err(code) = wdk::filter_engine_transaction_begin(self.filter_engine_handle, 0) {
+        if let Err(code) = interface::filter_engine_transaction_begin(self.filter_engine_handle, 0)
+        {
             return Err(format!(
                 "filter-engine: faield to begin transaction: {}",
                 code
@@ -81,7 +82,7 @@ impl FilterEngine {
         }
 
         if let Err(err) = self.register_sublayer() {
-            _ = wdk::filter_engine_transaction_abort(self.filter_engine_handle);
+            _ = interface::filter_engine_transaction_abort(self.filter_engine_handle);
             return Err(format!("filter_engine: {}", err));
         }
 
@@ -91,12 +92,12 @@ impl FilterEngine {
             for callout in &mut callouts {
                 if let Err(err) = callout.register_callout(self) {
                     // This will destroy the callout structs.
-                    _ = wdk::filter_engine_transaction_abort(self.filter_engine_handle);
+                    _ = interface::filter_engine_transaction_abort(self.filter_engine_handle);
                     return Err(err);
                 }
                 if let Err(err) = callout.register_filter(self) {
                     // This will destory the callout structs.
-                    _ = wdk::filter_engine_transaction_abort(self.filter_engine_handle);
+                    _ = interface::filter_engine_transaction_abort(self.filter_engine_handle);
                     return Err(err);
                 }
             }
@@ -105,7 +106,7 @@ impl FilterEngine {
             self.callouts = Some(callouts);
         }
 
-        if let Err(code) = wdk::filter_engine_transaction_commit(self.filter_engine_handle) {
+        if let Err(code) = interface::filter_engine_transaction_commit(self.filter_engine_handle) {
             return Err(format!(
                 "filter-engine: failed to commit transaction: {}",
                 code
@@ -154,7 +155,7 @@ impl FilterEngine {
     }
 
     fn register_sublayer(&self) -> Result<(), String> {
-        let result = wdk::register_sublayer(
+        let result = interface::register_sublayer(
             self.filter_engine_handle,
             "PortmasterSublayer",
             "The Portmaster sublayer holds all it's filters.",
@@ -170,7 +171,7 @@ impl FilterEngine {
 
 impl Callout {
     fn register_filter(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
-        match wdk::register_filter(
+        match interface::register_filter(
             filter_engine.filter_engine_handle,
             filter_engine.sublayer_guid,
             &format!("{}-filter", self.name),
@@ -191,7 +192,7 @@ impl Callout {
     }
 
     fn register_callout(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
-        match wdk::register_callout(
+        match interface::register_callout(
             filter_engine.device_object,
             filter_engine.filter_engine_handle,
             &format!("{}-callout", self.name),
@@ -217,11 +218,11 @@ impl Drop for FilterEngine {
         if let Some(callouts) = &mut self.callouts {
             for ele in callouts {
                 if ele.registerd {
-                    if let Err(code) = wdk::unregister_callout(ele.callout_id) {
+                    if let Err(code) = interface::unregister_callout(ele.callout_id) {
                         log!("faild to unregister callout: {}", code);
                     }
                     if let Err(code) =
-                        wdk::unregister_filter(self.filter_engine_handle, ele.filter_id)
+                        interface::unregister_filter(self.filter_engine_handle, ele.filter_id)
                     {
                         log!("failed to unregister filter: {}", code)
                     }
@@ -231,14 +232,14 @@ impl Drop for FilterEngine {
 
         if self.commited {
             if let Err(code) =
-                wdk::unregister_sublayer(self.filter_engine_handle, self.sublayer_guid)
+                interface::unregister_sublayer(self.filter_engine_handle, self.sublayer_guid)
             {
                 log!("Failed to unregister sublayer: {}", code);
             }
         }
 
         if self.filter_engine_handle != INVALID_HANDLE_VALUE {
-            _ = wdk::filter_engine_close(self.filter_engine_handle);
+            _ = interface::filter_engine_close(self.filter_engine_handle);
         }
     }
 }
