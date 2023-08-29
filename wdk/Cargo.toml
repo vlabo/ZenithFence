@@ -22,3 +22,7 @@ features = [
 [dependencies.windows-sys]
 version = "0.48.0"
 features = ["Wdk", "Wdk_System", "Win32_System", "Win32_System_Kernel", "Win32_Security", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_Foundation"]
+
+[build-dependencies]
+winreg = "0.7.0"
+failure = "0.1.8"

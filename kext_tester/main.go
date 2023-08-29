@@ -213,7 +213,7 @@ func openDriver(filename string) (windows.Handle, error) {
 
 func main() {
 	driverName := "PortmasterTest"
-	sysPath := "C:\\Dev\\portmaster_rust_kext\\kext.sys"
+	sysPath := "C:\\Dev\\portmaster-kext\\driver\\target\\x86_64-pc-windows-msvc\\debug\\driver.sys"
 	service, err := createKextService(driverName, sysPath)
 	if err != nil {
 		fmt.Printf("Failed to create service: %s\n", err)
@@ -250,7 +250,6 @@ func main() {
 	packet := PacketInfo{}
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&packet)), unsafe.Sizeof(packet))
 
-	// data := make([]uint8, 1000)
 	var done uint32
 	err = windows.ReadFile(fileHandle, data, &done, nil)
 	if err == nil {

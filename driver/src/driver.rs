@@ -12,7 +12,6 @@ use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_FAILED_DRIVER_ENTRY, STATU
 pub const DRIVER_NAME: &str = "PortmasterTest";
 pub static mut FILTER_ENGINE: Option<FilterEngine> = None;
 
-// #[cfg(not(test))]
 #[no_mangle]
 pub extern "system" fn DriverEntry(
     driver_object: *mut DRIVER_OBJECT,

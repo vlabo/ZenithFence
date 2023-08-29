@@ -19,7 +19,15 @@ use windows_sys::{
 extern "C" {
     // Debug
     fn DbgPrint(str: *const i8);
+}
 
+#[link(name = "WdfDriverEntry", kind="static")]
+#[link(name = "WdfLdr", kind="static")]
+#[link(name = "BufferOverflowK", kind="static")]
+#[link(name = "uuid", kind="static")]
+#[link(name = "wdmsec", kind="static")]
+#[link(name = "wfp_lib", kind="static")]
+extern "C" {
     // Helper
     pub fn c_init_driver_object(
         driverObject: *mut DRIVER_OBJECT,
@@ -67,7 +75,11 @@ extern "C" {
     ) -> NTSTATUS;
 
     fn c_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
+}
 
+#[link(name="Fwpkclnt", kind="static")]
+#[link(name="Fwpuclnt", kind="static")]
+extern "C" {
     // Fwpm
     fn FwpmFilterDeleteById0(filter_engine_handle: HANDLE, id: u64) -> NTSTATUS;
     fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
@@ -77,12 +89,6 @@ extern "C" {
     fn FwpmTransactionBegin0(filter_engine_handle: HANDLE, flags: u32) -> NTSTATUS;
     fn FwpmTransactionCommit0(filter_engine_handle: HANDLE) -> NTSTATUS;
     fn FwpmTransactionAbort0(filter_engine_handle: HANDLE) -> NTSTATUS;
-}
-
-// Needed by the compiler but not used.
-#[no_mangle]
-pub extern "system" fn __CxxFrameHandler3(_: *mut u8, _: *mut u8, _: *mut u8, _: *mut u8) -> i32 {
-    0
 }
 
 // Debug

@@ -1,15 +1,15 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
 #![feature(lang_items)]
-// mod allocator;
+
+extern crate alloc;
+
 // mod cache;
 // mod common;
 // mod debug;
 mod driver;
 mod filter_engine;
-mod packet_info;
 // mod wdk;
-extern crate alloc;
 // extern crate windows_allocator;
 
 use wdk::allocator::WindowsAllocator;
@@ -85,15 +85,3 @@ fn panic(_info: &PanicInfo) -> ! {
     // log!("{}", info);
     loop {}
 }
-
-#[cfg(not(test))]
-#[lang = "eh_personality"]
-extern "C" fn eh_personality() {}
-
-// #[test]
-// fn gen_bindings() {
-//     let apis = ["Windows.Win32.System.SystemInformation.GetTickCount"];
-
-//     let bindings = windows_bindgen::standalone(&apis);
-//     // std::fs::write("src/bindings.rs", bindings).unwrap();
-// }
