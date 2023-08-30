@@ -214,6 +214,7 @@ func openDriver(filename string) (windows.Handle, error) {
 func main() {
 	driverName := "PortmasterTest"
 	sysPath := "C:\\Dev\\portmaster-kext\\driver\\target\\x86_64-pc-windows-msvc\\debug\\driver.sys"
+	fmt.Printf("Loading driver: %s\n", sysPath)
 	service, err := createKextService(driverName, sysPath)
 	if err != nil {
 		fmt.Printf("Failed to create service: %s\n", err)
@@ -247,16 +248,25 @@ func main() {
 		fmt.Printf("Faield to open driver: %s\n", err)
 		return
 	}
-	packet := PacketInfo{}
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&packet)), unsafe.Sizeof(packet))
+	defer windows.CloseHandle(fileHandle)
+	go func() {
+		for {
+			packet := PacketInfo{}
+			data := unsafe.Slice((*byte)(unsafe.Pointer(&packet)), unsafe.Sizeof(packet))
 
-	var done uint32
-	err = windows.ReadFile(fileHandle, data, &done, nil)
-	if err == nil {
-		fmt.Printf("Reading packet %d : %+v\n", done, packet)
-	} else {
-		fmt.Printf("Faield to read from driver: %s\n", err)
-	}
+			var done uint32
+			err = windows.ReadFile(fileHandle, data, &done, nil)
+			if err == nil {
+				if done > 0 {
+					fmt.Printf("Reading packet %d : %+v\n", done, packet)
+				} else {
+					fmt.Printf("No new data\n")
+				}
+			} else {
+				fmt.Printf("Faield to read from driver: %s\n", err)
+			}
+		}
+	}()
 
 	fmt.Print("Press enter to exit")
 	input := bufio.NewScanner(os.Stdin)

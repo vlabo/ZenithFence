@@ -57,7 +57,7 @@ fn get_um_dir(windows_kits_dir: &PathBuf) -> Result<PathBuf, Error> {
     Ok(max_libdir.join("um"))
 }
 
-fn internal_link_search() {
+fn main() {
     let windows_kits_dir = get_windows_kits_dir().unwrap();
     let km_dir = get_km_dir(&windows_kits_dir).unwrap();
     let um_dir = get_um_dir(&windows_kits_dir).unwrap();
@@ -84,10 +84,8 @@ fn internal_link_search() {
     );
 
     println!("cargo:rustc-link-search=native=C:/Program Files (x86)/Windows Kits/10/lib/wdf/kmdf/{}/1.15", arch);
-}
 
-fn main() {
-    internal_link_search();
-
-    println!("cargo:rustc-link-search=native=../wfp_lib/x64/Debug");
+    // Helper WFP library
+    println!("cargo:rerun-if-changed=../wfp_lib/{}/wfp_lib.lib", arch);
+    println!("cargo:rustc-link-search=native=../wfp_lib/{}", arch);
 }

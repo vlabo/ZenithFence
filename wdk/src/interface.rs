@@ -21,12 +21,12 @@ extern "C" {
     fn DbgPrint(str: *const i8);
 }
 
-#[link(name = "WdfDriverEntry", kind="static")]
-#[link(name = "WdfLdr", kind="static")]
-#[link(name = "BufferOverflowK", kind="static")]
-#[link(name = "uuid", kind="static")]
-#[link(name = "wdmsec", kind="static")]
-#[link(name = "wfp_lib", kind="static")]
+#[link(name = "WdfDriverEntry", kind = "static")]
+#[link(name = "WdfLdr", kind = "static")]
+#[link(name = "BufferOverflowK", kind = "static")]
+#[link(name = "uuid", kind = "static")]
+#[link(name = "wdmsec", kind = "static")]
+#[link(name = "wfp_lib", kind = "static")]
 extern "C" {
     // Helper
     pub fn c_init_driver_object(
@@ -75,10 +75,11 @@ extern "C" {
     ) -> NTSTATUS;
 
     fn c_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
+    pub fn c_get_size_of_queue_struct() -> usize;
 }
 
-#[link(name="Fwpkclnt", kind="static")]
-#[link(name="Fwpuclnt", kind="static")]
+#[link(name = "Fwpkclnt", kind = "static")]
+#[link(name = "Fwpuclnt", kind = "static")]
 extern "C" {
     // Fwpm
     fn FwpmFilterDeleteById0(filter_engine_handle: HANDLE, id: u64) -> NTSTATUS;

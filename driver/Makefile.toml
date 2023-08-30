@@ -10,22 +10,18 @@ script = [
     "cargo b %BUILD_FLAGS%"
 ]
 
-[tasks.rename]
-ignore_errors = true
+[tasks.sign]
+dependencies = ["build-driver"]
 script = [
     "cd %TARGET_PATH%",
     "rename driver.dll driver.sys",
-]
 
-[tasks.sign]
-dependencies = ["build-driver", "rename"]
-script = [
     # Load the Visual Studio Developer environment
     "call \"%ProgramFiles%\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat\"",
 
     # Create a self signed certificate (only if not already done)
-    "if not exist DriverCertificate.cer ( makecert -r -pe -ss PrivateCertStore -n CN=DriverCertificate DriverCertificate.cer ) else ( echo Certificate already exists. )",
+    # "if not exist DriverCertificate.cer ( makecert -r -pe -ss PrivateCertStore -n CN=DriverCertificate DriverCertificate.cer ) else ( echo Certificate already exists. )",
 
     # Sign the driver
-    "signtool sign /a /v /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com %TARGET_PATH%/driver.sys"
+    "signtool sign /a /v /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com driver.sys"
 ]

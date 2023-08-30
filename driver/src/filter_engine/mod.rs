@@ -1,4 +1,5 @@
 use crate::alloc::borrow::ToOwned;
+use crate::driver::IO_QUEUE;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
 use wdk::layer::Layer;
@@ -26,7 +27,11 @@ extern "C" fn test_callout(
     _flow_context: u64,
     _classify_out: *mut u8,
 ) {
-    // log!("callout called");
+    log!("callout called");
+
+    unsafe {
+        IO_QUEUE.push(12 as u32);
+    }
 }
 
 type Guid = u128;

@@ -2,7 +2,7 @@ use crate::filter_engine::FilterEngine;
 use alloc::format;
 use data_types::PacketInfo;
 
-use wdk::{interface, log};
+use wdk::{interface, ioqueue::IOQueue, log};
 use winapi::{
     km::wdm::{IoGetCurrentIrpStackLocation, DEVICE_OBJECT, DRIVER_OBJECT, IRP, IRP_MJ},
     shared::ntdef::UNICODE_STRING,
@@ -11,6 +11,9 @@ use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_FAILED_DRIVER_ENTRY, STATU
 
 pub const DRIVER_NAME: &str = "PortmasterTest";
 pub static mut FILTER_ENGINE: Option<FilterEngine> = None;
+pub static mut IO_QUEUE: IOQueue = IOQueue {
+    kernel_queue: core::ptr::null_mut(),
+};
 
 #[no_mangle]
 pub extern "system" fn DriverEntry(
@@ -39,6 +42,10 @@ pub extern "system" fn DriverEntry(
         (*driver_object).MajorFunction[IRP_MJ::READ as usize] = Some(driver_read);
     }
 
+    unsafe {
+        IO_QUEUE = IOQueue::new();
+    }
+
     // Initialize filter engine.
     let device_object = interface::wdf_device_wdm_get_device_object(device_handle);
     let mut filter_engine = match FilterEngine::new(device_object) {
@@ -53,6 +60,8 @@ pub extern "system" fn DriverEntry(
     filter_engine.register_test_callout();
     if let Err(err) = filter_engine.commit() {
         log!("driver_entry: {}", err);
+    } else {
+        log!("callout registered");
     }
 
     // Move filter engine to global variable.
@@ -69,6 +78,7 @@ extern "system" fn driver_unload(_self: &mut DRIVER_OBJECT) {
     unsafe {
         // Unregister filter engine.
         FILTER_ENGINE = None;
+        IO_QUEUE.rundown();
     }
     log!("Unloading complete");
 }
@@ -91,30 +101,40 @@ unsafe extern "system" fn driver_read(
         device_io.OutputBufferLength as usize,
     );
 
-    let packet = PacketInfo {
-        id: 1,
-        process_id: 2,
-        direction: 3,
-        ip_v6: false,
-        protocol: 4,
-        flags: 5,
-        local_ip: [1, 2, 3, 4],
-        remote_ip: [4, 5, 6, 7],
-        local_port: 8,
-        remote_port: 9,
-        compartment_id: 10,
-        interface_index: 11,
-        sub_interface_index: 12,
-        packet_size: 13,
-    };
+    match IO_QUEUE.pop::<u32>() {
+        Ok(value) => {
+            let packet = PacketInfo {
+                id: value,
+                process_id: 2,
+                direction: 3,
+                ip_v6: false,
+                protocol: 4,
+                flags: 5,
+                local_ip: [1, 2, 3, 4],
+                remote_ip: [4, 5, 6, 7],
+                local_port: 8,
+                remote_port: 9,
+                compartment_id: 10,
+                interface_index: 11,
+                sub_interface_index: 12,
+                packet_size: 13,
+            };
 
-    let bytes =
-        core::mem::transmute::<PacketInfo, [u8; core::mem::size_of::<PacketInfo>()]>(packet);
-    for i in 0..bytes.len() {
-        buffer[i] = bytes[i];
+            let bytes = core::mem::transmute::<PacketInfo, [u8; core::mem::size_of::<PacketInfo>()]>(
+                packet,
+            );
+            for i in 0..bytes.len() {
+                buffer[i] = bytes[i];
+            }
+
+            irp.IoStatus.Information = bytes.len();
+        }
+        Err(status) => {
+            log!("failed to pop value: {:?}", status);
+            irp.IoStatus.Information = 0;
+        }
     }
 
-    irp.IoStatus.Information = bytes.len();
     let status = irp.IoStatus.__bindgen_anon_1.Status_mut();
     *status = STATUS_SUCCESS;
     return STATUS_SUCCESS;
