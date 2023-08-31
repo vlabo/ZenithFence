@@ -1,5 +1,6 @@
-use crate::layer::Layer;
+use crate::{error::anyhow_ntstatus, layer::Layer};
 use alloc::{ffi::CString, string};
+use anyhow::{anyhow, Result};
 use core::ptr;
 use widestring::U16CString;
 use winapi::{
@@ -101,7 +102,7 @@ pub fn dbg_print(str: string::String) {
     }
 }
 
-pub fn create_filter_engine() -> Result<HANDLE, NTSTATUS> {
+pub fn create_filter_engine() -> Result<HANDLE> {
     unsafe {
         let mut handle: HANDLE = INVALID_HANDLE_VALUE;
         let status = c_create_filter_engine(ptr::addr_of_mut!(handle));
@@ -109,7 +110,7 @@ pub fn create_filter_engine() -> Result<HANDLE, NTSTATUS> {
             return Ok(handle);
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
@@ -118,26 +119,38 @@ pub fn register_sublayer(
     name: &str,
     description: &str,
     guid: u128,
-) -> Result<(), i32> {
-    let name = U16CString::from_str(name).unwrap();
-    let description = U16CString::from_str(description).unwrap();
+) -> Result<()> {
+    let Ok(name_cstr) = U16CString::from_str(name) else {
+        return Err(anyhow!("invalid name string"));
+    };
+    let Ok(description_cstr) = U16CString::from_str(description) else {
+        return Err(anyhow!("invalid name string"));
+    };
+
+    let name_raw = name_cstr.into_raw();
+    let description_raw = description_cstr.into_raw();
+
     unsafe {
-        let result = c_register_sublayer(
+        let status = c_register_sublayer(
             filter_engine_handle,
-            name.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
-            description.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
+            name_raw,
+            description_raw,
             GUID::from_u128(guid),
         );
 
-        if result == STATUS_SUCCESS {
+        // Free string memory
+        let _ = U16CString::from_raw(name_raw);
+        let _ = U16CString::from_raw(description_raw);
+
+        if status == STATUS_SUCCESS {
             return Ok(());
         }
 
-        return Err(result);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(), NTSTATUS> {
+pub fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<()> {
     let guid = GUID::from_u128(guid);
     unsafe {
         let status = FwpmSubLayerDeleteByKey0(filter_engine_handle, ptr::addr_of!(guid));
@@ -145,7 +158,7 @@ pub fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(
             return Ok(());
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
@@ -165,38 +178,50 @@ pub fn register_callout(
         u64,
         *mut u8,
     ),
-) -> Result<u32, NTSTATUS> {
-    let name = U16CString::from_str(name).unwrap();
-    let description = U16CString::from_str(description).unwrap();
+) -> Result<u32> {
+    let Ok(name_cstr) = U16CString::from_str(name) else {
+        return Err(anyhow!("invalid name string"));
+    };
+    let Ok(description_cstr) = U16CString::from_str(description) else {
+        return Err(anyhow!("invalid name string"));
+    };
+
+    let name_raw = name_cstr.into_raw();
+    let description_raw = description_cstr.into_raw();
+
     unsafe {
         let mut callout_id: u32 = 0;
         let status = c_register_callout(
             device_object,
             filter_engine_handle,
-            name.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
-            description.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
+            name_raw,
+            description_raw,
             GUID::from_u128(guid),
             layer.get_guid(),
             callout_fn,
             ptr::addr_of_mut!(callout_id),
         );
 
-        if status != STATUS_SUCCESS {
-            return Err(status);
+        // Free string memory
+        let _ = U16CString::from_raw(name_raw);
+        let _ = U16CString::from_raw(description_raw);
+
+        if status == STATUS_SUCCESS {
+            return Ok(callout_id);
         }
 
-        return Ok(callout_id);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn unregister_callout(callout_id: u32) -> Result<(), NTSTATUS> {
+pub fn unregister_callout(callout_id: u32) -> Result<()> {
     unsafe {
         let status = FwpsCalloutUnregisterById0(callout_id);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
@@ -208,37 +233,48 @@ pub fn register_filter(
     callout_guid: u128,
     layer: Layer,
     action: u32,
-) -> Result<u64, NTSTATUS> {
-    let name = U16CString::from_str(name).unwrap();
-    let description = U16CString::from_str(description).unwrap();
+) -> Result<u64> {
+    let Ok(name_cstr) = U16CString::from_str(name) else {
+        return Err(anyhow!("invalid name string"));
+    };
+    let Ok(description_cstr) = U16CString::from_str(description) else {
+        return Err(anyhow!("invalid description string"));
+    };
+    let name_raw = name_cstr.into_raw();
+    let description_raw = description_cstr.into_raw();
     let mut filter_id: u64 = 0;
     unsafe {
         let status = c_register_filter(
             filter_engine_handle,
             GUID::from_u128(sublayer_guid),
-            name.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
-            description.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
+            name_raw,
+            description_raw,
             GUID::from_u128(callout_guid),
             layer.get_guid(),
             action,
             ptr::addr_of_mut!(filter_id),
         );
+
+        // Free string memory
+        let _ = U16CString::from_raw(name_raw);
+        let _ = U16CString::from_raw(description_raw);
+
         if status == STATUS_SUCCESS {
             return Ok(filter_id);
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result<(), NTSTATUS> {
+pub fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result<()> {
     unsafe {
         let status = FwpmFilterDeleteById0(filter_engine_handle, filter_id);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
@@ -248,46 +284,43 @@ pub fn wdf_device_wdm_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJEC
     }
 }
 
-pub fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), NTSTATUS> {
+pub fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<()> {
     unsafe {
         let status = FwpmEngineClose0(filter_engine_handle);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn filter_engine_transaction_begin(
-    filter_engine_handle: HANDLE,
-    flags: u32,
-) -> Result<(), NTSTATUS> {
+pub fn filter_engine_transaction_begin(filter_engine_handle: HANDLE, flags: u32) -> Result<()> {
     unsafe {
         let status = FwpmTransactionBegin0(filter_engine_handle, flags);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<(), NTSTATUS> {
+pub fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<()> {
     unsafe {
         let status = FwpmTransactionCommit0(filter_engine_handle);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
-pub fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<(), NTSTATUS> {
+pub fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<()> {
     unsafe {
         let status = FwpmTransactionAbort0(filter_engine_handle);
         if status == STATUS_SUCCESS {
             return Ok(());
         }
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }
 
@@ -296,26 +329,38 @@ pub fn init_driver_object(
     registry_path: *mut UNICODE_STRING,
     win_driver_path: &str,
     dos_driver_path: &str,
-) -> Result<(HANDLE, HANDLE), NTSTATUS> {
+) -> Result<(HANDLE, HANDLE)> {
     let mut driver_handle = INVALID_HANDLE_VALUE;
     let mut device_handle = INVALID_HANDLE_VALUE;
 
-    let win_driver = U16CString::from_str(win_driver_path).unwrap();
-    let dos_driver = U16CString::from_str(dos_driver_path).unwrap();
+    let Ok(win_driver) = U16CString::from_str(win_driver_path) else {
+        return Err(anyhow!("invalid win_driver_path string"));
+    };
+    let Ok(dos_driver) = U16CString::from_str(dos_driver_path) else {
+        return Err(anyhow!("invalid dos_driver_path string"));
+    };
+
+    let win_driver_raw = win_driver.into_raw();
+    let dos_driver_raw = dos_driver.into_raw();
+
     unsafe {
         let status = c_init_driver_object(
             driver_object,
             registry_path,
             &mut driver_handle,
             &mut device_handle,
-            win_driver.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
-            dos_driver.into_raw(), // TODO: pointer is released here and the memory will not be freed later.
+            win_driver_raw,
+            dos_driver_raw,
         );
+
+        // Free string memory
+        let _ = U16CString::from_raw(win_driver_raw);
+        let _ = U16CString::from_raw(dos_driver_raw);
 
         if status == STATUS_SUCCESS {
             return Ok((driver_handle, device_handle));
         }
 
-        return Err(status);
+        return Err(anyhow_ntstatus(status));
     }
 }

@@ -90,36 +90,17 @@ unsafe extern "system" fn driver_read(
     let irp_sp = IoGetCurrentIrpStackLocation(irp);
     let device_io = (*irp_sp).Parameters.DeviceIoControl_mut();
 
-    log!(
-        "Driver read called: input buffer length {}, output buffer length {}",
-        device_io.InputBufferLength,
-        device_io.OutputBufferLength
-    );
     let system_buffer = irp.AssociatedIrp.SystemBuffer();
     let buffer = core::slice::from_raw_parts_mut(
         *system_buffer as *mut u8,
         device_io.OutputBufferLength as usize,
     );
 
-    match IO_QUEUE.pop::<u32>() {
-        Ok(value) => {
-            let packet = PacketInfo {
-                id: value,
-                process_id: 2,
-                direction: 3,
-                ip_v6: false,
-                protocol: 4,
-                flags: 5,
-                local_ip: [1, 2, 3, 4],
-                remote_ip: [4, 5, 6, 7],
-                local_port: 8,
-                remote_port: 9,
-                compartment_id: 10,
-                interface_index: 11,
-                sub_interface_index: 12,
-                packet_size: 13,
-            };
+    let max_count = device_io.OutputBufferLength as usize / core::mem::size_of::<PacketInfo>();
 
+    match IO_QUEUE.wait_and_pop::<PacketInfo>() {
+        Ok(packet) => {
+            let mut count: usize = 1;
             let bytes = core::mem::transmute::<PacketInfo, [u8; core::mem::size_of::<PacketInfo>()]>(
                 packet,
             );
@@ -127,7 +108,23 @@ unsafe extern "system" fn driver_read(
                 buffer[i] = bytes[i];
             }
 
-            irp.IoStatus.Information = bytes.len();
+            while count < max_count {
+                if let Ok(packet) = IO_QUEUE.pop() {
+                    let bytes = core::mem::transmute::<
+                        PacketInfo,
+                        [u8; core::mem::size_of::<PacketInfo>()],
+                    >(packet);
+                    for i in 0..bytes.len() {
+                        buffer[i] = bytes[i];
+                    }
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+
+            irp.IoStatus.Information = core::mem::size_of::<PacketInfo>() * count;
+            log!("Send {} packets to the client", count);
         }
         Err(status) => {
             log!("failed to pop value: {:?}", status);

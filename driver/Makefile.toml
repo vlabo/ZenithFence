@@ -7,15 +7,20 @@ BUILD_FLAGS = "--release"
 
 [tasks.build-driver]
 script = [
-    "cargo b %BUILD_FLAGS%"
+    "cargo build %BUILD_FLAGS%"
+]
+
+[tasks.rename]
+ignore_errors = true
+script = [
+    "cd %TARGET_PATH%",
+		"del driver.sys",
+    "rename driver.dll driver.sys",
 ]
 
 [tasks.sign]
-dependencies = ["build-driver"]
+dependencies = ["build-driver", "rename"]
 script = [
-    "cd %TARGET_PATH%",
-    "rename driver.dll driver.sys",
-
     # Load the Visual Studio Developer environment
     "call \"%ProgramFiles%\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat\"",
 
@@ -23,5 +28,5 @@ script = [
     # "if not exist DriverCertificate.cer ( makecert -r -pe -ss PrivateCertStore -n CN=DriverCertificate DriverCertificate.cer ) else ( echo Certificate already exists. )",
 
     # Sign the driver
-    "signtool sign /a /v /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com driver.sys"
+    "signtool sign /a /v /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com %TARGET_PATH%/driver.sys"
 ]

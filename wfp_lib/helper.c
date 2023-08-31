@@ -191,3 +191,7 @@ NTSTATUS c_register_filter(
     return FwpmFilterAdd(filter_negine_handle, &filter, NULL, filter_id);
 
 }
+
+ULONG c_get_size_of_queue_struct() {
+    return sizeof(KQUEUE);
+}

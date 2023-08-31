@@ -7,7 +7,7 @@ use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 
 #[repr(C)] // important for compatable alinment
-#[derive(Serialize, Deserialize)] // needed for codegen
+#[derive(Serialize, Deserialize, Clone, Copy)] // needed for codegen
 pub struct PacketInfo {
     pub id: u32,
     pub process_id: u64,

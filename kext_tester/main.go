@@ -249,19 +249,21 @@ func main() {
 		return
 	}
 	defer windows.CloseHandle(fileHandle)
+	var running = true
 	go func() {
-		for {
-			packet := PacketInfo{}
-			data := unsafe.Slice((*byte)(unsafe.Pointer(&packet)), unsafe.Sizeof(packet))
+		for running {
+			var packets [100]PacketInfo
+			data := unsafe.Slice((*byte)(unsafe.Pointer(&packets)), unsafe.Sizeof(packets))
 
 			var done uint32
 			err = windows.ReadFile(fileHandle, data, &done, nil)
 			if err == nil {
 				if done > 0 {
-					fmt.Printf("Reading packet %d : %+v\n", done, packet)
-				} else {
-					fmt.Printf("No new data\n")
+					count := done / uint32(unsafe.Sizeof(packets[0]))
+					fmt.Printf("Read %d packets\n", count)
 				}
+				time.Sleep(100 * time.Millisecond)
+
 			} else {
 				fmt.Printf("Faield to read from driver: %s\n", err)
 			}
@@ -271,4 +273,5 @@ func main() {
 	fmt.Print("Press enter to exit")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
+	running = false
 }

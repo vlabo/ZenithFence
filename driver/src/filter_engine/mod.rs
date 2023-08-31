@@ -2,6 +2,7 @@ use crate::alloc::borrow::ToOwned;
 use crate::driver::IO_QUEUE;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
+use data_types::PacketInfo;
 use wdk::layer::Layer;
 use wdk::{interface, log};
 use winapi::km::wdm::DEVICE_OBJECT;
@@ -27,10 +28,24 @@ extern "C" fn test_callout(
     _flow_context: u64,
     _classify_out: *mut u8,
 ) {
-    log!("callout called");
-
+    let packet = PacketInfo {
+        id: 1,
+        process_id: 2,
+        direction: 3,
+        ip_v6: false,
+        protocol: 4,
+        flags: 5,
+        local_ip: [1, 2, 3, 4],
+        remote_ip: [4, 5, 6, 7],
+        local_port: 8,
+        remote_port: 9,
+        compartment_id: 10,
+        interface_index: 11,
+        sub_interface_index: 12,
+        packet_size: 13,
+    };
     unsafe {
-        IO_QUEUE.push(12 as u32);
+        IO_QUEUE.push(packet);
     }
 }
 
@@ -188,8 +203,8 @@ impl Callout {
             Ok(id) => {
                 self.filter_id = id;
             }
-            Err(code) => {
-                return Err(format!("faield to register filter: {:#08x}", code));
+            Err(error) => {
+                return Err(format!("faield to register filter: {}", error));
             }
         };
 
