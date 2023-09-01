@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::format;
+use bytemuck::{Pod, Zeroable};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,14 @@ pub struct PacketInfo {
     pub sub_interface_index: u32,
     pub packet_size: u32,
 }
+
+unsafe impl Zeroable for PacketInfo {
+    fn zeroed() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+
+unsafe impl Pod for PacketInfo {}
 
 impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

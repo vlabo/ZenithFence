@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 data_types = {path = "../data_types"}
 wdk = {path = "../wdk"}
+link_kit = {path = "../link_kit"}
 
 [dependencies.winapi]
 git = "https://github.com/Trantect/winapi-rs.git"

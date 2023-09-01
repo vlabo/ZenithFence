@@ -1,4 +1,4 @@
-use crate::{error::anyhow_ntstatus, layer::Layer};
+use crate::{error::anyhow_ntstatus, layer::Layer, utils::Driver};
 use alloc::{ffi::CString, string};
 use anyhow::{anyhow, Result};
 use core::ptr;
@@ -329,7 +329,7 @@ pub fn init_driver_object(
     registry_path: *mut UNICODE_STRING,
     win_driver_path: &str,
     dos_driver_path: &str,
-) -> Result<(HANDLE, HANDLE)> {
+) -> Result<Driver> {
     let mut driver_handle = INVALID_HANDLE_VALUE;
     let mut device_handle = INVALID_HANDLE_VALUE;
 
@@ -358,7 +358,7 @@ pub fn init_driver_object(
         let _ = U16CString::from_raw(dos_driver_raw);
 
         if status == STATUS_SUCCESS {
-            return Ok((driver_handle, device_handle));
+            return Ok(Driver::new(driver_handle, device_handle));
         }
 
         return Err(anyhow_ntstatus(status));

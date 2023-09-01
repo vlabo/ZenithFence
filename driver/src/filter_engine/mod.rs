@@ -4,8 +4,8 @@ use alloc::string::String;
 use alloc::{format, vec::Vec};
 use data_types::PacketInfo;
 use wdk::layer::Layer;
+use wdk::utils::Driver;
 use wdk::{interface, log};
-use winapi::km::wdm::DEVICE_OBJECT;
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 // const OUTBOUND_V4_NAME: &str = "PortmasterOutboundV4Filter";
@@ -62,7 +62,7 @@ struct Callout {
 }
 
 pub struct FilterEngine {
-    device_object: *mut DEVICE_OBJECT,
+    driver: Driver,
     filter_engine_handle: HANDLE,
     callouts: Option<Vec<Callout>>,
     sublayer_guid: Guid,
@@ -70,7 +70,7 @@ pub struct FilterEngine {
 }
 
 impl FilterEngine {
-    pub fn new(device_object: *mut DEVICE_OBJECT) -> Result<Self, String> {
+    pub fn new(driver: Driver) -> Result<Self, String> {
         let filter_engine_handle: HANDLE;
         match interface::create_filter_engine() {
             Ok(handle) => {
@@ -82,7 +82,7 @@ impl FilterEngine {
         }
 
         let engine = Self {
-            device_object,
+            driver,
             filter_engine_handle,
             callouts: Some(Vec::new()),
             sublayer_guid: 0xa87fb472_fc68_4805_8559_c6ae774773e0,
@@ -213,7 +213,7 @@ impl Callout {
 
     fn register_callout(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
         match interface::register_callout(
-            filter_engine.device_object,
+            filter_engine.driver.get_wfp_object(),
             filter_engine.filter_engine_handle,
             &format!("{}-callout", self.name),
             &self.description,

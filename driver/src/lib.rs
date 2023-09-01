@@ -22,6 +22,8 @@ use core::panic::PanicInfo;
 #[global_allocator]
 static HEAP: WindowsAllocator = WindowsAllocator {};
 
+// macro converts struct S to struct H
+
 // #[no_mangle]
 // pub extern "C" fn respondWithVerdict(packet_id: u32, verdict: Verdict) {
 //     if packet_id == 0 || verdict == Verdict::Error {

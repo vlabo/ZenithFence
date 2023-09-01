@@ -5,6 +5,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dependencies]
+bytemuck = "1.13"
+
 [dependencies.serde]
 version = "1.0"
 default-features = false
