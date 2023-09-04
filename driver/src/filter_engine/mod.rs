@@ -45,7 +45,9 @@ extern "C" fn test_callout(
         packet_size: 13,
     };
     unsafe {
-        IO_QUEUE.push(packet);
+        if let Err(err) = IO_QUEUE.push(packet) {
+            log!("callout failed to push packet: {}", err);
+        }
     }
 }
 

@@ -18,12 +18,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
 
 [[package]]
-name = "anyhow"
-version = "1.0.75"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
-
-[[package]]
 name = "backtrace"
 version = "0.3.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,6 +125,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "myn"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950af707b8005ae33bb0f0b20cb32b09750e7375085606dc45b2f2078a34e52"
+
+[[package]]
 name = "ntstatus"
 version = "0.1.1"
 source = "git+https://github.com/vlabo/ntstatus#72e8305cd8f957bcd2dd205bdb6b4331955a614b"
@@ -173,6 +173,15 @@ name = "once_cell"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
+
+[[package]]
+name = "onlyerror"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a66685f46cfd9f79c981531f6c2af1737e08deb27637561eaeee792332e2fc3"
+dependencies = [
+ "myn",
+]
 
 [[package]]
 name = "proc-macro-crate"
@@ -275,10 +284,10 @@ checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 name = "wdk"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bytemuck",
  "failure",
  "ntstatus",
+ "onlyerror",
  "widestring",
  "winapi 0.3.7",
  "windows-sys",

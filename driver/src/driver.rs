@@ -1,4 +1,5 @@
 use crate::filter_engine::FilterEngine;
+use core::marker::PhantomData;
 use data_types::PacketInfo;
 use link_kit::{driver_entry, driver_read, driver_unload};
 use wdk::utils::Driver;
@@ -11,8 +12,9 @@ use winapi::{
 use windows_sys::Win32::Foundation::NTSTATUS;
 
 pub static mut FILTER_ENGINE: Option<FilterEngine> = None;
-pub static mut IO_QUEUE: IOQueue = IOQueue {
-    kernel_queue: core::ptr::null_mut(),
+pub static mut IO_QUEUE: IOQueue<PacketInfo> = IOQueue::<PacketInfo> {
+    kernel_queue: None,
+    _type: PhantomData,
 };
 
 #[driver_entry(
@@ -70,12 +72,12 @@ fn driver_read(mut read_request: ReadRequest) {
     let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
 
     unsafe {
-        match IO_QUEUE.wait_and_pop::<PacketInfo>() {
+        match IO_QUEUE.wait_and_pop() {
             Ok(packet) => {
                 let mut count: usize = 1;
                 let _ = read_request.write(packet);
                 while count < max_count {
-                    if let Ok(packet) = IO_QUEUE.pop::<PacketInfo>() {
+                    if let Ok(packet) = IO_QUEUE.pop() {
                         let _ = read_request.write(packet);
                         count += 1;
                     } else {

@@ -38,7 +38,7 @@
 
 EVT_WDF_DRIVER_UNLOAD emptyEventUnload;
 
-NTSTATUS c_init_driver_object(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name) {
+NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name) {
 	UNICODE_STRING deviceName = { 0 };
 	RtlInitUnicodeString(&deviceName, win_device_name);
 
@@ -86,17 +86,17 @@ void emptyEventUnload(WDFDRIVER Driver) {
   UNREFERENCED_PARAMETER(Driver);
 }
 
-NTSTATUS c_create_filter_engine(HANDLE *handle) {
+NTSTATUS pm_CreateFilterEngine(HANDLE *handle) {
     FWPM_SESSION wdfSession = { 0 };
     wdfSession.flags = FWPM_SESSION_FLAG_DYNAMIC;
     return FwpmEngineOpen(NULL, RPC_C_AUTHN_WINNT, NULL, &wdfSession, handle);
 }
 
-DEVICE_OBJECT* c_get_device_object(WDFDEVICE device) {
+DEVICE_OBJECT* pm_GetDeviceObject(WDFDEVICE device) {
     return WdfDeviceWdmGetDeviceObject(device);
 }
 
-NTSTATUS c_register_sublayer(HANDLE filter_engine_handle, wchar_t* name, wchar_t* description, GUID guid) {
+NTSTATUS pm_RegisterSublayer(HANDLE filter_engine_handle, wchar_t* name, wchar_t* description, GUID guid) {
     FWPM_SUBLAYER sublayer = { 0 };
     sublayer.subLayerKey = guid;
     sublayer.displayData.name = name;
@@ -132,7 +132,7 @@ void genericFlowDelete(UINT16 layerId, UINT32 calloutId, UINT64 flowContext) {
 }
 
 
-NTSTATUS c_register_callout(
+NTSTATUS pm_RegisterCallout(
     DEVICE_OBJECT* device_object, HANDLE filter_engine_handle, wchar_t* name, wchar_t* description, GUID guid, GUID layer_guid, void (*callout_fn)(
         const FWPS_INCOMING_VALUES* inFixedValues,
         const FWPS_INCOMING_METADATA_VALUES* inMetaValues,
@@ -167,7 +167,7 @@ NTSTATUS c_register_callout(
     return FwpmCalloutAdd(filter_engine_handle, &mCallout, NULL, NULL);
 }
 
-NTSTATUS c_register_filter(
+NTSTATUS pm_RegisterFilter(
     HANDLE filter_negine_handle,
     GUID sublayer_guid,
     wchar_t *name,
@@ -190,8 +190,4 @@ NTSTATUS c_register_filter(
     filter.action.calloutKey = callout_guid;
     return FwpmFilterAdd(filter_negine_handle, &filter, NULL, filter_id);
 
-}
-
-ULONG c_get_size_of_queue_struct() {
-    return sizeof(KQUEUE);
 }
