@@ -36,6 +36,9 @@ extern "C" {
 #[link(name = "BufferOverflowK", kind = "static")]
 #[link(name = "uuid", kind = "static")]
 #[link(name = "wdmsec", kind = "static")]
+#[link(name = "wmilib", kind = "static")]
+#[link(name = "ntoskrnl", kind = "static")]
+#[link(name = "ndis", kind = "static")]
 #[link(name = "wfp_lib", kind = "static")]
 extern "C" {
     // Helper

@@ -1,17 +1,11 @@
-#![cfg_attr(not(test), no_std)]
-
-extern crate alloc;
-
 use alloc::format;
-use bytemuck::{Pod, Zeroable};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 
-#[repr(C)] // important for compatable alinment
 #[derive(Serialize, Deserialize, Clone, Copy)] // needed for codegen
 pub struct PacketInfo {
     pub id: u32,
-    pub process_id: u64,
+    pub process_id: Option<u64>,
     pub direction: u8,
     pub ip_v6: bool,
     pub protocol: u8,
@@ -26,13 +20,13 @@ pub struct PacketInfo {
     pub packet_size: u32,
 }
 
-unsafe impl Zeroable for PacketInfo {
-    fn zeroed() -> Self {
-        unsafe { core::mem::zeroed() }
-    }
-}
+// unsafe impl Zeroable for PacketInfo {
+//     fn zeroed() -> Self {
+//         unsafe { core::mem::zeroed() }
+//     }
+// }
 
-unsafe impl Pod for PacketInfo {}
+// unsafe impl Pod for PacketInfo {}
 
 impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

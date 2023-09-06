@@ -49,19 +49,17 @@ impl ReadRequest<'_> {
         }
     }
 
-    pub fn write<T: bytemuck::NoUninit>(&mut self, value: T) -> Result<(), ()> {
-        let bytes = bytemuck::bytes_of(&value);
+    // pub fn write(&mut self, bytes: &[u8]) -> Result<(), ()> {
+    //     if self.fill_index + bytes.len() >= self.buffer.len() {
+    //         return Err(());
+    //     }
 
-        if self.fill_index + bytes.len() >= self.buffer.len() {
-            return Err(());
-        }
-
-        for i in 0..bytes.len() {
-            self.buffer[self.fill_index + i] = bytes[i];
-        }
-        self.fill_index = self.fill_index + bytes.len();
-        return Ok(());
-    }
+    //     for i in 0..bytes.len() {
+    //         self.buffer[self.fill_index + i] = bytes[i];
+    //     }
+    //     self.fill_index = self.fill_index + bytes.len();
+    //     return Ok(());
+    // }
 
     pub fn free_space(&self) -> usize {
         self.buffer.len() - self.fill_index
@@ -73,5 +71,25 @@ impl ReadRequest<'_> {
             let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
             *status = STATUS_SUCCESS;
         }
+    }
+}
+
+impl ciborium_io::Write for ReadRequest<'_> {
+    type Error = ();
+
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+        if self.fill_index + bytes.len() >= self.buffer.len() {
+            return Err(());
+        }
+
+        for i in 0..bytes.len() {
+            self.buffer[self.fill_index + i] = bytes[i];
+        }
+        self.fill_index = self.fill_index + bytes.len();
+
+        return Ok(());
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        return Ok(());
     }
 }

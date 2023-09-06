@@ -1,8 +1,8 @@
 use crate::alloc::borrow::ToOwned;
 use crate::driver::IO_QUEUE;
+use crate::types::PacketInfo;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
-use data_types::PacketInfo;
 use wdk::layer::Layer;
 use wdk::utils::Driver;
 use wdk::{interface, log};
@@ -30,7 +30,7 @@ extern "C" fn test_callout(
 ) {
     let packet = PacketInfo {
         id: 1,
-        process_id: 2,
+        process_id: Some(0),
         direction: 3,
         ip_v6: false,
         protocol: 4,

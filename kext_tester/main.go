@@ -6,8 +6,9 @@ import (
 	"os"
 	"syscall"
 	"time"
-	"unsafe"
+	// "unsafe"
 
+	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
 )
 
@@ -248,24 +249,19 @@ func main() {
 		fmt.Printf("Faield to open driver: %s\n", err)
 		return
 	}
-	defer windows.CloseHandle(fileHandle)
+	file := os.NewFile(uintptr(fileHandle), filename)
+	defer file.Close()
+
 	var running = true
 	go func() {
+		decoder := cbor.NewDecoder(file)
 		for running {
-			var packets [100]PacketInfo
-			data := unsafe.Slice((*byte)(unsafe.Pointer(&packets)), unsafe.Sizeof(packets))
-
-			var done uint32
-			err = windows.ReadFile(fileHandle, data, &done, nil)
+			var packet PacketInfo
+			err = decoder.Decode(&packet)
 			if err == nil {
-				if done > 0 {
-					count := done / uint32(unsafe.Sizeof(packets[0]))
-					fmt.Printf("Read %d packets\n", count)
-				}
-				time.Sleep(100 * time.Millisecond)
-
+				fmt.Printf("%+v\n", packet)
 			} else {
-				fmt.Printf("Faield to read from driver: %s\n", err)
+				fmt.Printf("Failed to decode packet: %s\n", err)
 			}
 		}
 	}()

@@ -7,6 +7,7 @@ use winreg::{enums::*, RegKey};
 
 /// Returns the path to the `Windows Kits` directory. It's by default at
 /// `C:\Program Files (x86)\Windows Kits\10`.
+#[cfg(target_os = "windows")]
 fn get_windows_kits_dir() -> Result<PathBuf, Error> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key = r"SOFTWARE\Microsoft\Windows Kits\Installed Roots";
@@ -17,6 +18,7 @@ fn get_windows_kits_dir() -> Result<PathBuf, Error> {
 
 /// Returns the path to the kernel mode libraries. The path may look like this:
 /// `C:\Program Files (x86)\Windows Kits\10\lib\10.0.18362.0\km`.
+#[cfg(target_os = "windows")]
 fn get_km_dir(windows_kits_dir: &PathBuf) -> Result<PathBuf, Error> {
     let readdir = Path::new(windows_kits_dir).join("lib").read_dir()?;
 
@@ -38,6 +40,7 @@ fn get_km_dir(windows_kits_dir: &PathBuf) -> Result<PathBuf, Error> {
 
 /// Returns the path to the kernel mode libraries. The path may look like this:
 /// `C:\Program Files (x86)\Windows Kits\10\lib\10.0.18362.0\km`.
+#[cfg(target_os = "windows")]
 fn get_um_dir(windows_kits_dir: &PathBuf) -> Result<PathBuf, Error> {
     let readdir = Path::new(windows_kits_dir).join("lib").read_dir()?;
 
@@ -57,6 +60,7 @@ fn get_um_dir(windows_kits_dir: &PathBuf) -> Result<PathBuf, Error> {
     Ok(max_libdir.join("um"))
 }
 
+#[cfg(target_os = "windows")]
 fn main() {
     let windows_kits_dir = get_windows_kits_dir().unwrap();
     let km_dir = get_km_dir(&windows_kits_dir).unwrap();
@@ -89,3 +93,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../wfp_lib/{}/wfp_lib.lib", arch);
     println!("cargo:rustc-link-search=native=../wfp_lib/{}", arch);
 }
+
+#[cfg(target_os = "linux")]
+fn main() {}

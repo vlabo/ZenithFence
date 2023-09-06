@@ -8,14 +8,15 @@ edition = "2021"
 [dependencies]
 ntstatus = { git = "https://github.com/vlabo/ntstatus", default-features = false}
 onlyerror = {version = "0.1", default-features = false }
-bytemuck = "1.13"
+ciborium = {git="https://github.com/vlabo/ciborium", version = "0.2", default-features = false }
+ciborium-io = {git="https://github.com/vlabo/ciborium", version = "0.2", default-features = false }
 
 [dependencies.widestring]
 version = "1.0.2"
 default-features = false 
 features = ["alloc"]
 
-[dependencies.winapi]
+[target.'cfg(windows)'.dependencies.winapi]
 git = "https://github.com/Trantect/winapi-rs.git"
 branch = "feature/km"
 features = [
@@ -24,10 +25,10 @@ features = [
     "winioctl"
     ]
 
-[dependencies.windows-sys]
+[target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.48.0"
 features = ["Wdk", "Wdk_System", "Win32_System", "Win32_System_Kernel", "Win32_Security", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_Foundation"]
 
-[build-dependencies]
+[target.'cfg(windows)'.build-dependencies]
 winreg = "0.7.0"
 failure = "0.1.8"

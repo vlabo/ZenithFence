@@ -17,8 +17,10 @@ rustflags = [
 
     # Post Link Args
     "-C", "link-arg=/OPT:REF,ICF",
+    "-C", "link-arg=/MACHINE:X64",
+    "-C", "link-arg=/SUBSYSTEM:NATIVE,6.01",
     "-C", "link-arg=/ENTRY:FxDriverEntry",
-    "-C", "link-arg=/MERGE:.edata=.rdata",
+    "-C", "link-arg=/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE",
     "-C", "link-arg=/MERGE:.rustc=.data",
     "-C", "link-arg=/INTEGRITYCHECK",
     # "-C", "link-arg=wfp_lib.lib",

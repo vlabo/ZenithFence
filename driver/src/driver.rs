@@ -1,6 +1,6 @@
 use crate::filter_engine::FilterEngine;
+use crate::types::PacketInfo;
 use core::marker::PhantomData;
-use data_types::PacketInfo;
 use link_kit::{driver_entry, driver_read, driver_unload};
 use wdk::utils::Driver;
 use wdk::utils::ReadRequest;
@@ -69,21 +69,21 @@ fn driver_unload() {
 
 #[driver_read]
 fn driver_read(mut read_request: ReadRequest) {
-    let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
+    // let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
 
     unsafe {
         match IO_QUEUE.wait_and_pop() {
             Ok(packet) => {
                 let mut count: usize = 1;
-                let _ = read_request.write(packet);
-                while count < max_count {
-                    if let Ok(packet) = IO_QUEUE.pop() {
-                        let _ = read_request.write(packet);
-                        count += 1;
-                    } else {
-                        break;
-                    }
-                }
+                let _ = ciborium::into_writer(&packet, &mut read_request);
+                // while count < max_count {
+                //     if let Ok(packet) = IO_QUEUE.pop() {
+                //         let _ = ciborium::into_writer(&packet, &mut read_request);
+                //         count += 1;
+                //     } else {
+                //         break;
+                //     }
+                // }
 
                 log!("Send {} packets to the client", count);
             }
