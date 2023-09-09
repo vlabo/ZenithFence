@@ -58,8 +58,6 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
             driver_object: *mut DRIVER_OBJECT,
             registry_path: *mut UNICODE_STRING,
         ) -> NTSTATUS {
-            log!("Starting initialization...");
-
             // Initialize driver object
             let driver = match interface::init_driver_object(
                 driver_object,
@@ -115,6 +113,24 @@ pub fn driver_read(_metadata: TokenStream, input: TokenStream) -> TokenStream {
              irp: &mut IRP,
          ) -> NTSTATUS {
              #name(wdk::utils::ReadRequest::new(irp));
+             return windows_sys::Win32::Foundation::STATUS_SUCCESS;
+         }
+    });
+    token.extend(input_copy);
+    return token;
+}
+
+#[proc_macro_attribute]
+pub fn driver_write(_metadata: TokenStream, input: TokenStream) -> TokenStream {
+    let input_copy = input.clone();
+    let input_fn = parse_macro_input!(input as ItemFn);
+    let name = input_fn.sig.ident;
+    let mut token = TokenStream::from(quote! {
+         unsafe extern "system" fn internal_wdk_driver_write(
+             _device_object: &mut DEVICE_OBJECT,
+             irp: &mut IRP,
+         ) -> NTSTATUS {
+             #name(wdk::utils::WriteRequest::new(irp));
              return windows_sys::Win32::Foundation::STATUS_SUCCESS;
          }
     });

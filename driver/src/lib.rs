@@ -8,7 +8,7 @@ mod types;
 // mod common;
 // mod debug;
 mod driver;
-mod filter_engine;
+// mod filter_engine;
 // mod wdk;
 // extern crate windows_allocator;
 

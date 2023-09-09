@@ -6,9 +6,8 @@ import (
 	"os"
 	"syscall"
 	"time"
-	// "unsafe"
 
-	"github.com/fxamacker/cbor/v2"
+	// "github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
 )
 
@@ -204,7 +203,7 @@ func openDriver(filename string) (windows.Handle, error) {
 		return winInvalidHandleValue, fmt.Errorf("failed to convert driver filename to UTF16 string %w", err)
 	}
 
-	handle, err := windows.CreateFile(&u16filename[0], windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	handle, err := windows.CreateFile(&u16filename[0], windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED, 0)
 	if err != nil {
 		return winInvalidHandleValue, err
 	}
@@ -249,25 +248,36 @@ func main() {
 		fmt.Printf("Faield to open driver: %s\n", err)
 		return
 	}
-	file := os.NewFile(uintptr(fileHandle), filename)
-	defer file.Close()
+	// file := os.NewFile(uintptr(fileHandle), filename)
+	// defer file.Close()
+	defer windows.CloseHandle(fileHandle)
 
 	var running = true
 	go func() {
-		decoder := cbor.NewDecoder(file)
+		// decoder := cbor.NewDecoder(file)
 		for running {
-			var packet PacketInfo
-			err = decoder.Decode(&packet)
+			// var packet PacketInfo
+			// err = decoder.Decode(&packet)
+			data := make([]byte, 1000)
+			var readBytes uint32 = 0
+			overlapped := &windows.Overlapped{}
+			err = windows.ReadFile(fileHandle, data, &readBytes, overlapped)
 			if err == nil {
-				fmt.Printf("%+v\n", packet)
+				fmt.Printf("ok\n")
 			} else {
 				fmt.Printf("Failed to decode packet: %s\n", err)
 			}
 		}
 	}()
 
-	fmt.Print("Press enter to exit")
+	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
 	running = false
+	data := []byte{1, 2, 3}
+	var bytesWriten uint32 = 0
+	overlapped := &windows.Overlapped{}
+	windows.WriteFile(fileHandle, data, &bytesWriten, overlapped)
+	// data := make([]byte, 1)
+	// file.Write(data)
 }

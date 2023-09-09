@@ -1,3 +1,5 @@
+git.sr.ht/~errnoh/overlapped v1.0.3 h1:onYYph3VNxWLZDeLE8c4rvvu7OlQzG20nYvvW+YpFUA=
+git.sr.ht/~errnoh/overlapped v1.0.3/go.mod h1:Bi5fcFz68n3KTQL1zK/i1gYZfsxZn4LkVAB/Kzg3nGw=
 github.com/fxamacker/cbor/v2 v2.5.0 h1:oHsG0V/Q6E/wqTS2O1Cozzsy69nqCiguo5Q1a1ADivE=
 github.com/fxamacker/cbor/v2 v2.5.0/go.mod h1:TA1xS00nchWmaBnEIxPSE5oHLuJBAVvqrtAnWBwBCVo=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=

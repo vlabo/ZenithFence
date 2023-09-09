@@ -3,6 +3,7 @@ module kext_tester
 go 1.20
 
 require (
+	git.sr.ht/~errnoh/overlapped v1.0.3
 	github.com/fxamacker/cbor/v2 v2.5.0
 	golang.org/x/sys v0.11.0
 )

@@ -1,22 +1,12 @@
+use core::cell::RefCell;
+
 use crate::alloc::borrow::ToOwned;
-use crate::driver::IO_QUEUE;
-use crate::types::PacketInfo;
+use crate::layer::Layer;
+use crate::utils::Driver;
+use crate::{interface, log};
 use alloc::string::String;
 use alloc::{format, vec::Vec};
-use wdk::layer::Layer;
-use wdk::utils::Driver;
-use wdk::{interface, log};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-
-// const OUTBOUND_V4_NAME: &str = "PortmasterOutboundV4Filter";
-// const OUTBOUND_V4_DESCRIPTION: &str =
-//     "This filter is used by the Portmaster to intercept inbound IPv4 traffic.";
-// const OUBTOUND_V4_CALLOUT_NAME: &str = "PortmasterInboundV4Callout";
-// const OUBTOUND_V4_CALLOUT_DESCRIPTION: &str =
-//     "This callout is used by the Portmaster to intercept inbound IPv4 traffic.";
-// const OUTBOUND_V4_GUID: GUID = GUID::from_u128(0x05c55149_4732_4857_8d10_f178f3a06f8c);
-
-// const INBOUND_V4_GUID: GUID = GUID::from_u128(0x05c55149_4732_4857_8d10_f178f3a06f8c);
 
 #[no_mangle]
 extern "C" fn test_callout(
@@ -28,27 +18,28 @@ extern "C" fn test_callout(
     _flow_context: u64,
     _classify_out: *mut u8,
 ) {
-    let packet = PacketInfo {
-        id: 1,
-        process_id: Some(0),
-        direction: 3,
-        ip_v6: false,
-        protocol: 4,
-        flags: 5,
-        local_ip: [1, 2, 3, 4],
-        remote_ip: [4, 5, 6, 7],
-        local_port: 8,
-        remote_port: 9,
-        compartment_id: 10,
-        interface_index: 11,
-        sub_interface_index: 12,
-        packet_size: 13,
-    };
-    unsafe {
-        if let Err(err) = IO_QUEUE.push(packet) {
-            log!("callout failed to push packet: {}", err);
-        }
-    }
+    // let packet = PacketInfo {
+    //     id: 1,
+    //     process_id: Some(0),
+    //     direction: 3,
+    //     ip_v6: false,
+    //     protocol: 4,
+    //     flags: 5,
+    //     local_ip: [1, 2, 3, 4],
+    //     remote_ip: [4, 5, 6, 7],
+    //     local_port: 8,
+    //     remote_port: 9,
+    //     compartment_id: 10,
+    //     interface_index: 11,
+    //     sub_interface_index: 12,
+    //     packet_size: 13,
+    // };
+    // unsafe {
+    //     if let Err(err) = IO_QUEUE.push(packet) {
+    //         log!("callout failed to push packet: {}", err);
+    //     }
+    // }
+    log!("callout called");
 }
 
 type Guid = u128;
@@ -63,16 +54,26 @@ struct Callout {
     callout_id: u32,
 }
 
-pub struct FilterEngine {
+pub struct FilterEngineInternal {
     driver: Driver,
     filter_engine_handle: HANDLE,
-    callouts: Option<Vec<Callout>>,
     sublayer_guid: Guid,
+    callouts: Option<Vec<Callout>>,
     commited: bool,
 }
 
-impl FilterEngine {
-    pub fn new(driver: Driver) -> Result<Self, String> {
+impl FilterEngineInternal {
+    pub const fn default() -> Self {
+        Self {
+            driver: Driver::default(),
+            filter_engine_handle: INVALID_HANDLE_VALUE,
+            sublayer_guid: 0,
+            callouts: None,
+            commited: false,
+        }
+    }
+
+    pub fn init(&mut self, driver: Driver) -> Result<(), String> {
         let filter_engine_handle: HANDLE;
         match interface::create_filter_engine() {
             Ok(handle) => {
@@ -82,19 +83,15 @@ impl FilterEngine {
                 return Err(format!("failed to initialize filter engine {}", code).to_owned());
             }
         }
-
-        let engine = Self {
-            driver,
-            filter_engine_handle,
-            callouts: Some(Vec::new()),
-            sublayer_guid: 0xa87fb472_fc68_4805_8559_c6ae774773e0,
-            commited: false,
-        };
-
-        return Ok(engine);
+        self.driver = driver;
+        self.filter_engine_handle = filter_engine_handle;
+        self.sublayer_guid = 0xa87fb472_fc68_4805_8559_c6ae774773e0;
+        self.callouts = Some(Vec::new());
+        return Ok(());
     }
 
     pub fn commit(&mut self) -> Result<(), String> {
+        self.register_test_callout();
         if let Err(code) = interface::filter_engine_transaction_begin(self.filter_engine_handle, 0)
         {
             return Err(format!(
@@ -110,8 +107,10 @@ impl FilterEngine {
 
         // Barrow the callouts vec from the filter engine.
         if let Some(mut callouts) = self.callouts.take() {
+            log!("Callouts count: {}", callouts.len());
             // Register all callouts
             for callout in &mut callouts {
+                log!("registerging callout: {}", callout.name);
                 if let Err(err) = callout.register_callout(self) {
                     // This will destroy the callout structs.
                     _ = interface::filter_engine_transaction_abort(self.filter_engine_handle);
@@ -138,11 +137,12 @@ impl FilterEngine {
         // TODO: auto abort on error
 
         self.commited = true;
+        log!("transaction commited");
 
         return Ok(());
     }
 
-    pub fn register_test_callout(&mut self) {
+    fn register_test_callout(&mut self) {
         if let Err(err) = self.add_callout(
             "TestCallout",
             "Testing callout",
@@ -192,7 +192,7 @@ impl FilterEngine {
 }
 
 impl Callout {
-    fn register_filter(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
+    fn register_filter(&mut self, filter_engine: &FilterEngineInternal) -> Result<(), String> {
         match interface::register_filter(
             filter_engine.filter_engine_handle,
             filter_engine.sublayer_guid,
@@ -200,7 +200,7 @@ impl Callout {
             &self.description,
             self.guid,
             self.layer,
-            wdk::consts::FWP_ACTION_CALLOUT_INSPECTION,
+            crate::consts::FWP_ACTION_CALLOUT_INSPECTION,
         ) {
             Ok(id) => {
                 self.filter_id = id;
@@ -213,7 +213,7 @@ impl Callout {
         return Ok(());
     }
 
-    fn register_callout(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
+    fn register_callout(&mut self, filter_engine: &FilterEngineInternal) -> Result<(), String> {
         match interface::register_callout(
             filter_engine.driver.get_wfp_object(),
             filter_engine.filter_engine_handle,
@@ -235,7 +235,7 @@ impl Callout {
     }
 }
 
-impl Drop for FilterEngine {
+impl Drop for FilterEngineInternal {
     fn drop(&mut self) {
         if let Some(callouts) = &mut self.callouts {
             for ele in callouts {
@@ -265,3 +265,41 @@ impl Drop for FilterEngine {
         }
     }
 }
+
+pub struct FilterEngine {
+    imp: RefCell<FilterEngineInternal>,
+}
+
+impl FilterEngine {
+    pub const fn default() -> Self {
+        return Self {
+            imp: RefCell::new(FilterEngineInternal::default()),
+        };
+    }
+
+    pub fn init(&self, driver: Driver) -> Result<(), String> {
+        if let Ok(mut fe) = self.imp.try_borrow_mut() {
+            if let Err(err) = fe.init(driver) {
+                return Err(err);
+            }
+
+            return Ok(());
+        }
+
+        return Err("failed to borrow filter engine".to_owned());
+    }
+
+    pub fn commit(&self) -> Result<(), String> {
+        if let Ok(mut fe) = self.imp.try_borrow_mut() {
+            fe.commit()?;
+            return Ok(());
+        }
+        return Err("failed to borrow filter engine".to_owned());
+    }
+
+    pub fn deinit(&self) {
+        let _ = self.imp.replace(FilterEngineInternal::default());
+    }
+}
+
+unsafe impl Sync for FilterEngine {}

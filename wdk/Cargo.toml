@@ -10,6 +10,8 @@ ntstatus = { git = "https://github.com/vlabo/ntstatus", default-features = false
 onlyerror = {version = "0.1", default-features = false }
 ciborium = {git="https://github.com/vlabo/ciborium", version = "0.2", default-features = false }
 ciborium-io = {git="https://github.com/vlabo/ciborium", version = "0.2", default-features = false }
+generic_once_cell = "0.1"
+lock_api = "0.4"
 
 [dependencies.widestring]
 version = "1.0.2"

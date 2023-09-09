@@ -7,6 +7,7 @@ pub mod allocator;
 pub mod consts;
 pub mod debug;
 pub mod error;
+pub mod filter_engine;
 pub mod interface;
 pub mod ioqueue;
 pub mod layer;

@@ -1,56 +1,41 @@
-use crate::filter_engine::FilterEngine;
+// use crate::filter_engine::FilterEngine;
 use crate::types::PacketInfo;
-use core::marker::PhantomData;
-use link_kit::{driver_entry, driver_read, driver_unload};
-use wdk::utils::Driver;
-use wdk::utils::ReadRequest;
-use wdk::{interface, ioqueue::IOQueue, log};
+use wdk::filter_engine::FilterEngine;
+use wdk::utils::{Driver, ReadRequest, WriteRequest};
+use wdk::{
+    interface,
+    ioqueue::{self, IOQueue},
+    log,
+};
+use wdk_macro::{driver_entry, driver_read, driver_unload, driver_write};
 use winapi::{
     km::wdm::{DEVICE_OBJECT, DRIVER_OBJECT, IRP},
     shared::ntdef::UNICODE_STRING,
 };
 use windows_sys::Win32::Foundation::NTSTATUS;
 
-pub static mut FILTER_ENGINE: Option<FilterEngine> = None;
-pub static mut IO_QUEUE: IOQueue<PacketInfo> = IOQueue::<PacketInfo> {
-    kernel_queue: None,
-    _type: PhantomData,
-};
+pub static FILTER_ENGINE: FilterEngine = FilterEngine::default();
+
+pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
 
 #[driver_entry(
     name = "PortmasterTest",
     read_fn = true,
-    write_fn = false,
+    write_fn = true,
     ioctl_fn = false
 )]
 fn driver_entry(driver: Driver) {
     log!("Starting initialization...");
 
-    unsafe {
-        IO_QUEUE = IOQueue::new();
-    }
+    IO_QUEUE.init();
 
     // Initialize filter engine.
-    // let device_object = interface::wdf_device_wdm_get_device_object(device_handle);
-    let mut filter_engine = match FilterEngine::new(driver) {
-        Ok(engine) => engine,
-        Err(err) => {
-            log!("driver_entry: {}", err);
-            return;
-        }
-    };
-
-    // Register test callouts.
-    filter_engine.register_test_callout();
-    if let Err(err) = filter_engine.commit() {
+    if let Err(err) = FILTER_ENGINE.init(driver) {
         log!("driver_entry: {}", err);
-    } else {
-        log!("callout registered");
     }
 
-    // Move filter engine to global variable.
-    unsafe {
-        FILTER_ENGINE = Some(filter_engine);
+    if let Err(err) = FILTER_ENGINE.commit() {
+        log!("driver_entry: {}", err);
     }
 
     log!("Initialization complete");
@@ -59,11 +44,8 @@ fn driver_entry(driver: Driver) {
 #[driver_unload]
 fn driver_unload() {
     log!("Starting driver unload");
-    unsafe {
-        // Unregister filter engine.
-        FILTER_ENGINE = None;
-        IO_QUEUE.rundown();
-    }
+    // Unregister filter engine.
+    FILTER_ENGINE.deinit();
     log!("Unloading complete");
 }
 
@@ -71,29 +53,32 @@ fn driver_unload() {
 fn driver_read(mut read_request: ReadRequest) {
     // let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
 
-    unsafe {
-        match IO_QUEUE.wait_and_pop() {
-            Ok(packet) => {
-                let mut count: usize = 1;
-                let _ = ciborium::into_writer(&packet, &mut read_request);
-                // while count < max_count {
-                //     if let Ok(packet) = IO_QUEUE.pop() {
-                //         let _ = ciborium::into_writer(&packet, &mut read_request);
-                //         count += 1;
-                //     } else {
-                //         break;
-                //     }
-                // }
+    match IO_QUEUE.wait_and_pop() {
+        Ok(packet) => {
+            let _ = ciborium::into_writer(&packet, &mut read_request);
 
-                log!("Send {} packets to the client", count);
-            }
-            Err(status) => {
-                log!("failed to pop value: {:?}", status);
-            }
+            log!("Send {} packets to the client", 1);
+            read_request.complete();
+            return;
+        }
+        Err(ioqueue::Status::Timeout) => {
+            read_request.timeout();
+            return;
+        }
+        Err(err) => {
+            log!("failed to pop value: {}", err);
+            read_request.complete();
+            return;
         }
     }
+}
 
-    read_request.complete();
+#[driver_write]
+fn driver_write(mut write_request: WriteRequest) {
+    log!("Write request: {:?}", write_request.get_buffer());
+    IO_QUEUE.rundown();
+    write_request.mark_all_as_read();
+    write_request.complete();
 }
 
 #[no_mangle]

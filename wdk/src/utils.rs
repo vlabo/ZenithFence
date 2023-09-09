@@ -1,7 +1,7 @@
 use crate::interface;
 use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 use winapi::km::wdm::{DEVICE_OBJECT, IRP};
-use winapi::shared::ntstatus::STATUS_SUCCESS;
+use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
 use windows_sys::Win32::Foundation::HANDLE;
 
 pub struct Driver {
@@ -10,7 +10,14 @@ pub struct Driver {
     wfp_handle: *mut DEVICE_OBJECT,
 }
 
+unsafe impl Sync for Driver {}
+
 impl Driver {
+    pub(crate) const fn default() -> Self {
+        Self {
+            wfp_handle: core::ptr::null_mut(),
+        }
+    }
     pub(crate) fn new(_driver_handle: HANDLE, device_handle: HANDLE) -> Driver {
         return Driver {
             // driver_handle,
@@ -49,18 +56,6 @@ impl ReadRequest<'_> {
         }
     }
 
-    // pub fn write(&mut self, bytes: &[u8]) -> Result<(), ()> {
-    //     if self.fill_index + bytes.len() >= self.buffer.len() {
-    //         return Err(());
-    //     }
-
-    //     for i in 0..bytes.len() {
-    //         self.buffer[self.fill_index + i] = bytes[i];
-    //     }
-    //     self.fill_index = self.fill_index + bytes.len();
-    //     return Ok(());
-    // }
-
     pub fn free_space(&self) -> usize {
         self.buffer.len() - self.fill_index
     }
@@ -70,6 +65,13 @@ impl ReadRequest<'_> {
             self.irp.IoStatus.Information = self.fill_index;
             let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
             *status = STATUS_SUCCESS;
+        }
+    }
+
+    pub fn timeout(&mut self) {
+        unsafe {
+            let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
+            *status = STATUS_TIMEOUT;
         }
     }
 }
@@ -91,5 +93,41 @@ impl ciborium_io::Write for ReadRequest<'_> {
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
         return Ok(());
+    }
+}
+
+pub struct WriteRequest<'a> {
+    irp: &'a mut IRP,
+    buffer: &'a mut [u8],
+}
+
+impl WriteRequest<'_> {
+    pub fn new(irp: &mut IRP) -> WriteRequest {
+        unsafe {
+            let irp_sp = IoGetCurrentIrpStackLocation(irp);
+            let device_io = (*irp_sp).Parameters.DeviceIoControl_mut();
+
+            let system_buffer = irp.AssociatedIrp.SystemBuffer();
+            let buffer = core::slice::from_raw_parts_mut(
+                *system_buffer as *mut u8,
+                device_io.OutputBufferLength as usize,
+            );
+            WriteRequest { irp, buffer }
+        }
+    }
+
+    pub fn get_buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    pub fn mark_all_as_read(&mut self) {
+        self.irp.IoStatus.Information = self.buffer.len();
+    }
+
+    pub fn complete(&mut self) {
+        unsafe {
+            let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
+            *status = STATUS_SUCCESS;
+        }
     }
 }
