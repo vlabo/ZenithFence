@@ -10,9 +10,11 @@ use winapi::shared::ntdef::{PCVOID, PVOID};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 use self::callout::Callout;
+use self::layer::FwpsIncomingValues;
 
 pub mod callout;
 pub mod ffi;
+pub mod layer;
 
 pub struct FilterEngineInternal {
     driver: Driver,
@@ -186,7 +188,7 @@ pub static FILTER_ENGINE: FilterEngine = FilterEngine::default();
 
 #[no_mangle]
 unsafe extern "C" fn test_callout(
-    fixed_values: PCVOID,
+    fixed_values: *const FwpsIncomingValues,
     _meta_values: PCVOID,
     _layer_data: PVOID,
     _context: PCVOID,
@@ -197,8 +199,12 @@ unsafe extern "C" fn test_callout(
     let filter_id = ffi::pm_GetFilterID(filter);
 
     if let Ok(fe) = FILTER_ENGINE.imp.try_borrow() {
-        let data = CallData { fixed_values };
         let callout = &fe.callouts[&filter_id];
+        let array = core::slice::from_raw_parts(
+            (*fixed_values).incoming_value_array,
+            (*fixed_values).value_count as usize,
+        );
+        let data = CallData::new(callout.layer, array);
         (callout.callout_fn)(data);
     }
 }

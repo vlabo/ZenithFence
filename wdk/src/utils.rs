@@ -1,10 +1,10 @@
+use crate::filter_engine::ffi;
+use crate::filter_engine::layer::Value;
+use crate::layer::Layer;
 use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 use winapi::km::wdm::{DEVICE_OBJECT, IRP};
-use winapi::shared::ntdef::PCVOID;
 use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
 use windows_sys::Win32::Foundation::HANDLE;
-
-use crate::filter_engine::ffi;
 
 pub struct Driver {
     // driver_handle: HANDLE,
@@ -134,38 +134,31 @@ impl WriteRequest<'_> {
     }
 }
 
-pub struct CallData {
-    pub(crate) fixed_values: PCVOID,
+pub struct CallData<'a> {
+    pub layer: Layer,
+    pub(crate) values: &'a [Value],
 }
 
-impl CallData {
-    pub fn get_local_port(&self) -> u16 {
-        unsafe {
-            return ffi::pm_GetLocalPort(self.fixed_values);
-        }
+impl<'a> CallData<'a> {
+    pub(crate) fn new(layer: Layer, values: &'a [Value]) -> Self {
+        Self { layer, values }
     }
 
-    pub fn get_remote_port(&self) -> u16 {
+    pub fn get_value_u8(&'a self, index: usize) -> u8 {
         unsafe {
-            return ffi::pm_GetRemotePort(self.fixed_values);
-        }
+            return self.values[index].value.uint8;
+        };
     }
 
-    pub fn get_local_ipv4(&self) -> u32 {
+    pub fn get_value_u16(&'a self, index: usize) -> u16 {
         unsafe {
-            return ffi::pm_GetLocalIPv4(self.fixed_values);
-        }
+            return self.values[index].value.uint16;
+        };
     }
 
-    pub fn get_remote_ipv4(&self) -> u32 {
+    pub fn get_value_u32(&'a self, index: usize) -> u32 {
         unsafe {
-            return ffi::pm_GetRemoteIPv4(self.fixed_values);
-        }
-    }
-
-    pub fn get_direction(&self) -> u8 {
-        unsafe {
-            return ffi::pm_GetDirection(self.fixed_values);
-        }
+            return self.values[index].value.uint32;
+        };
     }
 }

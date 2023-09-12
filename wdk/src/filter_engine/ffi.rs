@@ -12,6 +12,8 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE},
 };
 
+use super::layer::FwpsIncomingValues;
+
 #[derive(Debug, onlyerror::Error)]
 pub enum Error {
     #[error("invalid string argument: {0}")]
@@ -46,7 +48,15 @@ extern "C" {
         description: *const wchar_t,
         guid: GUID,
         layer_guid: GUID,
-        callout_fn: unsafe extern "C" fn(PCVOID, PCVOID, PVOID, PCVOID, PCVOID, u64, PVOID),
+        callout_fn: unsafe extern "C" fn(
+            *const FwpsIncomingValues,
+            PCVOID,
+            PVOID,
+            PCVOID,
+            PCVOID,
+            u64,
+            PVOID,
+        ),
         callout_id: *mut u32,
     ) -> NTSTATUS;
 
@@ -64,11 +74,11 @@ extern "C" {
     fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
 
     pub(crate) fn pm_GetFilterID(filter: PCVOID) -> u64;
-    pub(crate) fn pm_GetLocalPort(inFixedValues: PCVOID) -> u16;
-    pub(crate) fn pm_GetRemotePort(inFixedValues: PCVOID) -> u16;
-    pub(crate) fn pm_GetLocalIPv4(inFixedValues: PCVOID) -> u32;
-    pub(crate) fn pm_GetRemoteIPv4(inFixedValues: PCVOID) -> u32;
-    pub(crate) fn pm_GetDirection(inFixedValues: PCVOID) -> u8;
+    // pub(crate) fn pm_GetLocalPort(inFixedValues: PCVOID) -> u16;
+    // pub(crate) fn pm_GetRemotePort(inFixedValues: PCVOID) -> u16;
+    // pub(crate) fn pm_GetLocalIPv4(inFixedValues: PCVOID) -> u32;
+    // pub(crate) fn pm_GetRemoteIPv4(inFixedValues: PCVOID) -> u32;
+    // pub(crate) fn pm_GetDirection(inFixedValues: PCVOID) -> u8;
 }
 
 #[link(name = "Fwpkclnt", kind = "static")]
@@ -85,7 +95,7 @@ extern "C" {
     fn FwpmTransactionAbort0(filter_engine_handle: HANDLE) -> NTSTATUS;
 }
 
-pub fn create_filter_engine() -> Result<HANDLE, Error> {
+pub(crate) fn create_filter_engine() -> Result<HANDLE, Error> {
     unsafe {
         let mut handle: HANDLE = INVALID_HANDLE_VALUE;
         let status = pm_CreateFilterEngine(ptr::addr_of_mut!(handle));
@@ -100,7 +110,7 @@ pub fn create_filter_engine() -> Result<HANDLE, Error> {
     }
 }
 
-pub fn register_sublayer(
+pub(crate) fn register_sublayer(
     filter_engine_handle: HANDLE,
     name: &str,
     description: &str,
@@ -139,7 +149,7 @@ pub fn register_sublayer(
     }
 }
 
-pub fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(), Error> {
+pub(crate) fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(), Error> {
     let guid = GUID::from_u128(guid);
     unsafe {
         let status = FwpmSubLayerDeleteByKey0(filter_engine_handle, ptr::addr_of!(guid));
@@ -154,14 +164,22 @@ pub fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(
     }
 }
 
-pub fn register_callout(
+pub(crate) fn register_callout(
     device_object: *mut DEVICE_OBJECT,
     filter_engine_handle: HANDLE,
     name: &str,
     description: &str,
     guid: u128,
     layer: Layer,
-    callout_fn: unsafe extern "C" fn(PCVOID, PCVOID, PVOID, PCVOID, PCVOID, u64, PVOID),
+    callout_fn: unsafe extern "C" fn(
+        *const FwpsIncomingValues,
+        PCVOID,
+        PVOID,
+        PCVOID,
+        PCVOID,
+        u64,
+        PVOID,
+    ),
 ) -> Result<u32, Error> {
     let Ok(name_cstr) = U16CString::from_str(name) else {
         return Err(Error::InvalidString("name".to_owned()));
@@ -201,7 +219,7 @@ pub fn register_callout(
     }
 }
 
-pub fn unregister_callout(callout_id: u32) -> Result<(), Error> {
+pub(crate) fn unregister_callout(callout_id: u32) -> Result<(), Error> {
     unsafe {
         let status = FwpsCalloutUnregisterById0(callout_id);
 
@@ -217,7 +235,7 @@ pub fn unregister_callout(callout_id: u32) -> Result<(), Error> {
     }
 }
 
-pub fn register_filter(
+pub(crate) fn register_filter(
     filter_engine_handle: HANDLE,
     sublayer_guid: u128,
     name: &str,
@@ -262,7 +280,7 @@ pub fn register_filter(
     }
 }
 
-pub fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result<(), Error> {
+pub(crate) fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result<(), Error> {
     unsafe {
         let status = FwpmFilterDeleteById0(filter_engine_handle, filter_id);
         let Some(status) = NtStatus::from_i32(status) else {
@@ -276,13 +294,13 @@ pub fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result
     }
 }
 
-pub fn wdf_device_wdm_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJECT {
+pub(crate) fn wdf_device_wdm_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJECT {
     unsafe {
         return pm_GetDeviceObject(wdf_device);
     }
 }
 
-pub fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), Error> {
     unsafe {
         let status = FwpmEngineClose0(filter_engine_handle);
         let Some(status) = NtStatus::from_i32(status) else {
@@ -295,7 +313,7 @@ pub fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), Error> {
     }
 }
 
-pub fn filter_engine_transaction_begin(
+pub(crate) fn filter_engine_transaction_begin(
     filter_engine_handle: HANDLE,
     flags: u32,
 ) -> Result<(), Error> {
@@ -311,7 +329,7 @@ pub fn filter_engine_transaction_begin(
     }
 }
 
-pub fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<(), Error> {
     unsafe {
         let status = FwpmTransactionCommit0(filter_engine_handle);
         let Some(status) = NtStatus::from_i32(status) else {
@@ -324,7 +342,7 @@ pub fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<
     }
 }
 
-pub fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<(), Error> {
     unsafe {
         let status = FwpmTransactionAbort0(filter_engine_handle);
         let Some(status) = NtStatus::from_i32(status) else {

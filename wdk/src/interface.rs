@@ -83,6 +83,6 @@ pub fn init_driver_object(
             return Ok(Driver::new(driver_handle, device_handle));
         }
 
-        return Err(Error::NTStatus(status));
+        Err(Error::NTStatus(status))
     }
 }

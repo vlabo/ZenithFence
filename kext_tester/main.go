@@ -267,7 +267,7 @@ func main() {
 			if err == nil {
 				packet := PacketInfo{}
 				cbor.Unmarshal(data[0:readBytes], &packet)
-				fmt.Printf("%s -> %s\n", convertArrayToIP(packet.LocalIp, false), convertArrayToIP(packet.RemoteIp, false))
+				fmt.Printf("%s -> %s %d\n", convertArrayToIP(packet.LocalIp, false), convertArrayToIP(packet.RemoteIp, false), packet.Direction)
 			} else {
 				fmt.Printf("Failed to decode packet: %s\n", err)
 			}

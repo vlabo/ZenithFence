@@ -36,7 +36,7 @@ impl KSpinLock {
                 ptr: ptr::null_mut(),
             };
             KeInitializeSpinLock(ptr::addr_of_mut!(p));
-            return p;
+            p
         }
     }
 
@@ -52,7 +52,7 @@ impl KSpinLock {
             KeAcquireInStackQueuedSpinLock(self, &mut handle);
         }
 
-        return handle;
+        handle
     }
 }
 

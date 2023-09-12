@@ -1,4 +1,5 @@
 use super::ffi;
+use super::layer::FwpsIncomingValues;
 use crate::layer::Layer;
 use crate::{filter_engine::FilterEngineInternal, utils::CallData};
 use alloc::{borrow::ToOwned, format, string::String};
@@ -56,10 +57,18 @@ impl Callout {
         return Ok(());
     }
 
-    pub fn register_callout(
+    pub(crate) fn register_callout(
         &mut self,
         filter_engine: &FilterEngineInternal,
-        callout_fn: unsafe extern "C" fn(PCVOID, PCVOID, PVOID, PCVOID, PCVOID, u64, PVOID),
+        callout_fn: unsafe extern "C" fn(
+            *const FwpsIncomingValues,
+            PCVOID,
+            PVOID,
+            PCVOID,
+            PCVOID,
+            u64,
+            PVOID,
+        ),
     ) -> Result<(), String> {
         match ffi::register_callout(
             filter_engine.driver.get_wfp_object(),

@@ -1,5 +1,6 @@
 use core::{cell::UnsafeCell, marker::PhantomData};
 
+use alloc::boxed::Box;
 use ntstatus::ntstatus::NtStatus;
 // use anyhow::Result;
 use winapi::{
@@ -104,15 +105,20 @@ impl<T: Copy> IOQueue<T> {
             // Check if initialized.
             if (*kqueue).initialized {
                 // Allocate entry and push to queue.
-                let list_entry: *mut Entry<T> = allocator::manual_alloc_t();
-                (*list_entry).entry = entry;
-                KeInsertQueue(kqueue, list_entry as PVOID);
+                let list_entry = Box::new(Entry {
+                    list: LIST_ENTRY {
+                        Flink: core::ptr::null_mut(),
+                        Blink: core::ptr::null_mut(),
+                    },
+                    entry,
+                });
+                KeInsertQueue(kqueue, Box::into_raw(list_entry) as PVOID);
 
                 return Ok(());
             }
         }
 
-        return Err(Status::Uninitialized);
+        Err(Status::Uninitialized)
     }
 
     /// Returns an Element or a status.
@@ -139,25 +145,25 @@ impl<T: Copy> IOQueue<T> {
             }
         }
 
-        return Err(Status::Uninitialized);
+        Err(Status::Uninitialized)
     }
 
     /// Returns element or a status. Waits until element is pushed or the queue is interupted.
     pub fn wait_and_pop(&self) -> Result<T, Status> {
         // No timout.
-        return self.pop_internal(core::ptr::null());
+        self.pop_internal(core::ptr::null())
     }
 
     /// Returns element or a status. Does not wait.
     pub fn pop(&self) -> Result<T, Status> {
         let timeout: i64 = 0;
-        return self.pop_internal(&timeout);
+        self.pop_internal(&timeout)
     }
 
     /// Returns element or a status. Does not wait.
     pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status> {
         let timeout_ptr: i64 = timeout * -10000;
-        return self.pop_internal(&timeout_ptr);
+        self.pop_internal(&timeout_ptr)
     }
 
     /// Removes all elements and frees all the memory. The object can't be used after this function is called.
@@ -173,11 +179,11 @@ impl<T: Copy> IOQueue<T> {
                     while !core::ptr::eq((*entry).Flink, list_entries) {
                         let next = (*entry).Flink;
                         log!("discarding entry");
-                        allocator::manual_free(entry);
+                        let _ = Box::from_raw(entry);
                         entry = next;
                     }
                     log!("discarding last entry");
-                    allocator::manual_free(entry);
+                    let _ = Box::from_raw(entry);
                 }
             }
         }

@@ -29,26 +29,6 @@ fn driver_entry(driver: Driver) {
     log!("Starting initialization...");
 
     IO_QUEUE.init();
-    let packet = PacketInfo {
-        id: 1,
-        process_id: Some(0),
-        direction: 3,
-        ip_v6: false,
-        protocol: 4,
-        flags: 5,
-        local_ip: [1, 2, 3, 4],
-        remote_ip: [4, 5, 6, 7],
-        local_port: 8,
-        remote_port: 9,
-        compartment_id: 10,
-        interface_index: 11,
-        sub_interface_index: 12,
-        packet_size: 13,
-    };
-
-    if let Err(err) = IO_QUEUE.push(packet) {
-        log!("driver_entry!: faield to test push into queue: {}", err);
-    }
 
     // Initialize filter engine.
     if let Err(err) = FILTER_ENGINE.init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
@@ -57,21 +37,25 @@ fn driver_entry(driver: Driver) {
 
     let callouts = vec![
         Callout::new(
-            "TestCalloutOutbound",
+            "TestCalloutInbound",
             "Testing callout",
             0x6f996fe2_3a8f_43be_b578_e01480f2b1a1,
-            Layer::FwpmLayerOutboundIppacketV4,
+            Layer::FwpmLayerAleAuthRecvAcceptV4,
             |data| {
-                let _ = IO_QUEUE.push(PacketInfo::from_call_data(data));
+                let packet = PacketInfo::from_call_data(data);
+                log!("packet: {:?}", packet);
+                let _ = IO_QUEUE.push(packet);
             },
         ),
         Callout::new(
-            "TestCalloutInbound",
+            "TestCalloutOutbound",
             "Testing callout",
             0x58545073_f893_454c_bbea_a57bc964f46d,
-            Layer::FwpmLayerInboundIppacketV4,
+            Layer::FwpmLayerAleAuthConnectV4,
             |data| {
-                let _ = IO_QUEUE.push(PacketInfo::from_call_data(data));
+                let packet = PacketInfo::from_call_data(data);
+                log!("packet: {:?}", packet);
+                let _ = IO_QUEUE.push(packet);
             },
         ),
     ];
@@ -100,16 +84,11 @@ fn driver_read(mut read_request: ReadRequest) {
 
             log!("Send {} packets to the client", 1);
             read_request.complete();
-            return;
         }
-        Err(ioqueue::Status::Timeout) => {
-            read_request.timeout();
-            return;
-        }
+        Err(ioqueue::Status::Timeout) => read_request.timeout(),
         Err(err) => {
             log!("failed to pop value: {}", err);
             read_request.complete();
-            return;
         }
     }
 }

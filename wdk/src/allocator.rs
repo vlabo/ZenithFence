@@ -77,7 +77,7 @@ unsafe impl GlobalAlloc for WindowsAllocator {
             handle_alloc_error(layout);
         }
 
-        return pool as *mut u8;
+        pool as *mut u8
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _: Layout) {
@@ -87,7 +87,7 @@ unsafe impl GlobalAlloc for WindowsAllocator {
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         let pool = self.alloc(layout);
         RtlZeroMemory(pool as _, layout.size());
-        return pool;
+        pool
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -119,7 +119,7 @@ pub unsafe fn manual_alloc(size: usize) -> *mut u8 {
     }
     RtlZeroMemory(pool as _, size);
 
-    return pool as *mut u8;
+    pool as *mut u8
 }
 
 pub unsafe fn manual_alloc_t<T>() -> *mut T {
@@ -129,7 +129,7 @@ pub unsafe fn manual_alloc_t<T>() -> *mut T {
     }
     RtlZeroMemory(pool as _, core::mem::size_of::<T>());
 
-    return pool as *mut T;
+    pool as *mut T
 }
 
 pub unsafe fn manual_free<T>(data: *mut T) {
