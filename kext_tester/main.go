@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"syscall"
 	"time"
 
-	// "github.com/fxamacker/cbor/v2"
+	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
 )
 
@@ -263,7 +265,9 @@ func main() {
 			overlapped := &windows.Overlapped{}
 			err = windows.ReadFile(fileHandle, data, &readBytes, overlapped)
 			if err == nil {
-				fmt.Printf("ok\n")
+				packet := PacketInfo{}
+				cbor.Unmarshal(data[0:readBytes], &packet)
+				fmt.Printf("%s -> %s\n", convertArrayToIP(packet.LocalIp, false), convertArrayToIP(packet.RemoteIp, false))
 			} else {
 				fmt.Printf("Failed to decode packet: %s\n", err)
 			}
@@ -280,4 +284,19 @@ func main() {
 	windows.WriteFile(fileHandle, data, &bytesWriten, overlapped)
 	// data := make([]byte, 1)
 	// file.Write(data)
+}
+
+// convertArrayToIP converts an array of uint32 values to a net.IP address.
+func convertArrayToIP(input [4]uint32, ipv6 bool) net.IP {
+	if !ipv6 {
+		addressBuf := make([]byte, 4)
+		binary.BigEndian.PutUint32(addressBuf, input[0])
+		return net.IP(addressBuf)
+	}
+
+	addressBuf := make([]byte, 16)
+	for i := 0; i < 4; i++ {
+		binary.BigEndian.PutUint32(addressBuf[i*4:i*4+4], input[i])
+	}
+	return net.IP(addressBuf)
 }

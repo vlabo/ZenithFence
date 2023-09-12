@@ -23,7 +23,6 @@ rustflags = [
     "-C", "link-arg=/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE",
     "-C", "link-arg=/MERGE:.rustc=.data",
     "-C", "link-arg=/INTEGRITYCHECK",
-    # "-C", "link-arg=wfp_lib.lib",
 ]
 
 # [target.x86_64-pc-windows-msvc]

@@ -1,6 +1,9 @@
 // use crate::filter_engine::FilterEngine;
 use crate::types::PacketInfo;
-use wdk::filter_engine::FilterEngine;
+use alloc::vec;
+use wdk::filter_engine::callout::Callout;
+use wdk::filter_engine::FILTER_ENGINE;
+use wdk::layer::Layer;
 use wdk::utils::{Driver, ReadRequest, WriteRequest};
 use wdk::{
     interface,
@@ -14,8 +17,6 @@ use winapi::{
 };
 use windows_sys::Win32::Foundation::NTSTATUS;
 
-pub static FILTER_ENGINE: FilterEngine = FilterEngine::default();
-
 pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
 
 #[driver_entry(
@@ -28,13 +29,54 @@ fn driver_entry(driver: Driver) {
     log!("Starting initialization...");
 
     IO_QUEUE.init();
+    let packet = PacketInfo {
+        id: 1,
+        process_id: Some(0),
+        direction: 3,
+        ip_v6: false,
+        protocol: 4,
+        flags: 5,
+        local_ip: [1, 2, 3, 4],
+        remote_ip: [4, 5, 6, 7],
+        local_port: 8,
+        remote_port: 9,
+        compartment_id: 10,
+        interface_index: 11,
+        sub_interface_index: 12,
+        packet_size: 13,
+    };
+
+    if let Err(err) = IO_QUEUE.push(packet) {
+        log!("driver_entry!: faield to test push into queue: {}", err);
+    }
 
     // Initialize filter engine.
-    if let Err(err) = FILTER_ENGINE.init(driver) {
+    if let Err(err) = FILTER_ENGINE.init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
         log!("driver_entry: {}", err);
     }
 
-    if let Err(err) = FILTER_ENGINE.commit() {
+    let callouts = vec![
+        Callout::new(
+            "TestCalloutOutbound",
+            "Testing callout",
+            0x6f996fe2_3a8f_43be_b578_e01480f2b1a1,
+            Layer::FwpmLayerOutboundIppacketV4,
+            |data| {
+                let _ = IO_QUEUE.push(PacketInfo::from_call_data(data));
+            },
+        ),
+        Callout::new(
+            "TestCalloutInbound",
+            "Testing callout",
+            0x58545073_f893_454c_bbea_a57bc964f46d,
+            Layer::FwpmLayerInboundIppacketV4,
+            |data| {
+                let _ = IO_QUEUE.push(PacketInfo::from_call_data(data));
+            },
+        ),
+    ];
+
+    if let Err(err) = FILTER_ENGINE.commit(callouts) {
         log!("driver_entry: {}", err);
     }
 
@@ -44,15 +86,14 @@ fn driver_entry(driver: Driver) {
 #[driver_unload]
 fn driver_unload() {
     log!("Starting driver unload");
-    // Unregister filter engine.
     FILTER_ENGINE.deinit();
+    IO_QUEUE.deinit();
     log!("Unloading complete");
 }
 
 #[driver_read]
 fn driver_read(mut read_request: ReadRequest) {
     // let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
-
     match IO_QUEUE.wait_and_pop() {
         Ok(packet) => {
             let _ = ciborium::into_writer(&packet, &mut read_request);
@@ -83,32 +124,6 @@ fn driver_write(mut write_request: WriteRequest) {
 
 #[no_mangle]
 pub extern "system" fn _DllMainCRTStartup() {}
-
-// fn init_driver_object(
-//     driver_object: *mut DEVICE_OBJECT,
-//     registry_path: PVOID,
-//     driver: *mut HANDLE,
-//     device: *mut HANDLE,
-// ) {
-//     let mut device_name = UNICODE_STRING {
-//         Length: 0,
-//         MaximumLength: 0,
-//         Buffer: core::ptr::null_mut(),
-//     };
-//     let mut device_symlink = UNICODE_STRING {
-//         Length: 0,
-//         MaximumLength: 0,
-//         Buffer: core::ptr::null_mut(),
-//     };
-//     unsafe {
-//         let const_device_name: Vec<u16> = "TODO: set real device name".encode_utf16().collect();
-//         RtlInitUnicodeString(&mut device_name, const_device_name.as_ptr());
-
-//         let const_device_symlink: Vec<u16> =
-//             "TODO: set real device symlink".encode_utf16().collect();
-//         RtlInitUnicodeString(&mut device_symlink, const_device_symlink.as_ptr());
-//     }
-// }
 
 // fn driver_device_control(_driver_object: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
 //     unsafe {

@@ -18,7 +18,7 @@ version = "1.0.2"
 default-features = false 
 features = ["alloc"]
 
-[target.'cfg(windows)'.dependencies.winapi]
+[dependencies.winapi]
 git = "https://github.com/Trantect/winapi-rs.git"
 branch = "feature/km"
 features = [
@@ -27,7 +27,7 @@ features = [
     "winioctl"
     ]
 
-[target.'cfg(windows)'.dependencies.windows-sys]
+[dependencies.windows-sys]
 version = "0.48.0"
 features = ["Wdk", "Wdk_System", "Win32_System", "Win32_System_Kernel", "Win32_Security", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_Foundation"]
 

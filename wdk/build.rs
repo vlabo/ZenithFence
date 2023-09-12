@@ -1,9 +1,12 @@
-use failure::{format_err, Error};
-use std::{
-    env::var,
-    path::{Path, PathBuf},
+#[cfg(target_os = "windows")]
+use {
+    failure::{format_err, Error},
+    std::{
+        env::var,
+        path::{Path, PathBuf},
+    },
+    winreg::{enums::*, RegKey},
 };
-use winreg::{enums::*, RegKey};
 
 /// Returns the path to the `Windows Kits` directory. It's by default at
 /// `C:\Program Files (x86)\Windows Kits\10`.

@@ -1,6 +1,7 @@
 use alloc::format;
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
+use wdk::utils::CallData;
 
 #[derive(Serialize, Deserialize, Clone, Copy)] // needed for codegen
 pub struct PacketInfo {
@@ -28,22 +29,52 @@ pub struct PacketInfo {
 
 // unsafe impl Pod for PacketInfo {}
 
+impl PacketInfo {
+    pub fn from_call_data(data: CallData) -> Self {
+        return Self {
+            id: 0,
+            process_id: None,
+            direction: data.get_direction(),
+            ip_v6: false, // FIXME: get value form call data
+            protocol: 6,  // FIXME: get value form call data
+            flags: 0,
+            local_ip: [data.get_local_ipv4(), 0, 0, 0],
+            remote_ip: [data.get_remote_ipv4(), 0, 0, 0],
+            local_port: 0,  // data.get_local_port(),
+            remote_port: 0, // data.get_remote_port(),
+            compartment_id: 0,
+            interface_index: 0,
+            sub_interface_index: 0,
+            packet_size: 0,
+        };
+    }
+}
+
 impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let local_ip: [u8; 16] = unsafe { core::mem::transmute(self.local_ip) };
-        let remote_ip: [u8; 16] = unsafe { core::mem::transmute(self.remote_ip) };
+        let local_ip: [u8; 4] = unsafe { core::mem::transmute(u32::to_be(self.local_ip[0])) };
+        let remote_ip: [u8; 4] = unsafe { core::mem::transmute(u32::to_be(self.remote_ip[0])) };
         let local = format!(
             "{}.{}.{}.{}:{}",
-            local_ip[0], local_ip[1], local_ip[2], local_ip[3], self.local_port
+            local_ip[0],
+            local_ip[1],
+            local_ip[2],
+            local_ip[3],
+            u16::to_be(self.local_port)
         );
         let remote = format!(
             "{}.{}.{}.{}:{}",
-            remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], self.remote_port
+            remote_ip[0],
+            remote_ip[1],
+            remote_ip[2],
+            remote_ip[3],
+            u16::to_be(self.remote_port)
         );
         f.debug_struct("Key")
             .field("local", &local)
             .field("remote", &remote)
             .field("protocol", &self.protocol)
+            .field("direction", &self.direction)
             .finish()
     }
 }

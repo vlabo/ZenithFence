@@ -189,5 +189,52 @@ NTSTATUS pm_RegisterFilter(
     filter.layerKey = layer_guid;   // This layer must match the layer that ExampleCallout is registered to
     filter.action.calloutKey = callout_guid;
     return FwpmFilterAdd(filter_negine_handle, &filter, NULL, filter_id);
-
 }
+
+UINT64 pm_GetFilterID(const FWPS_FILTER *filter) {
+    return filter->filterId;
+}
+
+UINT16 pm_GetLocalPort(const FWPS_INCOMING_VALUES *inFixedValues) {
+    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_IP_LOCAL_PORT].value.uint16;
+}
+
+UINT16 pm_GetRemotePort(const FWPS_INCOMING_VALUES *inFixedValues) {
+    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_IP_REMOTE_PORT].value.uint16;
+}
+
+UINT8 pm_GetDirection(const FWPS_INCOMING_VALUES *inFixedValues) {
+    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_DIRECTION].value.uint8;
+}
+
+UINT32 pm_GetLocalIPv4(const FWPS_INCOMING_VALUES *inFixedValues) {
+    return inFixedValues->incomingValue[FWPS_FIELD_INBOUND_IPPACKET_V4_IP_LOCAL_ADDRESS].value.uint32;
+}
+
+UINT32 pm_GetRemoteIPv4(const FWPS_INCOMING_VALUES *inFixedValues) {
+    return inFixedValues->incomingValue[FWPS_FIELD_INBOUND_IPPACKET_V4_IP_REMOTE_ADDRESS].value.uint32;
+}
+
+
+// static NTSTATUS copyIPv6(const FWPS_INCOMING_VALUES* inFixedValues, FWPS_FIELDS_OUTBOUND_IPPACKET_V6 idx, UINT32* ip) {
+//     // sanity check
+//     if (!inFixedValues || !ip) {
+//         ERR("Invalid parameters");
+//         return STATUS_INVALID_PARAMETER;
+//     }
+
+//     // check type
+//     if (inFixedValues->incomingValue[idx].value.type != FWP_BYTE_ARRAY16_TYPE) {
+//         ERR("invalid IPv6 data type: 0x%X", inFixedValues->incomingValue[idx].value.type);
+//         ip[0] = ip[1] = ip[2] = ip[3] = 0;
+//         return STATUS_INVALID_PARAMETER;
+//     }
+
+//     // copy and swap
+//     UINT32* ipV6 = (UINT32*) inFixedValues->incomingValue[idx].value.byteArray16->byteArray16;
+//     for (int i = 0; i < 4; i++) {
+//         ip[i]= RtlUlongByteSwap(ipV6[i]);
+//     }
+
+//     return STATUS_SUCCESS;
+// }

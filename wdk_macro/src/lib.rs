@@ -52,6 +52,7 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
+
     let mut token = TokenStream::from(quote! {
         #[no_mangle]
         pub extern "system" fn DriverEntry(

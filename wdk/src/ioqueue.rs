@@ -1,7 +1,4 @@
-use core::{
-    marker::PhantomData,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
-};
+use core::{cell::UnsafeCell, marker::PhantomData};
 
 use ntstatus::ntstatus::NtStatus;
 // use anyhow::Result;
@@ -59,7 +56,8 @@ extern "C" {
 // TODO: replace with original struct when it becomes avaliable.
 #[repr(C)]
 struct KQueue {
-    data: [u8; 64], // Size of C KQueue struct.
+    data: [u8; 64],    // Size of C KQueue struct.
+    initialized: bool, // not used by C.
 }
 
 #[repr(C)]
@@ -72,8 +70,7 @@ where
 }
 
 pub struct IOQueue<T: Copy> {
-    kernel_queue: AtomicPtr<KQueue>,
-    initialized: AtomicBool,
+    kernel_queue: UnsafeCell<KQueue>,
     _type: PhantomData<T>, // 0 size variable. Requierd for the generic to work properly. Compiler limitation.
 }
 
@@ -82,8 +79,10 @@ unsafe impl<T: Copy> Sync for IOQueue<T> {}
 impl<T: Copy> IOQueue<T> {
     pub const fn default() -> Self {
         Self {
-            kernel_queue: AtomicPtr::new(core::ptr::null_mut()),
-            initialized: AtomicBool::new(false),
+            kernel_queue: UnsafeCell::new(KQueue {
+                data: [0; 64],
+                initialized: false,
+            }),
             _type: PhantomData,
         }
     }
@@ -92,28 +91,25 @@ impl<T: Copy> IOQueue<T> {
     /// Make sure `rundown` is called on the end of the progrem, if `drop()` is not called for the object.
     pub fn init(&self) {
         unsafe {
-            let kqueue: *mut KQueue = allocator::manual_alloc_t();
+            let kqueue = self.kernel_queue.get();
             KeInitializeQueue(kqueue, 1);
-            self.kernel_queue.store(kqueue, Ordering::Relaxed);
-            self.initialized.store(true, Ordering::Relaxed);
+            (*kqueue).initialized = true;
         }
     }
 
     /// Pushes new entry of any type.
     pub fn push(&self, entry: T) -> Result<(), Status> {
-        // Check if initialized.
-        if self.initialized.load(Ordering::Relaxed) {
-            unsafe {
+        unsafe {
+            let kqueue = self.kernel_queue.get();
+            // Check if initialized.
+            if (*kqueue).initialized {
                 // Allocate entry and push to queue.
                 let list_entry: *mut Entry<T> = allocator::manual_alloc_t();
                 (*list_entry).entry = entry;
-                KeInsertQueue(
-                    self.kernel_queue.load(Ordering::Relaxed),
-                    list_entry as PVOID,
-                );
-            }
+                KeInsertQueue(kqueue, list_entry as PVOID);
 
-            return Ok(());
+                return Ok(());
+            }
         }
 
         return Err(Status::Uninitialized);
@@ -121,15 +117,13 @@ impl<T: Copy> IOQueue<T> {
 
     /// Returns an Element or a status.
     fn pop_internal(&self, timeout: *const i64) -> Result<T, Status> {
-        // Check if initialized.
-        if self.initialized.load(Ordering::Relaxed) {
-            unsafe {
+        unsafe {
+            let kqueue = self.kernel_queue.get();
+            // Check if initialized.
+            if (*kqueue).initialized {
                 // Pop and check the return value.
-                let list_entry = KeRemoveQueue(
-                    self.kernel_queue.load(Ordering::Relaxed),
-                    KPROCESSOR_MODE::KernelMode,
-                    timeout,
-                ) as *mut Entry<T>;
+                let list_entry =
+                    KeRemoveQueue(kqueue, KPROCESSOR_MODE::KernelMode, timeout) as *mut Entry<T>;
                 let error_code = NtStatus::from_u32(list_entry as u32);
                 match error_code {
                     Some(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
@@ -168,13 +162,12 @@ impl<T: Copy> IOQueue<T> {
 
     /// Removes all elements and frees all the memory. The object can't be used after this function is called.
     pub fn rundown(&self) {
-        // Check if initialized.
-        if self.initialized.load(Ordering::Relaxed) {
-            self.initialized.store(false, Ordering::Relaxed);
-            unsafe {
+        unsafe {
+            let kqueue = self.kernel_queue.get();
+            // Check if initialized.
+            if (*kqueue).initialized {
                 // Remove and free all elements from the queue.
-                let list_entries: *mut LIST_ENTRY =
-                    KeRundownQueue(self.kernel_queue.load(Ordering::Relaxed));
+                let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
                 if !list_entries.is_null() {
                     let mut entry = list_entries;
                     while !core::ptr::eq((*entry).Flink, list_entries) {
@@ -186,10 +179,18 @@ impl<T: Copy> IOQueue<T> {
                     log!("discarding last entry");
                     allocator::manual_free(entry);
                 }
-                allocator::manual_free(self.kernel_queue.load(Ordering::Relaxed));
             }
-            self.kernel_queue
-                .store(core::ptr::null_mut(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn deinit(&self) {
+        self.rundown();
+        unsafe {
+            let ptr = self.kernel_queue.get();
+            *ptr = KQueue {
+                data: [0; 64],
+                initialized: false,
+            };
         }
     }
 }
@@ -198,5 +199,6 @@ impl<T: Copy> Drop for IOQueue<T> {
     fn drop(&mut self) {
         // Deinitialize queue.
         self.rundown();
+        self.deinit();
     }
 }
