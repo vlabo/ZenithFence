@@ -88,8 +88,10 @@ impl PacketInfo {
                         0,
                         0,
                     ],
-                    local_port: 0,  // data.get_local_port(),
-                    remote_port: 0, // data.get_remote_port(),
+                    local_port: data
+                        .get_value_u16(layer::FwpsFieldsAleAuthConnectV4::IpLocalPort as usize),
+                    remote_port: data
+                        .get_value_u16(layer::FwpsFieldsAleAuthConnectV4::IpRemotePort as usize),
                     compartment_id: 0,
                     interface_index: 0,
                     sub_interface_index: 0,
@@ -120,8 +122,10 @@ impl PacketInfo {
                         0,
                         0,
                     ],
-                    local_port: 0,  // data.get_local_port(),
-                    remote_port: 0, // data.get_remote_port(),
+                    local_port: data
+                        .get_value_u16(layer::FwpsFieldsAleAuthRecvAcceptV4::IpLocalPort as usize),
+                    remote_port: data
+                        .get_value_u16(layer::FwpsFieldsAleAuthRecvAcceptV4::IpRemotePort as usize),
                     compartment_id: 0,
                     interface_index: 0,
                     sub_interface_index: 0,

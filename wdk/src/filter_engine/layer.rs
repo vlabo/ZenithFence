@@ -20,8 +20,8 @@ pub(crate) union ValueData {
     pub(crate) uint8: u8,
     pub(crate) uint16: u16,
     pub(crate) uint32: u32,
-    pub(crate) uint64: u64,
-    pub(crate) byte_array16: [u8; 16],
+    pub(crate) uint64: *const u64,
+    pub(crate) byte_array16: *const [u8; 16],
     // TODO: add the rest of possible values.
 }
 
