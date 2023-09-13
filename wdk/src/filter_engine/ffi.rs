@@ -1,5 +1,4 @@
 use crate::alloc::borrow::ToOwned;
-use crate::layer::Layer;
 use alloc::string::String;
 use core::ptr;
 use ntstatus::ntstatus::NtStatus;
@@ -12,7 +11,7 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE},
 };
 
-use super::layer::FwpsIncomingValues;
+use super::layer::{FwpsIncomingValues, Layer};
 
 #[derive(Debug, onlyerror::Error)]
 pub enum Error {

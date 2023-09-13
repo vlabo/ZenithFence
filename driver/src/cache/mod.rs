@@ -1,24 +1,23 @@
 use alloc::boxed::Box;
 
-pub mod verdict_cache;
 pub mod packet_cache;
 pub mod packet_key;
+pub mod verdict_cache;
 
+use crate::{common::Verdict, packet_info::PortmasterPacketInfo};
+use packet_cache::PacketCache;
 use verdict_cache::{VerdictCache, VerdictUpdateInfo};
-use packet_cache::PacketCache; 
-use crate::{packet_info::PortmasterPacketInfo, common::Verdict, log};
-
 
 static MAX_VERDICT_CACHE_SIZE: usize = 1024;
 static MAX_POCKET_CACHE_SIZE: usize = 1024;
 
 pub static mut VERDICT_CACHE_IPV4: Option<Box<VerdictCache>> = None;
-pub static mut VERDICT_CACHE_IPV6: Option<Box<VerdictCache>>  = None; 
-pub static mut PACKET_CACHE: Option<Box<PacketCache>> = None; 
+pub static mut VERDICT_CACHE_IPV6: Option<Box<VerdictCache>> = None;
+pub static mut PACKET_CACHE: Option<Box<PacketCache>> = None;
 
 #[no_mangle]
 pub extern "C" fn initCache() {
-    unsafe{
+    unsafe {
         VERDICT_CACHE_IPV4 = Some(VerdictCache::create(MAX_VERDICT_CACHE_SIZE));
         VERDICT_CACHE_IPV6 = Some(VerdictCache::create(MAX_VERDICT_CACHE_SIZE));
         PACKET_CACHE = Some(PacketCache::create(MAX_POCKET_CACHE_SIZE));
@@ -43,13 +42,11 @@ pub extern "C" fn clearCache() {
  *
  */
 #[no_mangle]
-pub extern "C" fn verdictCacheUpdate(
-    update_info: *mut VerdictUpdateInfo,
-) -> i32 {
+pub extern "C" fn verdictCacheUpdate(update_info: *mut VerdictUpdateInfo) -> i32 {
     unsafe {
         if let Some(info) = update_info.as_mut() {
             if info.is_ipv6() {
-                if let Some(cache) = &mut VERDICT_CACHE_IPV6{
+                if let Some(cache) = &mut VERDICT_CACHE_IPV6 {
                     cache.update(info);
                 }
             } else {
@@ -59,7 +56,7 @@ pub extern "C" fn verdictCacheUpdate(
             }
             return 0;
         } else {
-            log!("No verdict cache")
+            err!("No verdict cache")
         }
     }
     return 1;
@@ -82,12 +79,12 @@ pub extern "C" fn verdictCacheAdd(
     unsafe {
         if let Some(info) = packet_info.as_mut() {
             if info.ip_v6 == 1 {
-                if let Some(cache) = &mut VERDICT_CACHE_IPV6{
+                if let Some(cache) = &mut VERDICT_CACHE_IPV6 {
                     if let Some(removed) = cache.add(info, verdict) {
                         *removed_packet_info = removed;
                     }
                 } else {
-                    log!("No VERDICT_CACHE_IPV6 cache")
+                    err!("No VERDICT_CACHE_IPV6 cache")
                 }
             } else {
                 if let Some(cache) = &mut VERDICT_CACHE_IPV4 {
@@ -95,12 +92,12 @@ pub extern "C" fn verdictCacheAdd(
                         *removed_packet_info = removed;
                     }
                 } else {
-                    log!("No VERDICT_CACHE_IPV4 cache")
+                    err!("No VERDICT_CACHE_IPV4 cache")
                 }
             }
             return 0;
         } else {
-            log!("No verdict cache 1")
+            err!("No verdict cache 1")
         }
     }
     return 1;
@@ -134,7 +131,7 @@ pub extern "C" fn verdictCacheGet(
                         return Verdict::Get as i32;
                     }
                 } else {
-                    log!("No VERDICT_CACHE_IPV6 cache 1")
+                    err!("No VERDICT_CACHE_IPV6 cache 1")
                 }
             } else {
                 if let Some(cache) = &mut VERDICT_CACHE_IPV4 {
@@ -147,7 +144,7 @@ pub extern "C" fn verdictCacheGet(
                         return Verdict::Get as i32;
                     }
                 } else {
-                    log!("No VERDICT_CACHE_IPV4 cache 1")
+                    err!("No VERDICT_CACHE_IPV4 cache 1")
                 }
             };
         }
@@ -181,7 +178,7 @@ pub extern "C" fn packetCacheRegister(
             }
             return packet_id; // Ok
         } else {
-            log!("No PACKET_CACHE cache 1")
+            err!("No PACKET_CACHE cache 1")
         }
         return 0;
     }
@@ -205,20 +202,18 @@ pub extern "C" fn packetCacheRetrieve(
     packet_length: *mut usize,
 ) -> i32 {
     unsafe {
-
         if let Some(cache) = &mut PACKET_CACHE {
             let result = cache.retrieve(packet_id);
             if let Some((packet_info_result, packet_result, packet_length_result)) = result {
                 *packet_info_ptr = packet_info_result;
                 *packet = packet_result;
                 *packet_length = packet_length_result;
-                log!("Packet retrieved: {}", packet_id);
+                dbg!("Packet retrieved: {}", packet_id);
                 return 0; // Ok
             }
         } else {
-            log!("No PACKET_CACHE cache 2")
+            err!("No PACKET_CACHE cache 2")
         }
-
     }
     return 1; // error
 }
@@ -244,13 +239,12 @@ pub extern "C" fn packetCacheGet(
             if let Some((_, packet_result, packet_length_result)) = result {
                 *packet = packet_result;
                 *packet_length = packet_length_result;
-                log!("Packet get: {}", packet_id);
+                dbg!("Packet get: {}", packet_id);
                 return 0; // Ok
             }
-        }else {
-            log!("No PACKET_CACHE cache 3")
+        } else {
+            err!("No PACKET_CACHE cache 3")
         }
-
     }
     return 1; // error
 }

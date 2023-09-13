@@ -68,7 +68,7 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
             ) {
                 Ok(driver) => driver,
                 Err(status) => {
-                    log!("driver_entry: failed to initialize driver: {}", status);
+                    err!("driver_entry: failed to initialize driver: {}", status);
                     return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
                 }
             };

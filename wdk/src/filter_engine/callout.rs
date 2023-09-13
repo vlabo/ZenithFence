@@ -1,6 +1,5 @@
-use super::ffi;
 use super::layer::FwpsIncomingValues;
-use crate::layer::Layer;
+use super::{ffi, layer::Layer};
 use crate::{filter_engine::FilterEngineInternal, utils::CallData};
 use alloc::{borrow::ToOwned, format, string::String};
 use winapi::shared::ntdef::{PCVOID, PVOID};

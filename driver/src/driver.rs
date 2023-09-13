@@ -2,13 +2,12 @@
 use crate::types::PacketInfo;
 use alloc::vec;
 use wdk::filter_engine::callout::Callout;
+use wdk::filter_engine::layer::Layer;
 use wdk::filter_engine::FILTER_ENGINE;
-use wdk::layer::Layer;
 use wdk::utils::{Driver, ReadRequest, WriteRequest};
 use wdk::{
-    interface,
+    err, info, interface,
     ioqueue::{self, IOQueue},
-    log,
 };
 use wdk_macro::{driver_entry, driver_read, driver_unload, driver_write};
 use winapi::{
@@ -26,13 +25,13 @@ pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
     ioctl_fn = false
 )]
 fn driver_entry(driver: Driver) {
-    log!("Starting initialization...");
+    info!("Starting initialization...");
 
     IO_QUEUE.init();
 
     // Initialize filter engine.
     if let Err(err) = FILTER_ENGINE.init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
-        log!("driver_entry: {}", err);
+        err!("{}", err);
     }
 
     let callouts = vec![
@@ -43,7 +42,7 @@ fn driver_entry(driver: Driver) {
             Layer::FwpmLayerAleAuthRecvAcceptV4,
             |data| {
                 let packet = PacketInfo::from_call_data(data);
-                log!("packet: {:?}", packet);
+                info!("packet: {:?}", packet);
                 let _ = IO_QUEUE.push(packet);
             },
         ),
@@ -54,25 +53,25 @@ fn driver_entry(driver: Driver) {
             Layer::FwpmLayerAleAuthConnectV4,
             |data| {
                 let packet = PacketInfo::from_call_data(data);
-                log!("packet: {:?}", packet);
+                info!("packet: {:?}", packet);
                 let _ = IO_QUEUE.push(packet);
             },
         ),
     ];
 
     if let Err(err) = FILTER_ENGINE.commit(callouts) {
-        log!("driver_entry: {}", err);
+        err!("{}", err);
     }
 
-    log!("Initialization complete");
+    info!("Initialization complete");
 }
 
 #[driver_unload]
 fn driver_unload() {
-    log!("Starting driver unload");
+    info!("Starting driver unload");
     FILTER_ENGINE.deinit();
     IO_QUEUE.deinit();
-    log!("Unloading complete");
+    info!("Unloading complete");
 }
 
 #[driver_read]
@@ -82,12 +81,12 @@ fn driver_read(mut read_request: ReadRequest) {
         Ok(packet) => {
             let _ = ciborium::into_writer(&packet, &mut read_request);
 
-            log!("Send {} packets to the client", 1);
+            info!("Send {} packets to the client", 1);
             read_request.complete();
         }
         Err(ioqueue::Status::Timeout) => read_request.timeout(),
         Err(err) => {
-            log!("failed to pop value: {}", err);
+            err!("failed to pop value: {}", err);
             read_request.complete();
         }
     }
@@ -95,7 +94,7 @@ fn driver_read(mut read_request: ReadRequest) {
 
 #[driver_write]
 fn driver_write(mut write_request: WriteRequest) {
-    log!("Write request: {:?}", write_request.get_buffer());
+    info!("Write request: {:?}", write_request.get_buffer());
     IO_QUEUE.rundown();
     write_request.mark_all_as_read();
     write_request.complete();

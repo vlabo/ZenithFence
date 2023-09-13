@@ -1,8 +1,8 @@
 use core::cell::RefCell;
 
 use crate::alloc::borrow::ToOwned;
-use crate::log;
 use crate::utils::{CallData, Driver};
+use crate::{dbg, info};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
@@ -64,7 +64,7 @@ impl FilterEngineInternal {
             return Err(format!("filter_engine: {}", err));
         }
 
-        log!("Callouts count: {}", callouts.len());
+        dbg!("Callouts count: {}", callouts.len());
         // Register all callouts
         for mut callout in callouts {
             if let Err(err) = callout.register_callout(self, test_callout) {
@@ -77,7 +77,7 @@ impl FilterEngineInternal {
                 _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
                 return Err(err);
             }
-            log!(
+            dbg!(
                 "registerging callout: {} -> {}",
                 callout.name,
                 callout.filter_id
@@ -96,7 +96,7 @@ impl FilterEngineInternal {
         // TODO: auto abort on error
 
         self.commited = true;
-        log!("transaction commited");
+        info!("transaction commited");
 
         return Ok(());
     }
@@ -118,15 +118,15 @@ impl FilterEngineInternal {
 
 impl Drop for FilterEngineInternal {
     fn drop(&mut self) {
-        log!("Unregistering callouts");
+        dbg!("Unregistering callouts");
         for (_id, ele) in &mut self.callouts {
             if ele.registerd {
                 if let Err(code) = ffi::unregister_callout(ele.callout_id) {
-                    log!("faild to unregister callout: {}", code);
+                    dbg!("faild to unregister callout: {}", code);
                 }
                 if let Err(code) = ffi::unregister_filter(self.filter_engine_handle, ele.filter_id)
                 {
-                    log!("failed to unregister filter: {}", code)
+                    dbg!("failed to unregister filter: {}", code)
                 }
             }
         }
@@ -135,7 +135,7 @@ impl Drop for FilterEngineInternal {
             if let Err(code) =
                 ffi::unregister_sublayer(self.filter_engine_handle, self.sublayer_guid)
             {
-                log!("Failed to unregister sublayer: {}", code);
+                dbg!("Failed to unregister sublayer: {}", code);
             }
         }
 

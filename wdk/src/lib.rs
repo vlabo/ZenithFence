@@ -10,7 +10,6 @@ pub mod error;
 pub mod filter_engine;
 pub mod interface;
 pub mod ioqueue;
-pub mod layer;
 pub mod lock;
 pub mod utils;
 

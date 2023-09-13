@@ -8,7 +8,7 @@ use winapi::{
     shared::ntdef::{LIST_ENTRY, PVOID},
 };
 
-use crate::{allocator, log};
+use crate::{allocator, dbg};
 
 #[derive(Debug, onlyerror::Error)]
 pub enum Status {
@@ -178,11 +178,11 @@ impl<T: Copy> IOQueue<T> {
                     let mut entry = list_entries;
                     while !core::ptr::eq((*entry).Flink, list_entries) {
                         let next = (*entry).Flink;
-                        log!("discarding entry");
+                        dbg!("discarding entry");
                         let _ = Box::from_raw(entry);
                         entry = next;
                     }
-                    log!("discarding last entry");
+                    dbg!("discarding last entry");
                     let _ = Box::from_raw(entry);
                 }
             }

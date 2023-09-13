@@ -1,6 +1,5 @@
 use crate::filter_engine::ffi;
-use crate::filter_engine::layer::Value;
-use crate::layer::Layer;
+use crate::filter_engine::layer::{Layer, Value};
 use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 use winapi::km::wdm::{DEVICE_OBJECT, IRP};
 use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};

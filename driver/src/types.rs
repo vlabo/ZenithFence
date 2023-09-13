@@ -1,7 +1,11 @@
 use alloc::format;
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
-use wdk::{filter_engine::layer, layer::Layer, log, utils::CallData};
+use wdk::{
+    err,
+    filter_engine::layer::{self, Layer},
+    utils::CallData,
+};
 
 #[derive(Serialize, Deserialize, Clone, Copy)] // needed for codegen
 pub struct PacketInfo {
@@ -33,31 +37,18 @@ impl PacketInfo {
     pub fn from_call_data(data: CallData) -> Self {
         match data.layer {
             Layer::FwpmLayerInboundIppacketV4 => {
+                type Field = layer::FwpsFieldsAleAuthConnectV4;
                 Self {
                     id: 0,
                     process_id: None,
                     direction: 1,
-                    ip_v6: false, // FIXME: get value form call data
-                    protocol: 6,  // FIXME: get value form call data
+                    ip_v6: false,
+                    protocol: 6, // FIXME: get value form call data
                     flags: 0,
-                    local_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsInboundIppacketV4::IpLocalAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    remote_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsInboundIppacketV4::IpRemoteAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    local_port: 0,  // data.get_local_port(),
-                    remote_port: 0, // data.get_remote_port(),
+                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
+                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_port: 0,
+                    remote_port: 0,
                     compartment_id: 0,
                     interface_index: 0,
                     sub_interface_index: 0,
@@ -65,33 +56,18 @@ impl PacketInfo {
                 }
             }
             Layer::FwpmLayerAleAuthConnectV4 => {
+                type Field = layer::FwpsFieldsAleAuthConnectV4;
                 Self {
                     id: 0,
                     process_id: None,
                     direction: 0,
-                    ip_v6: false, // FIXME: get value form call data
-                    protocol: 6,  // FIXME: get value form call data
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
                     flags: 0,
-                    local_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsAleAuthConnectV4::IpLocalAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    remote_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsAleAuthConnectV4::IpRemoteAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    local_port: data
-                        .get_value_u16(layer::FwpsFieldsAleAuthConnectV4::IpLocalPort as usize),
-                    remote_port: data
-                        .get_value_u16(layer::FwpsFieldsAleAuthConnectV4::IpRemotePort as usize),
+                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
+                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     compartment_id: 0,
                     interface_index: 0,
                     sub_interface_index: 0,
@@ -99,33 +75,18 @@ impl PacketInfo {
                 }
             }
             Layer::FwpmLayerAleAuthRecvAcceptV4 => {
+                type Field = layer::FwpsFieldsAleAuthRecvAcceptV4;
                 Self {
                     id: 0,
                     process_id: None,
                     direction: 1,
-                    ip_v6: false, // FIXME: get value form call data
-                    protocol: 6,  // FIXME: get value form call data
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
                     flags: 0,
-                    local_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsAleAuthRecvAcceptV4::IpLocalAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    remote_ip: [
-                        data.get_value_u32(
-                            layer::FwpsFieldsAleAuthRecvAcceptV4::IpRemoteAddress as usize,
-                        ),
-                        0,
-                        0,
-                        0,
-                    ],
-                    local_port: data
-                        .get_value_u16(layer::FwpsFieldsAleAuthRecvAcceptV4::IpLocalPort as usize),
-                    remote_port: data
-                        .get_value_u16(layer::FwpsFieldsAleAuthRecvAcceptV4::IpRemotePort as usize),
+                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
+                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     compartment_id: 0,
                     interface_index: 0,
                     sub_interface_index: 0,
@@ -133,7 +94,7 @@ impl PacketInfo {
                 }
             }
             _ => {
-                log!("packet_info: unknown layer");
+                err!("packet_info: unknown layer");
                 Self {
                     id: 0,
                     process_id: None,
@@ -157,8 +118,8 @@ impl PacketInfo {
 
 impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let local_ip: [u8; 4] = self.local_ip[0].to_le_bytes();
-        let remote_ip: [u8; 4] = self.remote_ip[0].to_le_bytes();
+        let local_ip: [u8; 4] = self.local_ip[0].to_be_bytes();
+        let remote_ip: [u8; 4] = self.remote_ip[0].to_be_bytes();
         let local = format!(
             "{}.{}.{}.{}:{}",
             local_ip[0],
