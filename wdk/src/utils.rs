@@ -1,6 +1,8 @@
+use crate::filter_engine::classify::ClassifyOut;
 use crate::filter_engine::ffi;
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
+use crate::info;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, IRP};
 // use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 // use winapi::km::wdm::{DEVICE_OBJECT, IRP};
@@ -132,6 +134,7 @@ pub struct CallData<'a> {
     pub layer: Layer,
     pub(crate) values: &'a [Value],
     metadata: *const FwpsIncomingMetadataValues,
+    classify_out: *mut ClassifyOut,
 }
 
 impl<'a> CallData<'a> {
@@ -139,11 +142,13 @@ impl<'a> CallData<'a> {
         layer: Layer,
         values: &'a [Value],
         metadata: *const FwpsIncomingMetadataValues,
+        classify_out: *mut ClassifyOut,
     ) -> Self {
         Self {
             layer,
             values,
             metadata,
+            classify_out,
         }
     }
 
@@ -178,5 +183,20 @@ impl<'a> CallData<'a> {
             }
         }
         return None;
+    }
+
+    pub fn permit(&mut self) {
+        unsafe {
+            (*self.classify_out).set_permit();
+        }
+    }
+
+    pub fn block(&mut self) {
+        info!("blocking connection");
+        unsafe {
+            (*self.classify_out).set_block();
+            (*self.classify_out).set_absorb();
+            (*self.classify_out).clear_write_flag();
+        }
     }
 }

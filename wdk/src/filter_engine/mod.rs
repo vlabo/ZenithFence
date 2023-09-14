@@ -11,6 +11,7 @@ use alloc::{format, vec::Vec};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 use self::callout::Callout;
+use self::classify::ClassifyOut;
 use self::layer::FwpsIncomingValues;
 use self::metadata::FwpsIncomingMetadataValues;
 
@@ -71,7 +72,7 @@ impl FilterEngineInternal {
         dbg!("Callouts count: {}", callouts.len());
         // Register all callouts
         for mut callout in callouts {
-            if let Err(err) = callout.register_callout(self, test_callout) {
+            if let Err(err) = callout.register_callout(self, catch_all_callout) {
                 // This will destroy the callout structs.
                 _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
                 return Err(err);
@@ -191,14 +192,14 @@ unsafe impl Sync for FilterEngine {}
 pub static FILTER_ENGINE: FilterEngine = FilterEngine::default();
 
 #[no_mangle]
-unsafe extern "C" fn test_callout(
+unsafe extern "C" fn catch_all_callout(
     fixed_values: *const FwpsIncomingValues,
     meta_values: *const FwpsIncomingMetadataValues,
     _layer_data: *mut c_void,
     _context: *const c_void,
     filter: *const c_void,
     _flow_context: u64,
-    _classify_out: *mut c_void,
+    classify_out: *mut ClassifyOut,
 ) {
     let filter_id = ffi::pm_GetFilterID(filter);
 
@@ -208,7 +209,7 @@ unsafe extern "C" fn test_callout(
             (*fixed_values).incoming_value_array,
             (*fixed_values).value_count as usize,
         );
-        let data = CallData::new(callout.layer, array, meta_values);
+        let data = CallData::new(callout.layer, array, meta_values, classify_out);
         (callout.callout_fn)(data);
     }
 }

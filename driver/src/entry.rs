@@ -1,6 +1,7 @@
 // use crate::filter_engine::FilterEngine;
 use crate::types::PacketInfo;
 use alloc::vec;
+use wdk::consts;
 use wdk::filter_engine::callout::Callout;
 use wdk::filter_engine::layer::Layer;
 use wdk::filter_engine::FILTER_ENGINE;
@@ -10,16 +11,6 @@ use wdk::{
     ioqueue::{self, IOQueue},
 };
 use wdk_macro::{driver_entry, driver_read, driver_unload, driver_write};
-// use winapi::{
-//     km::wdm::{DEVICE_OBJECT, DRIVER_OBJECT, IRP},
-//     shared::ntdef::UNICODE_STRING,
-// };
-
-// use windows_sys::Wdk::Foundation::DRIVER_OBJECT;
-
-// use windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD; // use windows_sys::Win32::Foundation::NTSTATUS;
-
-// use windows_sys::Win32::Foundation::UNICODE_STRING;
 
 // Global driver messaging queue.
 pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
@@ -41,26 +32,32 @@ fn driver_entry(driver: Driver) {
     }
 
     let callouts = vec![
-        Callout::new(
-            "TestCalloutInbound",
-            "Testing callout",
-            0x6f996fe2_3a8f_43be_b578_e01480f2b1a1,
-            Layer::FwpmLayerAleAuthRecvAcceptV4,
-            |data| {
-                let packet = PacketInfo::from_call_data(data);
-                info!("packet: {:?}", packet);
-                let _ = IO_QUEUE.push(packet);
-            },
-        ),
+        // Callout::new(
+        //     "TestCalloutInbound",
+        //     "Testing callout",
+        //     0x6f996fe2_3a8f_43be_b578_e01480f2b1a1,
+        //     Layer::FwpmLayerAleAuthRecvAcceptV4,
+        //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+        //     |mut data| {
+        //         // let packet = PacketInfo::from_call_data(&data);
+        //         // info!("packet: {:?}", packet);
+        //         // let _ = IO_QUEUE.push(packet);
+
+        //         data.block();
+        //     },
+        // ),
         Callout::new(
             "TestCalloutOutbound",
             "Testing callout",
             0x58545073_f893_454c_bbea_a57bc964f46d,
             Layer::FwpmLayerAleAuthConnectV4,
-            |data| {
-                let packet = PacketInfo::from_call_data(data);
+            consts::FWP_ACTION_CALLOUT_TERMINATING,
+            |mut data| {
+                let packet = PacketInfo::from_call_data(&data);
                 info!("packet: {:?}", packet);
                 let _ = IO_QUEUE.push(packet);
+
+                data.block();
             },
         ),
     ];

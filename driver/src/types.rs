@@ -7,7 +7,7 @@ use wdk::{
     utils::CallData,
 };
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct PacketInfo {
     pub id: u32,
     pub process_id: Option<u64>,
@@ -27,7 +27,7 @@ pub struct PacketInfo {
 }
 
 impl PacketInfo {
-    pub fn from_call_data(data: CallData) -> Self {
+    pub fn from_call_data(data: &CallData) -> Self {
         match data.layer {
             Layer::FwpmLayerInboundIppacketV4 => {
                 type Field = layer::FwpsFieldsInboundIppacketV4;

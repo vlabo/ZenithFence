@@ -1,21 +1,17 @@
-use core::ffi::c_void;
-
-use super::layer::FwpsIncomingValues;
-use super::metadata::FwpsIncomingMetadataValues;
 use super::{ffi, layer::Layer};
 use crate::{filter_engine::FilterEngineInternal, utils::CallData};
 use alloc::{borrow::ToOwned, format, string::String};
-// use winapi::shared::ntdef::{PCVOID, PVOID};
 
 pub struct Callout {
-    pub name: String,
-    pub description: String,
-    pub guid: u128,
-    pub layer: Layer,
-    pub registerd: bool,
-    pub filter_id: u64,
-    pub callout_id: u32,
-    pub callout_fn: fn(CallData),
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) guid: u128,
+    pub(crate) layer: Layer,
+    pub(crate) action: u32,
+    pub(crate) registerd: bool,
+    pub(crate) filter_id: u64,
+    pub(crate) callout_id: u32,
+    pub(crate) callout_fn: fn(CallData),
 }
 
 impl Callout {
@@ -24,6 +20,7 @@ impl Callout {
         description: &str,
         guid: u128,
         layer: Layer,
+        action: u32,
         callout_fn: fn(CallData),
     ) -> Self {
         Self {
@@ -31,6 +28,7 @@ impl Callout {
             description: description.to_owned(),
             guid,
             layer,
+            action,
             registerd: false,
             filter_id: 0,
             callout_id: 0,
@@ -46,7 +44,7 @@ impl Callout {
             &self.description,
             self.guid,
             self.layer,
-            crate::consts::FWP_ACTION_CALLOUT_INSPECTION,
+            self.action,
         ) {
             Ok(id) => {
                 self.filter_id = id;
@@ -62,15 +60,7 @@ impl Callout {
     pub(crate) fn register_callout(
         &mut self,
         filter_engine: &FilterEngineInternal,
-        callout_fn: unsafe extern "C" fn(
-            *const FwpsIncomingValues,
-            *const FwpsIncomingMetadataValues,
-            *mut c_void,
-            *const c_void,
-            *const c_void,
-            u64,
-            *mut c_void,
-        ),
+        callout_fn: ffi::CalloutFunctionType,
     ) -> Result<(), String> {
         match ffi::register_callout(
             filter_engine.driver.get_wfp_object(),

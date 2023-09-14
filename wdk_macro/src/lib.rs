@@ -36,20 +36,19 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let path2 = format!("\\??\\{}", args.name);
 
     let ioctl_token = if args.ioctl_fn {
-        // quote! {
-        //     (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_DEVICE_CONTROL as usize] = Some(core::mem::transmute(internal_wdk_driver_ioctl));
-        // }
-        quote! {}
+        quote! {
+            // Ungly compier hack that fixes wrong function type in windows-rs bindings.
+            type DeviceControlType = Option<unsafe extern "system" fn(&mut windows_sys::Wdk::Foundation::DEVICE_OBJECT, &mut windows_sys::Wdk::Foundation::IRP) -> windows_sys::Win32::Foundation::NTSTATUS>;
+            let device_control_fn: DeviceControlType = Some(internal_wdk_driver_read);
+            (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_DEVICE_CONTROL as usize] = core::mem::transmute(device_control_fn);
+        }
     } else {
         quote! {}
     };
 
     let read_token = if args.read_fn {
-        // quote! {
-        //     let driver_read_fn: windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD = Some(internal_wdk_driver_read);
-        //     (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_READ as usize] = core::mem::transmute(driver_read_fn);
-        // }
         quote! {
+            // Ungly compier hack that fixes wrong function type in windows-rs bindings.
             type ReadType = Option<unsafe extern "system" fn(&mut windows_sys::Wdk::Foundation::DEVICE_OBJECT, &mut windows_sys::Wdk::Foundation::IRP) -> windows_sys::Win32::Foundation::NTSTATUS>;
             let driver_read_fn: ReadType = Some(internal_wdk_driver_read);
             (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_READ as usize] = core::mem::transmute(driver_read_fn);
@@ -59,8 +58,8 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let write_token = if args.write_fn {
-        // quote! {(*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_WRITE as usize] = Some(core::mem::transmute(internal_wdk_driver_write));}
         quote! {
+            // Ungly compier hack that fixes wrong function type in windows-rs bindings.
             type WriteType = Option<unsafe extern "system" fn(&mut windows_sys::Wdk::Foundation::DEVICE_OBJECT, &mut windows_sys::Wdk::Foundation::IRP) -> windows_sys::Win32::Foundation::NTSTATUS>;
             let driver_write_fn: WriteType = Some(internal_wdk_driver_write);
             (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_WRITE as usize] = core::mem::transmute(driver_write_fn);
@@ -91,8 +90,9 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
             // Set unload function.
             unsafe {
-            let driver_unload_fn: windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD = Some(internal_wdk_driver_unload);
-            (*driver_object).DriverUnload = core::mem::transmute(driver_unload_fn);
+                // Ungly compier hack that fixes wrong function type in windows-rs bindings.
+                let driver_unload_fn: windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD = Some(internal_wdk_driver_unload);
+                (*driver_object).DriverUnload = core::mem::transmute(driver_unload_fn);
                 #ioctl_token
                 #read_token
                 #write_token

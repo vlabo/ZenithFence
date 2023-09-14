@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPS_CLASSIFY_OUT_FLAG_ABSORB;
+
 const FWP_ACTION_FLAG_TERMINATING: u32 = 0x00001000;
 const FWP_ACTION_FLAG_NON_TERMINATING: u32 = 0x00002000;
 const FWP_ACTION_FLAG_CALLOUT: u32 = 0x00004000;
@@ -34,7 +36,9 @@ const FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU: u32 = 0x00040000;
 const FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU: u32 = 0x00080000;
 const FWP_CONDITION_FLAG_IS_CONNECTION_REDIRECTED: u32 = 0x00100000;
 const FWPS_RIGHT_ACTION_WRITE: u32 = 0x00000001;
-struct ClassifyOut {
+
+#[repr(C)]
+pub(crate) struct ClassifyOut {
     action_type: u32,
     _out_context: u64, // System use
     _filter_id: u64,   // System use
@@ -74,5 +78,13 @@ impl ClassifyOut {
             return;
         }
         self.action_type = FWP_ACTION_NONE;
+    }
+
+    pub fn set_absorb(&mut self) {
+        self.flags |= FWPS_CLASSIFY_OUT_FLAG_ABSORB;
+    }
+
+    pub fn clear_write_flag(&mut self) {
+        self.rights &= !FWPS_RIGHT_ACTION_WRITE;
     }
 }

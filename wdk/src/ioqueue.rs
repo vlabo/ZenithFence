@@ -63,23 +63,20 @@ extern "C" {
 // }
 
 #[repr(C)]
-struct Entry<T>
-where
-    T: Clone,
-{
+struct Entry<T> {
     list: LIST_ENTRY, // Internal use
     entry: T,
 }
 
-pub struct IOQueue<T: Clone> {
+pub struct IOQueue<T> {
     kernel_queue: UnsafeCell<KQUEUE>,
     initialized: UnsafeCell<bool>,
     _type: PhantomData<T>, // 0 size variable. Requierd for the generic to work properly. Compiler limitation.
 }
 
-unsafe impl<T: Clone> Sync for IOQueue<T> {}
+unsafe impl<T> Sync for IOQueue<T> {}
 
-impl<T: Clone> IOQueue<T> {
+impl<T> IOQueue<T> {
     pub const fn default() -> Self {
         Self {
             kernel_queue: UnsafeCell::new(unsafe { MaybeUninit::zeroed().assume_init() }),
@@ -110,7 +107,7 @@ impl<T: Clone> IOQueue<T> {
                         Flink: core::ptr::null_mut(),
                         Blink: core::ptr::null_mut(),
                     },
-                    entry: entry.clone(),
+                    entry,
                 });
                 KeInsertQueue(kqueue, Box::into_raw(list_entry) as *mut c_void);
 
@@ -137,8 +134,8 @@ impl<T: Clone> IOQueue<T> {
                     Some(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandened),
                     _ => {
                         // The return value is a pointer.
-                        let entry = (*list_entry).entry.clone();
-                        let _ = Box::from_raw(list_entry);
+                        let list_entry = Box::from_raw(list_entry);
+                        let entry = list_entry.entry;
                         return Ok(entry);
                     }
                 }
@@ -199,7 +196,7 @@ impl<T: Clone> IOQueue<T> {
     }
 }
 
-impl<T: Clone> Drop for IOQueue<T> {
+impl<T> Drop for IOQueue<T> {
     fn drop(&mut self) {
         // Deinitialize queue.
         self.rundown();

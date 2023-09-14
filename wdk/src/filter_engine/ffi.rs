@@ -12,8 +12,19 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE},
 };
 
+use super::classify::ClassifyOut;
 use super::layer::{FwpsIncomingValues, Layer};
 use super::metadata::FwpsIncomingMetadataValues;
+
+pub(crate) type CalloutFunctionType = unsafe extern "C" fn(
+    *const FwpsIncomingValues,
+    *const FwpsIncomingMetadataValues,
+    *mut c_void,
+    *const c_void,
+    *const c_void,
+    u64,
+    *mut ClassifyOut,
+);
 
 #[derive(Debug, onlyerror::Error)]
 pub enum Error {
@@ -49,15 +60,7 @@ extern "C" {
         description: PCWSTR,
         guid: GUID,
         layer_guid: GUID,
-        callout_fn: unsafe extern "C" fn(
-            *const FwpsIncomingValues,
-            *const FwpsIncomingMetadataValues,
-            *mut c_void,
-            *const c_void,
-            *const c_void,
-            u64,
-            *mut c_void,
-        ),
+        callout_fn: CalloutFunctionType,
         callout_id: *mut u32,
     ) -> NTSTATUS;
 
@@ -172,15 +175,7 @@ pub(crate) fn register_callout(
     description: &str,
     guid: u128,
     layer: Layer,
-    callout_fn: unsafe extern "C" fn(
-        *const FwpsIncomingValues,
-        *const FwpsIncomingMetadataValues,
-        *mut c_void,
-        *const c_void,
-        *const c_void,
-        u64,
-        *mut c_void,
-    ),
+    callout_fn: CalloutFunctionType,
 ) -> Result<u32, Error> {
     let Ok(name_cstr) = U16CString::from_str(name) else {
         return Err(Error::InvalidString("name".to_owned()));
