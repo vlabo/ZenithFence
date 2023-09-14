@@ -115,27 +115,3 @@ unsafe impl GlobalAlloc for WindowsAllocator {
         new_ptr
     }
 }
-
-pub unsafe fn manual_alloc(size: usize) -> *mut u8 {
-    let pool = ExAllocatePoolWithTag(NON_PAGED_POOL, size, POOL_TAG);
-    if pool.is_null() {
-        return core::ptr::null_mut::<u8>();
-    }
-    RtlZeroMemory(pool as _, size);
-
-    pool as *mut u8
-}
-
-pub unsafe fn manual_alloc_t<T>() -> *mut T {
-    let pool = ExAllocatePoolWithTag(NON_PAGED_POOL, core::mem::size_of::<T>(), POOL_TAG);
-    if pool.is_null() {
-        return core::ptr::null_mut::<T>();
-    }
-    RtlZeroMemory(pool as _, core::mem::size_of::<T>());
-
-    pool as *mut T
-}
-
-pub unsafe fn manual_free<T>(data: *mut T) {
-    ExFreePoolWithTag(data as u64, POOL_TAG);
-}

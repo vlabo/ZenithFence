@@ -1,15 +1,9 @@
 use core::{cell::UnsafeCell, ffi::c_void, marker::PhantomData, mem::MaybeUninit};
 
+use crate::dbg;
 use alloc::boxed::Box;
 use ntstatus::ntstatus::NtStatus;
 use windows_sys::{Wdk::Foundation::KQUEUE, Win32::System::Kernel::LIST_ENTRY};
-// use anyhow::Result;
-// use winapi::{
-//     km::wdm::KPROCESSOR_MODE,
-//     shared::ntdef::{LIST_ENTRY, PVOID},
-// };
-
-use crate::{allocator, dbg};
 
 #[derive(Debug, onlyerror::Error)]
 pub enum Status {
@@ -144,7 +138,7 @@ impl<T: Clone> IOQueue<T> {
                     _ => {
                         // The return value is a pointer.
                         let entry = (*list_entry).entry.clone();
-                        allocator::manual_free(list_entry as *mut u8);
+                        let _ = Box::from_raw(list_entry);
                         return Ok(entry);
                     }
                 }
