@@ -1,12 +1,13 @@
-use core::{cell::UnsafeCell, marker::PhantomData};
+use core::{cell::UnsafeCell, ffi::c_void, marker::PhantomData, mem::MaybeUninit};
 
 use alloc::boxed::Box;
 use ntstatus::ntstatus::NtStatus;
+use windows_sys::{Wdk::Foundation::KQUEUE, Win32::System::Kernel::LIST_ENTRY};
 // use anyhow::Result;
-use winapi::{
-    km::wdm::KPROCESSOR_MODE,
-    shared::ntdef::{LIST_ENTRY, PVOID},
-};
+// use winapi::{
+//     km::wdm::KPROCESSOR_MODE,
+//     shared::ntdef::{LIST_ENTRY, PVOID},
+// };
 
 use crate::{allocator, dbg};
 
@@ -22,6 +23,12 @@ pub enum Status {
     Abandened,
 }
 
+#[repr(i8)]
+pub enum KprocessorMode {
+    KernelMode = 0,
+    UserMode = 1,
+}
+
 #[link(name = "NtosKrnl", kind = "static")]
 extern "C" {
     /*
@@ -32,11 +39,11 @@ extern "C" {
         [in] Count
         The maximum number of threads for which the waits on the queue object can be satisfied concurrently. If this parameter is not supplied, the number of processors in the machine is used.
     */
-    fn KeInitializeQueue(queue: *mut KQueue, count: u64);
+    fn KeInitializeQueue(queue: *mut KQUEUE, count: u64);
     /*
     KeInsertQueue returns the previous signal state of the given Queue. If it was set to zero (that is, not signaled) before KeInsertQueue was called, KeInsertQueue returns zero, meaning that no entries were queued. If it was nonzero (signaled), KeInsertQueue returns the number of entries that were queued before KeInsertQueue was called.
     */
-    fn KeInsertQueue(queue: *mut KQueue, list_entry: PVOID) -> i64;
+    fn KeInsertQueue(queue: *mut KQUEUE, list_entry: *mut c_void) -> i64;
     /*
     KeRemoveQueue returns one of the following:
         A pointer to a dequeued entry from the given queue object, if one is available
@@ -45,45 +52,44 @@ extern "C" {
         STATUS_ABANDONED, if the queue has been run down
     */
     fn KeRemoveQueue(
-        queue: *mut KQueue,
-        mode: KPROCESSOR_MODE,
+        queue: *mut KQUEUE,
+        waitmode: KprocessorMode,
         timeout: *const i64,
     ) -> *mut LIST_ENTRY;
 
     // If the queue is empty, KeRundownQueue returns NULL; otherwise, it returns the address of the first entry in the queue.
-    fn KeRundownQueue(queue: *mut KQueue) -> *mut LIST_ENTRY;
+    fn KeRundownQueue(queue: *mut KQUEUE) -> *mut LIST_ENTRY;
 }
 
 // TODO: replace with original struct when it becomes avaliable.
-#[repr(C)]
-struct KQueue {
-    data: [u8; 64],    // Size of C KQueue struct.
-    initialized: bool, // not used by C.
-}
+// #[repr(C)]
+// struct KQueue {
+//     data: [u8; 64],    // Size of C KQueue struct.
+//     initialized: bool, // not used by C.
+// }
 
 #[repr(C)]
 struct Entry<T>
 where
-    T: Copy,
+    T: Clone,
 {
     list: LIST_ENTRY, // Internal use
     entry: T,
 }
 
-pub struct IOQueue<T: Copy> {
-    kernel_queue: UnsafeCell<KQueue>,
+pub struct IOQueue<T: Clone> {
+    kernel_queue: UnsafeCell<KQUEUE>,
+    initialized: UnsafeCell<bool>,
     _type: PhantomData<T>, // 0 size variable. Requierd for the generic to work properly. Compiler limitation.
 }
 
-unsafe impl<T: Copy> Sync for IOQueue<T> {}
+unsafe impl<T: Clone> Sync for IOQueue<T> {}
 
-impl<T: Copy> IOQueue<T> {
+impl<T: Clone> IOQueue<T> {
     pub const fn default() -> Self {
         Self {
-            kernel_queue: UnsafeCell::new(KQueue {
-                data: [0; 64],
-                initialized: false,
-            }),
+            kernel_queue: UnsafeCell::new(unsafe { MaybeUninit::zeroed().assume_init() }),
+            initialized: UnsafeCell::new(false),
             _type: PhantomData,
         }
     }
@@ -94,7 +100,7 @@ impl<T: Copy> IOQueue<T> {
         unsafe {
             let kqueue = self.kernel_queue.get();
             KeInitializeQueue(kqueue, 1);
-            (*kqueue).initialized = true;
+            (*self.initialized.get()) = true;
         }
     }
 
@@ -103,16 +109,16 @@ impl<T: Copy> IOQueue<T> {
         unsafe {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
-            if (*kqueue).initialized {
+            if *self.initialized.get() {
                 // Allocate entry and push to queue.
                 let list_entry = Box::new(Entry {
                     list: LIST_ENTRY {
                         Flink: core::ptr::null_mut(),
                         Blink: core::ptr::null_mut(),
                     },
-                    entry,
+                    entry: entry.clone(),
                 });
-                KeInsertQueue(kqueue, Box::into_raw(list_entry) as PVOID);
+                KeInsertQueue(kqueue, Box::into_raw(list_entry) as *mut c_void);
 
                 return Ok(());
             }
@@ -126,10 +132,10 @@ impl<T: Copy> IOQueue<T> {
         unsafe {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
-            if (*kqueue).initialized {
+            if *self.initialized.get() {
                 // Pop and check the return value.
                 let list_entry =
-                    KeRemoveQueue(kqueue, KPROCESSOR_MODE::KernelMode, timeout) as *mut Entry<T>;
+                    KeRemoveQueue(kqueue, KprocessorMode::KernelMode, timeout) as *mut Entry<T>;
                 let error_code = NtStatus::from_u32(list_entry as u32);
                 match error_code {
                     Some(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
@@ -137,7 +143,7 @@ impl<T: Copy> IOQueue<T> {
                     Some(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandened),
                     _ => {
                         // The return value is a pointer.
-                        let entry = (*list_entry).entry;
+                        let entry = (*list_entry).entry.clone();
                         allocator::manual_free(list_entry as *mut u8);
                         return Ok(entry);
                     }
@@ -171,7 +177,7 @@ impl<T: Copy> IOQueue<T> {
         unsafe {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
-            if (*kqueue).initialized {
+            if *self.initialized.get() {
                 // Remove and free all elements from the queue.
                 let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
                 if !list_entries.is_null() {
@@ -193,15 +199,13 @@ impl<T: Copy> IOQueue<T> {
         self.rundown();
         unsafe {
             let ptr = self.kernel_queue.get();
-            *ptr = KQueue {
-                data: [0; 64],
-                initialized: false,
-            };
+            *ptr = core::mem::zeroed();
+            (*self.initialized.get()) = false;
         }
     }
 }
 
-impl<T: Copy> Drop for IOQueue<T> {
+impl<T: Clone> Drop for IOQueue<T> {
     fn drop(&mut self) {
         // Deinitialize queue.
         self.rundown();

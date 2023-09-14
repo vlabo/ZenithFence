@@ -10,12 +10,18 @@ use wdk::{
     ioqueue::{self, IOQueue},
 };
 use wdk_macro::{driver_entry, driver_read, driver_unload, driver_write};
-use winapi::{
-    km::wdm::{DEVICE_OBJECT, DRIVER_OBJECT, IRP},
-    shared::ntdef::UNICODE_STRING,
-};
-use windows_sys::Win32::Foundation::NTSTATUS;
+// use winapi::{
+//     km::wdm::{DEVICE_OBJECT, DRIVER_OBJECT, IRP},
+//     shared::ntdef::UNICODE_STRING,
+// };
 
+// use windows_sys::Wdk::Foundation::DRIVER_OBJECT;
+
+// use windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD; // use windows_sys::Win32::Foundation::NTSTATUS;
+
+// use windows_sys::Win32::Foundation::UNICODE_STRING;
+
+// Global driver messaging queue.
 pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
 
 #[driver_entry(
@@ -76,7 +82,6 @@ fn driver_unload() {
 
 #[driver_read]
 fn driver_read(mut read_request: ReadRequest) {
-    // let max_count = read_request.free_space() / core::mem::size_of::<PacketInfo>();
     match IO_QUEUE.wait_and_pop() {
         Ok(packet) => {
             let _ = ciborium::into_writer(&packet, &mut read_request);

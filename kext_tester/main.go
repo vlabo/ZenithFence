@@ -268,6 +268,12 @@ func main() {
 				packet := PacketInfo{}
 				cbor.Unmarshal(data[0:readBytes], &packet)
 				fmt.Printf("%s:%d -> %s:%d %d\n", convertArrayToIP(packet.LocalIp, false), packet.LocalPort, convertArrayToIP(packet.RemoteIp, false), packet.RemotePort, packet.Direction)
+				// if packet.ProcessId != nil {
+				// 	fmt.Printf("pid: %d\n", *packet.ProcessId)
+				// }
+				if packet.ProcessPath != nil {
+					fmt.Printf("pid: %s\n", *packet.ProcessPath)
+				}
 			} else {
 				fmt.Printf("Failed to decode packet: %s\n", err)
 			}

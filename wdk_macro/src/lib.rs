@@ -36,19 +36,35 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let path2 = format!("\\??\\{}", args.name);
 
     let ioctl_token = if args.ioctl_fn {
-        quote! {(*driver_object).MajorFunction[winapi::km::wdm::IRP_MJ::IOCTL as usize] = Some(internal_wdk_driver_ioctl);}
+        // quote! {
+        //     (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_DEVICE_CONTROL as usize] = Some(core::mem::transmute(internal_wdk_driver_ioctl));
+        // }
+        quote! {}
     } else {
         quote! {}
     };
 
     let read_token = if args.read_fn {
-        quote! {(*driver_object).MajorFunction[winapi::km::wdm::IRP_MJ::READ as usize] = Some(internal_wdk_driver_read);}
+        // quote! {
+        //     let driver_read_fn: windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD = Some(internal_wdk_driver_read);
+        //     (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_READ as usize] = core::mem::transmute(driver_read_fn);
+        // }
+        quote! {
+            type ReadType = Option<unsafe extern "system" fn(&mut windows_sys::Wdk::Foundation::DEVICE_OBJECT, &mut windows_sys::Wdk::Foundation::IRP) -> windows_sys::Win32::Foundation::NTSTATUS>;
+            let driver_read_fn: ReadType = Some(internal_wdk_driver_read);
+            (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_READ as usize] = core::mem::transmute(driver_read_fn);
+        }
     } else {
         quote! {}
     };
 
     let write_token = if args.write_fn {
-        quote! {(*driver_object).MajorFunction[winapi::km::wdm::IRP_MJ::WRITE as usize] = Some(internal_wdk_driver_write);}
+        // quote! {(*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_WRITE as usize] = Some(core::mem::transmute(internal_wdk_driver_write));}
+        quote! {
+            type WriteType = Option<unsafe extern "system" fn(&mut windows_sys::Wdk::Foundation::DEVICE_OBJECT, &mut windows_sys::Wdk::Foundation::IRP) -> windows_sys::Win32::Foundation::NTSTATUS>;
+            let driver_write_fn: WriteType = Some(internal_wdk_driver_write);
+            (*driver_object).MajorFunction[windows_sys::Wdk::System::SystemServices::IRP_MJ_WRITE as usize] = core::mem::transmute(driver_write_fn);
+        }
     } else {
         quote! {}
     };
@@ -56,9 +72,9 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut token = TokenStream::from(quote! {
         #[no_mangle]
         pub extern "system" fn DriverEntry(
-            driver_object: *mut DRIVER_OBJECT,
-            registry_path: *mut UNICODE_STRING,
-        ) -> NTSTATUS {
+            driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
+            registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
+        ) -> windows_sys::Win32::Foundation::NTSTATUS {
             // Initialize driver object
             let driver = match interface::init_driver_object(
                 driver_object,
@@ -75,7 +91,8 @@ pub fn driver_entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
             // Set unload function.
             unsafe {
-                (*driver_object).DriverUnload = Some(internal_wdk_driver_unload);
+            let driver_unload_fn: windows_sys::Wdk::System::SystemServices::DRIVER_UNLOAD = Some(internal_wdk_driver_unload);
+            (*driver_object).DriverUnload = core::mem::transmute(driver_unload_fn);
                 #ioctl_token
                 #read_token
                 #write_token
@@ -95,7 +112,7 @@ pub fn driver_unload(_metadata: TokenStream, input: TokenStream) -> TokenStream 
     let input_fn = parse_macro_input!(input as ItemFn);
     let name = input_fn.sig.ident;
     let mut token = TokenStream::from(quote! {
-        extern "system" fn internal_wdk_driver_unload(_self: &mut DRIVER_OBJECT) {
+        extern "system" fn internal_wdk_driver_unload(_self: *const windows_sys::Wdk::Foundation::DRIVER_OBJECT) {
             #name();
         }
     });
@@ -110,9 +127,9 @@ pub fn driver_read(_metadata: TokenStream, input: TokenStream) -> TokenStream {
     let name = input_fn.sig.ident;
     let mut token = TokenStream::from(quote! {
          unsafe extern "system" fn internal_wdk_driver_read(
-             _device_object: &mut DEVICE_OBJECT,
-             irp: &mut IRP,
-         ) -> NTSTATUS {
+             _device_object: &mut windows_sys::Wdk::Foundation::DEVICE_OBJECT,
+             irp: &mut windows_sys::Wdk::Foundation::IRP,
+         ) -> windows_sys::Win32::Foundation::NTSTATUS {
              #name(wdk::utils::ReadRequest::new(irp));
              return windows_sys::Win32::Foundation::STATUS_SUCCESS;
          }
@@ -128,9 +145,9 @@ pub fn driver_write(_metadata: TokenStream, input: TokenStream) -> TokenStream {
     let name = input_fn.sig.ident;
     let mut token = TokenStream::from(quote! {
          unsafe extern "system" fn internal_wdk_driver_write(
-             _device_object: &mut DEVICE_OBJECT,
-             irp: &mut IRP,
-         ) -> NTSTATUS {
+             _device_object: &mut windows_sys::Wdk::Foundation::DEVICE_OBJECT,
+             irp: &mut windows_sys::Wdk::Foundation::IRP,
+         ) -> windows_sys::Win32::Foundation::NTSTATUS {
              #name(wdk::utils::WriteRequest::new(irp));
              return windows_sys::Win32::Foundation::STATUS_SUCCESS;
          }

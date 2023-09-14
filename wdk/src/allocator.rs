@@ -1,9 +1,12 @@
 extern crate alloc;
 
-use core::alloc::{GlobalAlloc, Layout};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    ffi::c_void,
+};
 
 use alloc::alloc::handle_alloc_error;
-use winapi::{shared::ntdef::PHYSICAL_ADDRESS, um::winnt::RtlZeroMemory};
+// use winapi::{shared::ntdef::PHYSICAL_ADDRESS, um::winnt::RtlZeroMemory};
 
 pub type PoolType = i32;
 
@@ -48,20 +51,21 @@ pub enum MemoryCachingType {
 
 #[link(name = "ntoskrnl")]
 extern "system" {
-    pub fn ExAllocatePool(pool_type: PoolType, number_of_bytes: usize) -> *mut u64;
-    pub fn ExAllocatePoolWithTag(pool_type: PoolType, number_of_bytes: usize, tag: u32)
-        -> *mut u64;
-    pub fn ExFreePool(pool: u64);
-    pub fn ExFreePoolWithTag(pool: u64, tag: u32);
-    pub fn MmAllocateContiguousMemorySpecifyCacheNode(
-        NumberOfBytes: usize,
-        LowestAcceptableAddress: PHYSICAL_ADDRESS,
-        HighestAcceptableAddress: PHYSICAL_ADDRESS,
-        BoundaryAddressMultiple: PHYSICAL_ADDRESS,
-        CacheType: MemoryCachingType,
-        PreferredNode: NodeRequirement,
-    ) -> *mut u64;
+    // fn ExAllocatePool(pool_type: PoolType, number_of_bytes: usize) -> *mut u64;
+    fn ExAllocatePoolWithTag(pool_type: PoolType, number_of_bytes: usize, tag: u32) -> *mut u64;
+    // fn ExFreePool(pool: u64);
+    fn ExFreePoolWithTag(pool: u64, tag: u32);
+    // fn MmAllocateContiguousMemorySpecifyCacheNode(
+    //     NumberOfBytes: usize,
+    //     LowestAcceptableAddress: PHYSICAL_ADDRESS,
+    //     HighestAcceptableAddress: PHYSICAL_ADDRESS,
+    //     BoundaryAddressMultiple: PHYSICAL_ADDRESS,
+    //     CacheType: MemoryCachingType,
+    //     PreferredNode: NodeRequirement,
+    // ) -> *mut u64;
     pub fn MmFreeContiguousMemory(BaseAddress: *mut u64);
+
+    fn RtlZeroMemory(Destination: *mut c_void, Length: usize);
 }
 
 pub struct WindowsAllocator {}

@@ -18,18 +18,9 @@ version = "1.0.2"
 default-features = false 
 features = ["alloc"]
 
-[dependencies.winapi]
-git = "https://github.com/Trantect/winapi-rs.git"
-branch = "feature/km"
-features = [
-    "wdm",
-    "ntstatus",
-    "winioctl"
-    ]
-
 [dependencies.windows-sys]
-version = "0.48.0"
-features = ["Wdk", "Wdk_System", "Win32_System", "Win32_System_Kernel", "Win32_Security", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_Foundation"]
+git = "https://github.com/microsoft/windows-rs"
+features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Security", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_WindowsFilteringPlatform"]
 
 [target.'cfg(windows)'.build-dependencies]
 winreg = "0.7.0"

@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{format, string::String};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use wdk::{
@@ -7,10 +7,11 @@ use wdk::{
     utils::CallData,
 };
 
-#[derive(Serialize, Deserialize, Clone, Copy)] // needed for codegen
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PacketInfo {
     pub id: u32,
     pub process_id: Option<u64>,
+    pub process_path: Option<String>,
     pub direction: u8,
     pub ip_v6: bool,
     pub protocol: u8,
@@ -25,14 +26,6 @@ pub struct PacketInfo {
     pub packet_size: u32,
 }
 
-// unsafe impl Zeroable for PacketInfo {
-//     fn zeroed() -> Self {
-//         unsafe { core::mem::zeroed() }
-//     }
-// }
-
-// unsafe impl Pod for PacketInfo {}
-
 impl PacketInfo {
     pub fn from_call_data(data: CallData) -> Self {
         match data.layer {
@@ -41,6 +34,7 @@ impl PacketInfo {
                 Self {
                     id: 0,
                     process_id: None,
+                    process_path: None,
                     direction: 1,
                     ip_v6: false,
                     protocol: 6, // FIXME: get value form call data
@@ -59,7 +53,8 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleAuthConnectV4;
                 Self {
                     id: 0,
-                    process_id: None,
+                    process_id: data.get_process_id(),
+                    process_path: data.get_process_path(),
                     direction: 0,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
@@ -78,7 +73,8 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleAuthRecvAcceptV4;
                 Self {
                     id: 0,
-                    process_id: None,
+                    process_id: data.get_process_id(),
+                    process_path: data.get_process_path(),
                     direction: 1,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
@@ -94,10 +90,11 @@ impl PacketInfo {
                 }
             }
             _ => {
-                err!("packet_info: unknown layer");
+                err!("unsupported layer");
                 Self {
                     id: 0,
                     process_id: None,
+                    process_path: None,
                     direction: 0,
                     ip_v6: false, // FIXME: get value form call data
                     protocol: 6,  // FIXME: get value form call data

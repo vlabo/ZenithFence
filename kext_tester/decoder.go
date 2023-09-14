@@ -3,6 +3,7 @@ package main
 type PacketInfo struct {
 	Id                uint32    `cbor:"id"`
 	ProcessId         *uint64   `cbor:"process_id"`
+	ProcessPath       *string   `cbor:"process_path"`
 	Direction         uint8     `cbor:"direction"`
 	IpV6              bool      `cbor:"ip_v6"`
 	Protocol          uint8     `cbor:"protocol"`

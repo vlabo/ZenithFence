@@ -4,9 +4,13 @@ use alloc::ffi::CString;
 use alloc::string::String;
 use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
-use winapi::shared::ntdef::UNICODE_STRING;
-use winapi::{ctypes::wchar_t, km::wdm::DRIVER_OBJECT};
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS};
+// use winapi::shared::ntdef::UNICODE_STRING;
+// use winapi::{ctypes::wchar_t, km::wdm::DRIVER_OBJECT};
+use windows_sys::{
+    core::PCWSTR,
+    Wdk::Foundation::DRIVER_OBJECT,
+    Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, UNICODE_STRING},
+};
 #[derive(Debug, onlyerror::Error)]
 pub enum Error {
     #[error("invalid string argument: {0}")]
@@ -29,8 +33,8 @@ extern "C" {
         registryPath: *mut UNICODE_STRING,
         driver: *mut HANDLE,
         device: *mut HANDLE,
-        win_driver_path: *const wchar_t,
-        dos_driver_path: *const wchar_t,
+        win_driver_path: PCWSTR,
+        dos_driver_path: PCWSTR,
     ) -> NTSTATUS;
 }
 

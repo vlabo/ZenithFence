@@ -1,4 +1,5 @@
 use core::cell::RefCell;
+use core::ffi::c_void;
 
 use crate::alloc::borrow::ToOwned;
 use crate::utils::{CallData, Driver};
@@ -6,15 +7,18 @@ use crate::{dbg, info};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
-use winapi::shared::ntdef::{PCVOID, PVOID};
+// use winapi::shared::ntdef::{PCVOID, PVOID};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 use self::callout::Callout;
 use self::layer::FwpsIncomingValues;
+use self::metadata::FwpsIncomingMetadataValues;
 
 pub mod callout;
+pub(crate) mod classify;
 pub mod ffi;
 pub mod layer;
+pub(crate) mod metadata;
 
 pub struct FilterEngineInternal {
     driver: Driver,
@@ -189,12 +193,12 @@ pub static FILTER_ENGINE: FilterEngine = FilterEngine::default();
 #[no_mangle]
 unsafe extern "C" fn test_callout(
     fixed_values: *const FwpsIncomingValues,
-    _meta_values: PCVOID,
-    _layer_data: PVOID,
-    _context: PCVOID,
-    filter: PCVOID,
+    meta_values: *const FwpsIncomingMetadataValues,
+    _layer_data: *mut c_void,
+    _context: *const c_void,
+    filter: *const c_void,
     _flow_context: u64,
-    _classify_out: PVOID,
+    _classify_out: *mut c_void,
 ) {
     let filter_id = ffi::pm_GetFilterID(filter);
 
@@ -204,7 +208,7 @@ unsafe extern "C" fn test_callout(
             (*fixed_values).incoming_value_array,
             (*fixed_values).value_count as usize,
         );
-        let data = CallData::new(callout.layer, array);
+        let data = CallData::new(callout.layer, array, meta_values);
         (callout.callout_fn)(data);
     }
 }

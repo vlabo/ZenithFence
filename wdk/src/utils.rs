@@ -1,9 +1,11 @@
 use crate::filter_engine::ffi;
 use crate::filter_engine::layer::{Layer, Value};
-use winapi::km::wdm::IoGetCurrentIrpStackLocation;
-use winapi::km::wdm::{DEVICE_OBJECT, IRP};
-use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
-use windows_sys::Win32::Foundation::HANDLE;
+use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
+use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, IRP};
+// use winapi::km::wdm::IoGetCurrentIrpStackLocation;
+// use winapi::km::wdm::{DEVICE_OBJECT, IRP};
+// use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
+use windows_sys::Win32::Foundation::{HANDLE, STATUS_SUCCESS, STATUS_TIMEOUT};
 
 pub struct Driver {
     // driver_handle: HANDLE,
@@ -41,12 +43,12 @@ pub struct ReadRequest<'a> {
 impl ReadRequest<'_> {
     pub fn new(irp: &mut IRP) -> ReadRequest {
         unsafe {
-            let irp_sp = IoGetCurrentIrpStackLocation(irp);
-            let device_io = (*irp_sp).Parameters.DeviceIoControl_mut();
+            let irp_sp = irp.Tail.Overlay.Anonymous2.Anonymous.CurrentStackLocation;
+            let device_io = (*irp_sp).Parameters.DeviceIoControl;
 
-            let system_buffer = irp.AssociatedIrp.SystemBuffer();
+            let system_buffer = irp.AssociatedIrp.SystemBuffer;
             let buffer = core::slice::from_raw_parts_mut(
-                *system_buffer as *mut u8,
+                system_buffer as *mut u8,
                 device_io.OutputBufferLength as usize,
             );
             ReadRequest {
@@ -62,18 +64,14 @@ impl ReadRequest<'_> {
     }
 
     pub fn complete(&mut self) {
-        unsafe {
-            self.irp.IoStatus.Information = self.fill_index;
-            let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
-            *status = STATUS_SUCCESS;
-        }
+        self.irp.IoStatus.Information = self.fill_index;
+        self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+        // *status = STATUS_SUCCESS;
     }
 
     pub fn timeout(&mut self) {
-        unsafe {
-            let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
-            *status = STATUS_TIMEOUT;
-        }
+        // let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
+        self.irp.IoStatus.Anonymous.Status = STATUS_TIMEOUT;
     }
 }
 
@@ -105,12 +103,12 @@ pub struct WriteRequest<'a> {
 impl WriteRequest<'_> {
     pub fn new(irp: &mut IRP) -> WriteRequest {
         unsafe {
-            let irp_sp = IoGetCurrentIrpStackLocation(irp);
-            let device_io = (*irp_sp).Parameters.DeviceIoControl_mut();
+            let irp_sp = irp.Tail.Overlay.Anonymous2.Anonymous.CurrentStackLocation;
+            let device_io = (*irp_sp).Parameters.DeviceIoControl;
 
-            let system_buffer = irp.AssociatedIrp.SystemBuffer();
+            let system_buffer = irp.AssociatedIrp.SystemBuffer;
             let buffer = core::slice::from_raw_parts_mut(
-                *system_buffer as *mut u8,
+                system_buffer as *mut u8,
                 device_io.OutputBufferLength as usize,
             );
             WriteRequest { irp, buffer }
@@ -126,21 +124,27 @@ impl WriteRequest<'_> {
     }
 
     pub fn complete(&mut self) {
-        unsafe {
-            let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
-            *status = STATUS_SUCCESS;
-        }
+        self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
     }
 }
 
 pub struct CallData<'a> {
     pub layer: Layer,
     pub(crate) values: &'a [Value],
+    metadata: *const FwpsIncomingMetadataValues,
 }
 
 impl<'a> CallData<'a> {
-    pub(crate) fn new(layer: Layer, values: &'a [Value]) -> Self {
-        Self { layer, values }
+    pub(crate) fn new(
+        layer: Layer,
+        values: &'a [Value],
+        metadata: *const FwpsIncomingMetadataValues,
+    ) -> Self {
+        Self {
+            layer,
+            values,
+            metadata,
+        }
     }
 
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
@@ -159,5 +163,20 @@ impl<'a> CallData<'a> {
         unsafe {
             return self.values[index].value.uint32;
         };
+    }
+
+    pub fn get_process_id(&self) -> Option<u64> {
+        unsafe { (*self.metadata).get_process_id() }
+    }
+
+    pub fn get_process_path(&self) -> Option<alloc::string::String> {
+        unsafe {
+            if let Some(path_slice) = (*self.metadata).get_process_path() {
+                if let Ok(string) = alloc::string::String::from_utf8(path_slice.to_vec()) {
+                    return Some(string);
+                }
+            }
+        }
+        return None;
     }
 }

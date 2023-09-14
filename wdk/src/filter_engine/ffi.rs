@@ -1,10 +1,11 @@
 use crate::alloc::borrow::ToOwned;
 use alloc::string::String;
+use core::ffi::c_void;
 use core::ptr;
 use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
-use winapi::shared::ntdef::{PCVOID, PVOID};
-use winapi::{ctypes::wchar_t, km::wdm::DEVICE_OBJECT};
+use windows_sys::core::PCWSTR;
+use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 use windows_sys::Win32::Foundation::NTSTATUS;
 use windows_sys::{
     core::GUID,
@@ -12,6 +13,7 @@ use windows_sys::{
 };
 
 use super::layer::{FwpsIncomingValues, Layer};
+use super::metadata::FwpsIncomingMetadataValues;
 
 #[derive(Debug, onlyerror::Error)]
 pub enum Error {
@@ -35,26 +37,26 @@ pub enum Error {
 extern "C" {
     fn pm_RegisterSublayer(
         filter_engine_handle: HANDLE,
-        name: *const wchar_t,
-        description: *const wchar_t,
+        name: PCWSTR,
+        description: PCWSTR,
         guid: GUID,
     ) -> NTSTATUS;
     fn pm_CreateFilterEngine(handle: *mut HANDLE) -> NTSTATUS;
     fn pm_RegisterCallout(
         device_object: *mut DEVICE_OBJECT,
         filter_engine_handle: HANDLE,
-        name: *const wchar_t,
-        description: *const wchar_t,
+        name: PCWSTR,
+        description: PCWSTR,
         guid: GUID,
         layer_guid: GUID,
         callout_fn: unsafe extern "C" fn(
             *const FwpsIncomingValues,
-            PCVOID,
-            PVOID,
-            PCVOID,
-            PCVOID,
+            *const FwpsIncomingMetadataValues,
+            *mut c_void,
+            *const c_void,
+            *const c_void,
             u64,
-            PVOID,
+            *mut c_void,
         ),
         callout_id: *mut u32,
     ) -> NTSTATUS;
@@ -62,8 +64,8 @@ extern "C" {
     fn pm_RegisterFilter(
         filter_negine_handle: HANDLE,
         sublayer_guid: GUID,
-        name: *const wchar_t,
-        description: *const wchar_t,
+        name: PCWSTR,
+        description: PCWSTR,
         callout_guid: GUID,
         layer_guid: GUID,
         action: u32,
@@ -72,7 +74,7 @@ extern "C" {
 
     fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
 
-    pub(crate) fn pm_GetFilterID(filter: PCVOID) -> u64;
+    pub(crate) fn pm_GetFilterID(filter: *const c_void) -> u64;
     // pub(crate) fn pm_GetLocalPort(inFixedValues: PCVOID) -> u16;
     // pub(crate) fn pm_GetRemotePort(inFixedValues: PCVOID) -> u16;
     // pub(crate) fn pm_GetLocalIPv4(inFixedValues: PCVOID) -> u32;
@@ -172,12 +174,12 @@ pub(crate) fn register_callout(
     layer: Layer,
     callout_fn: unsafe extern "C" fn(
         *const FwpsIncomingValues,
-        PCVOID,
-        PVOID,
-        PCVOID,
-        PCVOID,
+        *const FwpsIncomingMetadataValues,
+        *mut c_void,
+        *const c_void,
+        *const c_void,
         u64,
-        PVOID,
+        *mut c_void,
     ),
 ) -> Result<u32, Error> {
     let Ok(name_cstr) = U16CString::from_str(name) else {

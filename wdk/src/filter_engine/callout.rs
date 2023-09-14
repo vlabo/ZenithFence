@@ -1,8 +1,11 @@
+use core::ffi::c_void;
+
 use super::layer::FwpsIncomingValues;
+use super::metadata::FwpsIncomingMetadataValues;
 use super::{ffi, layer::Layer};
 use crate::{filter_engine::FilterEngineInternal, utils::CallData};
 use alloc::{borrow::ToOwned, format, string::String};
-use winapi::shared::ntdef::{PCVOID, PVOID};
+// use winapi::shared::ntdef::{PCVOID, PVOID};
 
 pub struct Callout {
     pub name: String,
@@ -61,12 +64,12 @@ impl Callout {
         filter_engine: &FilterEngineInternal,
         callout_fn: unsafe extern "C" fn(
             *const FwpsIncomingValues,
-            PCVOID,
-            PVOID,
-            PCVOID,
-            PCVOID,
+            *const FwpsIncomingMetadataValues,
+            *mut c_void,
+            *const c_void,
+            *const c_void,
             u64,
-            PVOID,
+            *mut c_void,
         ),
     ) -> Result<(), String> {
         match ffi::register_callout(
