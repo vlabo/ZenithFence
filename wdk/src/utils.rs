@@ -2,7 +2,6 @@ use crate::filter_engine::classify::ClassifyOut;
 use crate::filter_engine::ffi;
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
-use crate::info;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, IRP};
 // use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 // use winapi::km::wdm::{DEVICE_OBJECT, IRP};
@@ -68,19 +67,13 @@ impl ReadRequest<'_> {
     pub fn complete(&mut self) {
         self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
-        // *status = STATUS_SUCCESS;
     }
 
     pub fn timeout(&mut self) {
-        // let status = self.irp.IoStatus.__bindgen_anon_1.Status_mut();
         self.irp.IoStatus.Anonymous.Status = STATUS_TIMEOUT;
     }
-}
 
-impl ciborium_io::Write for ReadRequest<'_> {
-    type Error = ();
-
-    fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+    pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), ()> {
         if self.fill_index + bytes.len() >= self.buffer.len() {
             return Err(());
         }
@@ -90,9 +83,6 @@ impl ciborium_io::Write for ReadRequest<'_> {
         }
         self.fill_index = self.fill_index + bytes.len();
 
-        return Ok(());
-    }
-    fn flush(&mut self) -> Result<(), Self::Error> {
         return Ok(());
     }
 }
@@ -187,15 +177,14 @@ impl<'a> CallData<'a> {
 
     pub fn permit(&mut self) {
         unsafe {
-            (*self.classify_out).set_permit();
+            (*self.classify_out).action_permit();
         }
     }
 
     pub fn block(&mut self) {
-        info!("blocking connection");
         unsafe {
-            (*self.classify_out).set_block();
-            (*self.classify_out).set_absorb();
+            (*self.classify_out).action_block();
+            // (*self.classify_out).set_absorb();
             (*self.classify_out).clear_write_flag();
         }
     }

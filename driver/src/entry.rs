@@ -1,3 +1,4 @@
+use crate::protocol;
 // use crate::filter_engine::FilterEngine;
 use crate::types::PacketInfo;
 use alloc::vec;
@@ -47,8 +48,8 @@ fn driver_entry(driver: Driver) {
         //     },
         // ),
         Callout::new(
-            "TestCalloutOutbound",
-            "Testing callout",
+            "AleLayerOutbound",
+            "A Test ALE layer for outpbund connections",
             0x58545073_f893_454c_bbea_a57bc964f46d,
             Layer::FwpmLayerAleAuthConnectV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
@@ -56,8 +57,7 @@ fn driver_entry(driver: Driver) {
                 let packet = PacketInfo::from_call_data(&data);
                 info!("packet: {:?}", packet);
                 let _ = IO_QUEUE.push(packet);
-
-                data.block();
+                data.permit();
             },
         ),
     ];
@@ -81,7 +81,9 @@ fn driver_unload() {
 fn driver_read(mut read_request: ReadRequest) {
     match IO_QUEUE.wait_and_pop() {
         Ok(packet) => {
-            let _ = ciborium::into_writer(&packet, &mut read_request);
+            protocol::serialize_packet(packet, |data| {
+                let _ = read_request.write_all(data);
+            });
 
             info!("Send {} packets to the client", 1);
             read_request.complete();

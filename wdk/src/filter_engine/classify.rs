@@ -35,6 +35,7 @@ const FWP_CONDITION_FLAG_IS_RECLASSIFY: u32 = 0x00020000;
 const FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU: u32 = 0x00040000;
 const FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU: u32 = 0x00080000;
 const FWP_CONDITION_FLAG_IS_CONNECTION_REDIRECTED: u32 = 0x00100000;
+
 const FWPS_RIGHT_ACTION_WRITE: u32 = 0x00000001;
 
 #[repr(C)]
@@ -48,31 +49,36 @@ pub(crate) struct ClassifyOut {
 }
 
 impl ClassifyOut {
+    // Checks if write action flag is set. Indicates if the callout can change the action.
     pub fn can_set_action(&self) -> bool {
         self.rights & FWPS_RIGHT_ACTION_WRITE > 0
     }
 
-    pub fn set_block(&mut self) {
+    /// Set block action. Write flag should be cleared, after this.
+    pub fn action_block(&mut self) {
         if !self.can_set_action() {
             return;
         }
         self.action_type = FWP_ACTION_BLOCK;
     }
 
-    pub fn set_permit(&mut self) {
+    /// Set permit action.
+    pub fn action_permit(&mut self) {
         if !self.can_set_action() {
             return;
         }
         self.action_type = FWP_ACTION_PERMIT;
     }
 
-    pub fn set_continue(&mut self) {
+    // Set continue action.
+    pub fn action_continue(&mut self) {
         if !self.can_set_action() {
             return;
         }
         self.action_type = FWP_ACTION_CONTINUE;
     }
 
+    // Set none action.
     pub fn set_none(&mut self) {
         if !self.can_set_action() {
             return;
@@ -80,10 +86,12 @@ impl ClassifyOut {
         self.action_type = FWP_ACTION_NONE;
     }
 
+    // Set absorb flag. This will drop the packet. Used when the packets will be reinjected in the future.
     pub fn set_absorb(&mut self) {
         self.flags |= FWPS_CLASSIFY_OUT_FLAG_ABSORB;
     }
 
+    // Clear the write flag permission. Next filter in the chain will not change the action.
     pub fn clear_write_flag(&mut self) {
         self.rights &= !FWPS_RIGHT_ACTION_WRITE;
     }

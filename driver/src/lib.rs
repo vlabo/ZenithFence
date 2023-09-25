@@ -5,12 +5,8 @@ extern crate alloc;
 
 mod types;
 // mod cache;
-// mod common;
-// mod debug;
 mod entry;
-// mod filter_engine;
-// mod wdk;
-// extern crate windows_allocator;
+mod protocol;
 
 use wdk::allocator::WindowsAllocator;
 
@@ -83,7 +79,9 @@ static HEAP: WindowsAllocator = WindowsAllocator {};
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // log!("{}", info);
+fn panic(info: &PanicInfo) -> ! {
+    use wdk::err;
+
+    err!("{}", info);
     loop {}
 }

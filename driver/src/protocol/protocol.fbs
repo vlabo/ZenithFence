@@ -1,0 +1,15 @@
+
+namespace Protocol;
+
+table Packet {
+    id: uint32;
+    process_id: uint64 = null;
+    process_path: string;
+    direction: ubyte;
+    ip_v6: bool;
+    protocol: ubyte;
+    local_ip: [uint32];
+    remote_ip: [uint32];
+    local_port: uint16;
+    remote_port: uint16;
+}

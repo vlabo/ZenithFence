@@ -1,13 +1,12 @@
 use alloc::{format, string::String};
 use core::fmt::Debug;
-use serde::{Deserialize, Serialize};
 use wdk::{
     err,
     filter_engine::layer::{self, Layer},
     utils::CallData,
 };
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Default)]
 pub struct PacketInfo {
     pub id: u32,
     pub process_id: Option<u64>,

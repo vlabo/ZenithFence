@@ -8,8 +8,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+	"kext_tester/Protocol"
 
-	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
 )
 
@@ -256,24 +256,18 @@ func main() {
 
 	var running = true
 	go func() {
-		// decoder := cbor.NewDecoder(file)
 		for running {
-			// var packet PacketInfo
-			// err = decoder.Decode(&packet)
 			data := make([]byte, 1000)
 			var readBytes uint32 = 0
 			overlapped := &windows.Overlapped{}
 			err = windows.ReadFile(fileHandle, data, &readBytes, overlapped)
 			if err == nil {
-				packet := PacketInfo{}
-				cbor.Unmarshal(data[0:readBytes], &packet)
-				fmt.Printf("%s:%d -> %s:%d %d\n", convertArrayToIP(packet.LocalIp, false), packet.LocalPort, convertArrayToIP(packet.RemoteIp, false), packet.RemotePort, packet.Direction)
-				// if packet.ProcessId != nil {
-				// 	fmt.Printf("pid: %d\n", *packet.ProcessId)
-				// }
-				if packet.ProcessPath != nil {
-					fmt.Printf("pid: %s\n", *packet.ProcessPath)
+				if readBytes == 0 {
+					continue
 				}
+				packet := Protocol.GetRootAsPacket(data[0:readBytes], 0)
+				fmt.Printf("connection from: %s\n", string(packet.ProcessPath()))
+				// }
 			} else {
 				fmt.Printf("Failed to decode packet: %s\n", err)
 			}
@@ -288,8 +282,6 @@ func main() {
 	var bytesWriten uint32 = 0
 	overlapped := &windows.Overlapped{}
 	windows.WriteFile(fileHandle, data, &bytesWriten, overlapped)
-	// data := make([]byte, 1)
-	// file.Write(data)
 }
 
 // convertArrayToIP converts an array of uint32 values to a net.IP address.
