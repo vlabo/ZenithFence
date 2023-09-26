@@ -1,13 +1,18 @@
+use flatbuffers::FlatBufferBuilder;
+
 use crate::{
     protocol::protocol_generated::protocol::{Packet, PacketArgs},
     types::PacketInfo,
 };
 
+pub use self::protocol_generated::protocol::CommandUnion;
+use self::protocol_generated::protocol::{Command, Shutdown, VerdictResponse};
+
 #[allow(unused_imports)]
 mod protocol_generated;
 
 pub fn serialize_packet(packet: PacketInfo, mut writer: impl FnMut(&[u8])) {
-    let mut buffer_builder = flatbuffers::FlatBufferBuilder::new();
+    let mut buffer_builder = FlatBufferBuilder::new();
 
     let mut process_path = None;
     if let Some(path) = packet.process_path {
@@ -44,4 +49,12 @@ pub fn serialize_packet(packet: PacketInfo, mut writer: impl FnMut(&[u8])) {
 
     buffer_builder.finish_minimal(packet);
     writer(buffer_builder.finished_data())
+}
+
+pub fn read_command(data: &[u8]) -> Option<CommandUnion> {
+    if let Ok(command) = flatbuffers::root::<Command>(data) {
+        return Some(command.command_type());
+    }
+
+    return None;
 }

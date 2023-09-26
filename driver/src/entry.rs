@@ -98,7 +98,12 @@ fn driver_read(mut read_request: ReadRequest) {
 
 #[driver_write]
 fn driver_write(mut write_request: WriteRequest) {
-    info!("Write request: {:?}", write_request.get_buffer());
+    info!("Write buffer: {:?}", write_request.get_buffer());
+    if let Some(command) = protocol::read_command(write_request.get_buffer()) {
+        info!("Command: {:?}", command.variant_name());
+    } else {
+        err!("Faield to read command");
+    }
     IO_QUEUE.rundown();
     write_request.mark_all_as_read();
     write_request.complete();
