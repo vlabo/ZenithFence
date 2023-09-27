@@ -6,6 +6,11 @@ use wdk::{
     utils::CallData,
 };
 
+pub enum Info {
+    PacketInfo(PacketInfo),
+    LogLine(String),
+}
+
 #[derive(Default)]
 pub struct PacketInfo {
     pub id: u32,

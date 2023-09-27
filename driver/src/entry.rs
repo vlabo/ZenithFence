@@ -1,7 +1,10 @@
-use crate::protocol;
-// use crate::filter_engine::FilterEngine;
-use crate::types::PacketInfo;
+use core::cell::UnsafeCell;
+
+use crate::protocol::{self, CommandUnion};
+use crate::types::{Info, PacketInfo};
+use alloc::format;
 use alloc::vec;
+use alloc::vec::Vec;
 use wdk::consts;
 use wdk::filter_engine::callout::Callout;
 use wdk::filter_engine::layer::Layer;
@@ -14,7 +17,24 @@ use wdk::{
 use wdk_macro::{driver_entry, driver_read, driver_unload, driver_write};
 
 // Global driver messaging queue.
-pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
+pub static IO_QUEUE: IOQueue<Info> = IOQueue::default();
+
+struct UnsafeBuffer(UnsafeCell<Option<Vec<u8>>>);
+unsafe impl Sync for UnsafeBuffer {}
+
+impl UnsafeBuffer {
+    fn save(&self, data: &[u8]) {
+        unsafe {
+            _ = (*self.0.get()).replace(data.to_vec());
+        }
+    }
+
+    fn load(&self) -> Option<Vec<u8>> {
+        unsafe { (*self.0.get()).take() }
+    }
+}
+
+static LEFTOVER_BUFFER: UnsafeBuffer = UnsafeBuffer(UnsafeCell::new(None));
 
 #[driver_entry(
     name = "PortmasterTest",
@@ -23,13 +43,13 @@ pub static IO_QUEUE: IOQueue<PacketInfo> = IOQueue::default();
     ioctl_fn = false
 )]
 fn driver_entry(driver: Driver) {
-    info!("Starting initialization...");
+    crate::info!("Starting initialization...");
 
     IO_QUEUE.init();
 
     // Initialize filter engine.
     if let Err(err) = FILTER_ENGINE.init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
-        err!("{}", err);
+        crate::err!("{}", err);
     }
 
     let callouts = vec![
@@ -49,24 +69,24 @@ fn driver_entry(driver: Driver) {
         // ),
         Callout::new(
             "AleLayerOutbound",
-            "A Test ALE layer for outpbund connections",
+            "A Test ALE layer for outbund connections",
             0x58545073_f893_454c_bbea_a57bc964f46d,
             Layer::FwpmLayerAleAuthConnectV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             |mut data| {
                 let packet = PacketInfo::from_call_data(&data);
-                info!("packet: {:?}", packet);
-                let _ = IO_QUEUE.push(packet);
+                let _ = IO_QUEUE.push(Info::LogLine(format!("packet: {:?}", packet)));
+                let _ = IO_QUEUE.push(Info::PacketInfo(packet));
                 data.permit();
             },
         ),
     ];
 
     if let Err(err) = FILTER_ENGINE.commit(callouts) {
-        err!("{}", err);
+        crate::err!("{}", err);
     }
 
-    info!("Initialization complete");
+    crate::info!("Initialization complete");
 }
 
 #[driver_unload]
@@ -77,34 +97,79 @@ fn driver_unload() {
     info!("Unloading complete");
 }
 
+fn write_to_request(read_request: &mut ReadRequest, data: &[u8]) {
+    let command_size = data.len();
+    let count = read_request.write(data);
+
+    // Check if full command was written
+    if count < command_size {
+        // Save the leftovers for later.
+        LEFTOVER_BUFFER.save(&data[count..]);
+    }
+}
+
 #[driver_read]
-fn driver_read(mut read_request: ReadRequest) {
+fn driver_read(read_request: &mut ReadRequest) {
+    if let Some(data) = LEFTOVER_BUFFER.load() {
+        write_to_request(read_request, &data);
+        read_request.complete();
+        return;
+    }
+
+    // Check if there is enough left space (at least 4 bytes for the size of the next struct)
+    if read_request.free_space() < 4 {
+        read_request.complete();
+        return;
+    }
+
     match IO_QUEUE.wait_and_pop() {
-        Ok(packet) => {
-            protocol::serialize_packet(packet, |data| {
-                let _ = read_request.write_all(data);
+        Ok(info) => {
+            protocol::serialize_info(info, |data| {
+                let size = (data.len() as u32).to_le_bytes();
+                let _ = read_request.write(&size);
+                write_to_request(read_request, data);
             });
 
-            info!("Send {} packets to the client", 1);
+            while read_request.free_space() > 4 {
+                if let Ok(info) = IO_QUEUE.pop() {
+                    protocol::serialize_info(info, |data| {
+                        let size = (data.len() as u32).to_le_bytes();
+                        let _ = read_request.write(&size);
+                        write_to_request(read_request, data);
+                    });
+                } else {
+                    break;
+                }
+            }
+
             read_request.complete();
         }
         Err(ioqueue::Status::Timeout) => read_request.timeout(),
         Err(err) => {
             err!("failed to pop value: {}", err);
-            read_request.complete();
+            read_request.end_of_file();
         }
     }
 }
 
 #[driver_write]
-fn driver_write(mut write_request: WriteRequest) {
-    info!("Write buffer: {:?}", write_request.get_buffer());
+fn driver_write(write_request: &mut WriteRequest) {
+    crate::info!("Write buffer: {:?}", write_request.get_buffer());
     if let Some(command) = protocol::read_command(write_request.get_buffer()) {
-        info!("Command: {:?}", command.variant_name());
+        match command {
+            CommandUnion::Shutdown => {
+                IO_QUEUE.rundown();
+            }
+            CommandUnion::Response => {
+                crate::info!("Verdict response");
+            }
+            _ => {
+                crate::err!("unrecognized command");
+            }
+        }
     } else {
-        err!("Faield to read command");
+        crate::err!("Faield to read command");
     }
-    IO_QUEUE.rundown();
     write_request.mark_all_as_read();
     write_request.complete();
 }
@@ -147,3 +212,26 @@ pub extern "system" fn _DllMainCRTStartup() {}
 //     }
 //     return STATUS_SUCCESS;
 // }
+
+#[macro_export]
+macro_rules! log {
+    ($level:expr, $($arg:tt)*) => ({
+        let message = alloc::format!($($arg)*);
+        _ = IO_QUEUE.push(Info::LogLine(alloc::format!("{} {}: {}", $level, core::module_path!(), message)))
+    });
+}
+
+#[macro_export]
+macro_rules! err {
+    ($($arg:tt)*) => ($crate::log!("ERROR", $($arg)*));
+}
+
+#[macro_export]
+macro_rules! dbg {
+    ($($arg:tt)*) => ($crate::log!("DEBUG", $($arg)*));
+}
+
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => ($crate::log!("INFO", $($arg)*));
+}

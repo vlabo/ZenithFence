@@ -6,7 +6,9 @@ use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, IRP};
 // use winapi::km::wdm::IoGetCurrentIrpStackLocation;
 // use winapi::km::wdm::{DEVICE_OBJECT, IRP};
 // use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
-use windows_sys::Win32::Foundation::{HANDLE, STATUS_SUCCESS, STATUS_TIMEOUT};
+use windows_sys::Win32::Foundation::{
+    HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
+};
 
 pub struct Driver {
     // driver_handle: HANDLE,
@@ -69,21 +71,33 @@ impl ReadRequest<'_> {
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
     }
 
+    pub fn end_of_file(&mut self) {
+        self.irp.IoStatus.Information = self.fill_index;
+        self.irp.IoStatus.Anonymous.Status = STATUS_END_OF_FILE;
+    }
+
     pub fn timeout(&mut self) {
         self.irp.IoStatus.Anonymous.Status = STATUS_TIMEOUT;
     }
 
-    pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), ()> {
-        if self.fill_index + bytes.len() >= self.buffer.len() {
-            return Err(());
+    pub fn get_status(&self) -> NTSTATUS {
+        unsafe { self.irp.IoStatus.Anonymous.Status }
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) -> usize {
+        let mut bytes_to_write: usize = bytes.len();
+
+        // Check if we have enough space
+        if bytes_to_write > self.free_space() {
+            bytes_to_write = self.free_space();
         }
 
-        for i in 0..bytes.len() {
+        for i in 0..bytes_to_write {
             self.buffer[self.fill_index + i] = bytes[i];
         }
-        self.fill_index = self.fill_index + bytes.len();
+        self.fill_index = self.fill_index + bytes_to_write;
 
-        return Ok(());
+        return bytes_to_write;
     }
 }
 
@@ -117,6 +131,10 @@ impl WriteRequest<'_> {
 
     pub fn complete(&mut self) {
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+    }
+
+    pub fn get_status(&self) -> NTSTATUS {
+        unsafe { self.irp.IoStatus.Anonymous.Status }
     }
 }
 

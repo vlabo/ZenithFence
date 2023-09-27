@@ -1,5 +1,7 @@
 namespace Protocol;
 
+
+// Driver -> App
 table Packet {
     id: uint32;
     process_id: uint64 = null;
@@ -13,7 +15,20 @@ table Packet {
     remote_port: uint16;
 }
 
+table LogLine {
+	line: string;
+}
 
+union InfoUnion {
+	Packet: Packet,
+	LogLine: LogLine,
+}
+
+table Info {
+	value: InfoUnion;
+}
+
+// App -> Driver
 table VerdictResponse {
 	id: uint32;
 	verdict: ubyte;

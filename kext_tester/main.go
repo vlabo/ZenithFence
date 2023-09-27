@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
+	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface/Protocol"
 )
 
 func main() {
@@ -32,28 +33,42 @@ func main() {
 		log.Panicf("failed to open driver file: %s", err)
 	}
 	defer file.Close()
-	running := true
+
+	dataChan := make(chan *Protocol.Info)
+	endChan := make(chan struct{})
+	go func() {
+		kext_interface.ReadInfo(file, dataChan)
+	}()
 
 	go func() {
-		for running {
-			data := make([]byte, 1000)
-			count, err := file.Read(data)
-			if err != nil {
-				log.Printf("faield to read %s", err)
-				continue
+		for true {
+			select {
+			case info := <-dataChan:
+				{
+					switch info.ValueType() {
+					case Protocol.InfoUnionPacket:
+						{
+							// packet := kext_interface.ReadPacket(info)
+							// log.Printf("connection from: %s", packet.ProcessPath())
+						}
+					case Protocol.InfoUnionLogLine:
+						{
+							logLine := kext_interface.ReadLogLine(info)
+							fmt.Println(string(logLine.Line()))
+						}
+					}
+
+				}
+			case <-endChan:
+				return
 			}
-			if count == 0 {
-				continue
-			}
-			packet := kext_interface.ParsePacket(data[0:count])
-			log.Printf("connection from: %s\n", string(packet.ProcessPath()))
 		}
 	}()
 
 	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
-	running = false
-	data := kext_interface.GetShutdownRequest()
+	endChan <- struct{}{}
+	data := kext_interface.GetVerdirctResponse(1, 2)
 	file.Write(data)
 }

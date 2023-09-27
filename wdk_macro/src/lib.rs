@@ -130,8 +130,9 @@ pub fn driver_read(_metadata: TokenStream, input: TokenStream) -> TokenStream {
              _device_object: &mut windows_sys::Wdk::Foundation::DEVICE_OBJECT,
              irp: &mut windows_sys::Wdk::Foundation::IRP,
          ) -> windows_sys::Win32::Foundation::NTSTATUS {
-             #name(wdk::utils::ReadRequest::new(irp));
-             return windows_sys::Win32::Foundation::STATUS_SUCCESS;
+            let mut read_request = wdk::utils::ReadRequest::new(irp);
+            #name(&mut read_request);
+            return read_request.get_status();
          }
     });
     token.extend(input_copy);
@@ -148,8 +149,9 @@ pub fn driver_write(_metadata: TokenStream, input: TokenStream) -> TokenStream {
              _device_object: &mut windows_sys::Wdk::Foundation::DEVICE_OBJECT,
              irp: &mut windows_sys::Wdk::Foundation::IRP,
          ) -> windows_sys::Win32::Foundation::NTSTATUS {
-             #name(wdk::utils::WriteRequest::new(irp));
-             return windows_sys::Win32::Foundation::STATUS_SUCCESS;
+            let mut write_request = wdk::utils::WriteRequest::new(irp);
+            #name(&mut write_request);
+            return write_request.get_status();
          }
     });
     token.extend(input_copy);

@@ -19,6 +19,97 @@ pub mod protocol {
   use self::flatbuffers::{EndianScalar, Follow};
 
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MIN_INFO_UNION: u8 = 0;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MAX_INFO_UNION: u8 = 2;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+#[allow(non_camel_case_types)]
+pub const ENUM_VALUES_INFO_UNION: [InfoUnion; 3] = [
+  InfoUnion::NONE,
+  InfoUnion::Packet,
+  InfoUnion::LogLine,
+];
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct InfoUnion(pub u8);
+#[allow(non_upper_case_globals)]
+impl InfoUnion {
+  pub const NONE: Self = Self(0);
+  pub const Packet: Self = Self(1);
+  pub const LogLine: Self = Self(2);
+
+  pub const ENUM_MIN: u8 = 0;
+  pub const ENUM_MAX: u8 = 2;
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::NONE,
+    Self::Packet,
+    Self::LogLine,
+  ];
+  /// Returns the variant's name or "" if unknown.
+  pub fn variant_name(self) -> Option<&'static str> {
+    match self {
+      Self::NONE => Some("NONE"),
+      Self::Packet => Some("Packet"),
+      Self::LogLine => Some("LogLine"),
+      _ => None,
+    }
+  }
+}
+impl core::fmt::Debug for InfoUnion {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    if let Some(name) = self.variant_name() {
+      f.write_str(name)
+    } else {
+      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+    }
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for InfoUnion {
+  type Inner = Self;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+    Self(b)
+  }
+}
+
+impl flatbuffers::Push for InfoUnion {
+    type Output = InfoUnion;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        flatbuffers::emplace_scalar::<u8>(dst, self.0);
+    }
+}
+
+impl flatbuffers::EndianScalar for InfoUnion {
+  type Scalar = u8;
+  #[inline]
+  fn to_little_endian(self) -> u8 {
+    self.0.to_le()
+  }
+  #[inline]
+  #[allow(clippy::wrong_self_convention)]
+  fn from_little_endian(v: u8) -> Self {
+    let b = u8::from_le(v);
+    Self(b)
+  }
+}
+
+impl<'a> flatbuffers::Verifiable for InfoUnion {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    u8::run_verifier(v, pos)
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for InfoUnion {}
+pub struct InfoUnionUnionTableOffset {}
+
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_COMMAND_UNION: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MAX_COMMAND_UNION: u8 = 2;
@@ -356,6 +447,271 @@ impl core::fmt::Debug for Packet<'_> {
       ds.field("remote_ip", &self.remote_ip());
       ds.field("local_port", &self.local_port());
       ds.field("remote_port", &self.remote_port());
+      ds.finish()
+  }
+}
+pub enum LogLineOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct LogLine<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for LogLine<'a> {
+  type Inner = LogLine<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> LogLine<'a> {
+  pub const VT_LINE: flatbuffers::VOffsetT = 4;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    LogLine { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
+    args: &'args LogLineArgs<'args>
+  ) -> flatbuffers::WIPOffset<LogLine<'bldr>> {
+    let mut builder = LogLineBuilder::new(_fbb);
+    if let Some(x) = args.line { builder.add_line(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn line(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(LogLine::VT_LINE, None)}
+  }
+}
+
+impl flatbuffers::Verifiable for LogLine<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("line", Self::VT_LINE, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct LogLineArgs<'a> {
+    pub line: Option<flatbuffers::WIPOffset<&'a str>>,
+}
+impl<'a> Default for LogLineArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    LogLineArgs {
+      line: None,
+    }
+  }
+}
+
+pub struct LogLineBuilder<'a: 'b, 'b> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b> LogLineBuilder<'a, 'b> {
+  #[inline]
+  pub fn add_line(&mut self, line: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(LogLine::VT_LINE, line);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> LogLineBuilder<'a, 'b> {
+    let start = _fbb.start_table();
+    LogLineBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<LogLine<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for LogLine<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("LogLine");
+      ds.field("line", &self.line());
+      ds.finish()
+  }
+}
+pub enum InfoOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct Info<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for Info<'a> {
+  type Inner = Info<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> Info<'a> {
+  pub const VT_VALUE_TYPE: flatbuffers::VOffsetT = 4;
+  pub const VT_VALUE: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    Info { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
+    args: &'args InfoArgs
+  ) -> flatbuffers::WIPOffset<Info<'bldr>> {
+    let mut builder = InfoBuilder::new(_fbb);
+    if let Some(x) = args.value { builder.add_value(x); }
+    builder.add_value_type(args.value_type);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn value_type(&self) -> InfoUnion {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<InfoUnion>(Info::VT_VALUE_TYPE, Some(InfoUnion::NONE)).unwrap()}
+  }
+  #[inline]
+  pub fn value(&self) -> Option<flatbuffers::Table<'a>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(Info::VT_VALUE, None)}
+  }
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn value_as_packet(&self) -> Option<Packet<'a>> {
+    if self.value_type() == InfoUnion::Packet {
+      self.value().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { Packet::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn value_as_log_line(&self) -> Option<LogLine<'a>> {
+    if self.value_type() == InfoUnion::LogLine {
+      self.value().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { LogLine::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+}
+
+impl flatbuffers::Verifiable for Info<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_union::<InfoUnion, _>("value_type", Self::VT_VALUE_TYPE, "value", Self::VT_VALUE, false, |key, v, pos| {
+        match key {
+          InfoUnion::Packet => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Packet>>("InfoUnion::Packet", pos),
+          InfoUnion::LogLine => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LogLine>>("InfoUnion::LogLine", pos),
+          _ => Ok(()),
+        }
+     })?
+     .finish();
+    Ok(())
+  }
+}
+pub struct InfoArgs {
+    pub value_type: InfoUnion,
+    pub value: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+}
+impl<'a> Default for InfoArgs {
+  #[inline]
+  fn default() -> Self {
+    InfoArgs {
+      value_type: InfoUnion::NONE,
+      value: None,
+    }
+  }
+}
+
+pub struct InfoBuilder<'a: 'b, 'b> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b> InfoBuilder<'a, 'b> {
+  #[inline]
+  pub fn add_value_type(&mut self, value_type: InfoUnion) {
+    self.fbb_.push_slot::<InfoUnion>(Info::VT_VALUE_TYPE, value_type, InfoUnion::NONE);
+  }
+  #[inline]
+  pub fn add_value(&mut self, value: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Info::VT_VALUE, value);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> InfoBuilder<'a, 'b> {
+    let start = _fbb.start_table();
+    InfoBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<Info<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for Info<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("Info");
+      ds.field("value_type", &self.value_type());
+      match self.value_type() {
+        InfoUnion::Packet => {
+          if let Some(x) = self.value_as_packet() {
+            ds.field("value", &x)
+          } else {
+            ds.field("value", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        InfoUnion::LogLine => {
+          if let Some(x) = self.value_as_log_line() {
+            ds.field("value", &x)
+          } else {
+            ds.field("value", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        _ => {
+          let x: Option<()> = None;
+          ds.field("value", &x)
+        },
+      };
       ds.finish()
   }
 }
