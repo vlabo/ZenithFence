@@ -48,8 +48,8 @@ func main() {
 					switch info.ValueType() {
 					case Protocol.InfoUnionPacket:
 						{
-							// packet := kext_interface.ReadPacket(info)
-							// log.Printf("connection from: %s", packet.ProcessPath())
+							packet := kext_interface.ReadPacket(info)
+							log.Printf("connection from: %s", packet.ProcessPath())
 						}
 					case Protocol.InfoUnionLogLine:
 						{
@@ -68,7 +68,8 @@ func main() {
 	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
+	// file.Close()
 	endChan <- struct{}{}
-	data := kext_interface.GetVerdirctResponse(1, 2)
-	file.Write(data)
+	file.Write(kext_interface.GetShutdownRequest())
+	// file.Write(kext_interface.GetVerdirctResponse(1, 2))
 }

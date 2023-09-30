@@ -1,6 +1,7 @@
 use crate::alloc::borrow::ToOwned;
 use crate::utils::Driver;
 use alloc::ffi::CString;
+use alloc::format;
 use alloc::string::String;
 use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
@@ -50,9 +51,11 @@ pub fn dbg_print(str: String) {
 pub fn init_driver_object(
     driver_object: *mut DRIVER_OBJECT,
     registry_path: *mut UNICODE_STRING,
-    win_driver_path: &str,
-    dos_driver_path: &str,
+    driver_name: &str,
 ) -> Result<Driver, Error> {
+    let win_driver_path = format!("\\Device\\{}", driver_name);
+    let dos_driver_path = format!("\\??\\{}", driver_name);
+
     let mut driver_handle = INVALID_HANDLE_VALUE;
     let mut device_handle = INVALID_HANDLE_VALUE;
 
@@ -84,7 +87,7 @@ pub fn init_driver_object(
             return Err(Error::UnknownResult);
         };
         if status == NtStatus::STATUS_SUCCESS {
-            return Ok(Driver::new(driver_handle, device_handle));
+            return Ok(Driver::new(driver_object, driver_handle, device_handle));
         }
 
         Err(Error::NTStatus(status))

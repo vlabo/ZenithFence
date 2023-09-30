@@ -26,5 +26,7 @@ func (f *KextFile) Write(buffer []byte) (int, error) {
 }
 
 func (f *KextFile) Close() error {
-	return windows.CloseHandle(f.handle)
+	err := windows.CloseHandle(f.handle)
+	f.handle = winInvalidHandleValue
+	return err
 }

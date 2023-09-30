@@ -2,10 +2,7 @@ use crate::filter_engine::classify::ClassifyOut;
 use crate::filter_engine::ffi;
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
-use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, IRP};
-// use winapi::km::wdm::IoGetCurrentIrpStackLocation;
-// use winapi::km::wdm::{DEVICE_OBJECT, IRP};
-// use winapi::shared::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT};
+use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{
     HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
 };
@@ -13,27 +10,88 @@ use windows_sys::Win32::Foundation::{
 pub struct Driver {
     // driver_handle: HANDLE,
     // device_handle: HANDLE,
+    driver_object: *mut DRIVER_OBJECT,
     wfp_handle: *mut DEVICE_OBJECT,
 }
 
 unsafe impl Sync for Driver {}
 
+pub type UnloadFnType = unsafe extern "system" fn(driverobject: *const DRIVER_OBJECT);
+pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
+
 impl Driver {
     pub(crate) const fn default() -> Self {
         Self {
+            driver_object: core::ptr::null_mut(),
             wfp_handle: core::ptr::null_mut(),
         }
     }
-    pub(crate) fn new(_driver_handle: HANDLE, device_handle: HANDLE) -> Driver {
+    pub(crate) fn new(
+        driver_object: *mut DRIVER_OBJECT,
+        _driver_handle: HANDLE,
+        device_handle: HANDLE,
+    ) -> Driver {
         return Driver {
             // driver_handle,
             // device_handle,
+            driver_object,
             wfp_handle: ffi::wdf_device_wdm_get_device_object(device_handle),
         };
     }
 
     pub fn get_wfp_object(&self) -> *mut DEVICE_OBJECT {
         return self.wfp_handle;
+    }
+
+    pub fn set_driver_unload(&mut self, driver_unload: UnloadFnType) {
+        if let Some(driver) = unsafe { self.driver_object.as_mut() } {
+            driver.DriverUnload = Some(unsafe { core::mem::transmute(driver_unload) })
+        }
+    }
+
+    pub fn set_read_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(windows_sys::Wdk::System::SystemServices::IRP_MJ_READ, mj_fn);
+    }
+
+    pub fn set_write_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(
+            windows_sys::Wdk::System::SystemServices::IRP_MJ_WRITE,
+            mj_fn,
+        );
+    }
+
+    pub fn set_create_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(
+            windows_sys::Wdk::System::SystemServices::IRP_MJ_CREATE,
+            mj_fn,
+        );
+    }
+
+    pub fn set_device_control_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(
+            windows_sys::Wdk::System::SystemServices::IRP_MJ_DEVICE_CONTROL,
+            mj_fn,
+        );
+    }
+
+    pub fn set_close_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(
+            windows_sys::Wdk::System::SystemServices::IRP_MJ_CLOSE,
+            mj_fn,
+        );
+    }
+
+    pub fn set_cleanup_fn(&mut self, mj_fn: MjFnType) {
+        self.set_major_fn(
+            windows_sys::Wdk::System::SystemServices::IRP_MJ_CLEANUP,
+            mj_fn,
+        );
+    }
+
+    fn set_major_fn(&mut self, fn_index: u32, mj_fn: MjFnType) {
+        if let Some(driver) = unsafe { self.driver_object.as_mut() } {
+            driver.MajorFunction[fn_index as usize] = Some(unsafe { core::mem::transmute(mj_fn) })
+        }
     }
 }
 
