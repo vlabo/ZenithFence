@@ -78,11 +78,6 @@ extern "C" {
     fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
 
     pub(crate) fn pm_GetFilterID(filter: *const c_void) -> u64;
-    // pub(crate) fn pm_GetLocalPort(inFixedValues: PCVOID) -> u16;
-    // pub(crate) fn pm_GetRemotePort(inFixedValues: PCVOID) -> u16;
-    // pub(crate) fn pm_GetLocalIPv4(inFixedValues: PCVOID) -> u32;
-    // pub(crate) fn pm_GetRemoteIPv4(inFixedValues: PCVOID) -> u32;
-    // pub(crate) fn pm_GetDirection(inFixedValues: PCVOID) -> u8;
 }
 
 #[link(name = "Fwpkclnt", kind = "static")]

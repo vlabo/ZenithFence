@@ -6,18 +6,27 @@ use wdk::consts;
 use wdk::filter_engine::callout::Callout;
 use wdk::filter_engine::layer::Layer;
 use wdk::filter_engine::FILTER_ENGINE;
+use wdk::interface::WdfObjectContextTypeInfo;
 use wdk::utils::ReadRequest;
 use wdk::{
     err, info, interface,
     ioqueue::{self, IOQueue},
 };
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
-use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
+use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
 
 // Global driver messaging queue.
 pub static IO_QUEUE: IOQueue<Info> = IOQueue::default();
+// static LEFTOVER_BUFFER: ArrayHolder = ArrayHolder::default();
 
-static LEFTOVER_BUFFER: ArrayHolder = ArrayHolder::default();
+#[repr(C)]
+struct DeviceContext {
+    _wdf_driver: HANDLE,
+    read_leftover: ArrayHolder,
+}
+
+static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
+    WdfObjectContextTypeInfo::default("DriverContext\0");
 
 #[no_mangle]
 pub extern "system" fn DriverEntry(
@@ -26,15 +35,21 @@ pub extern "system" fn DriverEntry(
 ) -> windows_sys::Win32::Foundation::NTSTATUS {
     info!("Starting initialization...");
 
+    let driver_config = unsafe { &mut DRIVER_CONFIG };
+
     // Initialize driver object
-    let mut driver =
-        match interface::init_driver_object(driver_object, registry_path, "PortmasterTest") {
-            Ok(driver) => driver,
-            Err(status) => {
-                err!("driver_entry: failed to initialize driver: {}", status);
-                return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
-            }
-        };
+    let mut driver = match interface::init_driver_object::<DeviceContext>(
+        driver_object,
+        registry_path,
+        "PortmasterTest",
+        driver_config,
+    ) {
+        Ok(driver) => driver,
+        Err(status) => {
+            err!("driver_entry: failed to initialize driver: {}", status);
+            return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
+        }
+    };
 
     // Set driver functions.
     driver.set_driver_unload(driver_unload);
@@ -43,6 +58,11 @@ pub extern "system" fn DriverEntry(
     driver.set_create_fn(driver_create);
     driver.set_close_fn(driver_close);
     driver.set_close_fn(driver_clanup);
+
+    // Init device context.
+    // let driver_config = unsafe { &DRIVER_CONFIG };
+    // let derivce_context = driver.get_device_context::<DeviceContext>(driver_config);
+    // derivce_context.read_leftover = ArrayHolder::default();
 
     IO_QUEUE.init();
 
@@ -80,23 +100,40 @@ unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     IO_QUEUE.deinit();
 
     // Clear buffer
-    LEFTOVER_BUFFER.load();
     info!("Unloading complete");
 }
 
 unsafe extern "system" fn driver_create(
-    _device_object: &mut DEVICE_OBJECT,
+    device_object: &mut DEVICE_OBJECT,
     _irp: &mut IRP,
 ) -> NTSTATUS {
+    let Ok(device_context) =
+        interface::get_device_context_from_device_object::<DeviceContext>(device_object)
+    else {
+        return STATUS_SUCCESS;
+    };
+
+    device_context.read_leftover = ArrayHolder::default();
+
     crate::info!("Device create");
     STATUS_SUCCESS
 }
 
 unsafe extern "system" fn driver_close(
-    _device_object: &mut DEVICE_OBJECT,
+    device_object: &mut DEVICE_OBJECT,
     _irp: &mut IRP,
 ) -> NTSTATUS {
     IO_QUEUE.rundown();
+
+    let Ok(device_context) =
+        interface::get_device_context_from_device_object::<DeviceContext>(device_object)
+    else {
+        return STATUS_SUCCESS;
+    };
+
+    // Clear buffer
+    device_context.read_leftover.load();
+
     STATUS_SUCCESS
 }
 
@@ -109,24 +146,31 @@ unsafe extern "system" fn driver_clanup(
     STATUS_SUCCESS
 }
 
-fn write_to_request(read_request: &mut ReadRequest, data: &[u8]) {
+fn write_to_request(read_request: &mut ReadRequest, device_context: &DeviceContext, data: &[u8]) {
     let command_size = data.len();
     let count = read_request.write(data);
 
     // Check if full command was written
     if count < command_size {
         // Save the leftovers for later.
-        LEFTOVER_BUFFER.save(&data[count..]);
+        device_context.read_leftover.save(&data[count..]);
     }
 }
 
 unsafe extern "system" fn driver_read(
-    _device_object: &mut DEVICE_OBJECT,
+    device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut read_request = wdk::utils::ReadRequest::new(irp);
-    if let Some(data) = LEFTOVER_BUFFER.load() {
-        write_to_request(&mut read_request, &data);
+    let Ok(device_context) =
+        interface::get_device_context_from_device_object::<DeviceContext>(device_object)
+    else {
+        read_request.complete();
+        return read_request.get_status();
+    };
+
+    if let Some(data) = device_context.read_leftover.load() {
+        write_to_request(&mut read_request, device_context, &data);
         read_request.complete();
         return read_request.get_status();
     }
@@ -142,7 +186,7 @@ unsafe extern "system" fn driver_read(
             protocol::serialize_info(info, |data| {
                 let size = (data.len() as u32).to_le_bytes();
                 let _ = read_request.write(&size);
-                write_to_request(&mut read_request, data);
+                write_to_request(&mut read_request, device_context, data);
             });
 
             while read_request.free_space() > 4 {
@@ -150,7 +194,7 @@ unsafe extern "system" fn driver_read(
                     protocol::serialize_info(info, |data| {
                         let size = (data.len() as u32).to_le_bytes();
                         let _ = read_request.write(&size);
-                        write_to_request(&mut read_request, data);
+                        write_to_request(&mut read_request, device_context, data);
                     });
                 } else {
                     break;

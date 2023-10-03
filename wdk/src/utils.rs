@@ -4,12 +4,12 @@ use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{
-    HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
+    HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
 };
 
 pub struct Driver {
     // driver_handle: HANDLE,
-    // device_handle: HANDLE,
+    _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
     wfp_handle: *mut DEVICE_OBJECT,
 }
@@ -22,6 +22,7 @@ pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> N
 impl Driver {
     pub(crate) const fn default() -> Self {
         Self {
+            _device_handle: INVALID_HANDLE_VALUE,
             driver_object: core::ptr::null_mut(),
             wfp_handle: core::ptr::null_mut(),
         }
@@ -33,11 +34,18 @@ impl Driver {
     ) -> Driver {
         return Driver {
             // driver_handle,
-            // device_handle,
+            _device_handle: device_handle,
             driver_object,
             wfp_handle: ffi::wdf_device_wdm_get_device_object(device_handle),
         };
     }
+
+    // pub fn get_device_context<'a, T: 'static>(
+    //     &self,
+    //     context_info: &'static WdfObjectContextTypeInfo,
+    // ) -> &'a mut T {
+    //     interface::get_device_context_from_wdf_device(self.device_handle, context_info)
+    // }
 
     pub fn get_wfp_object(&self) -> *mut DEVICE_OBJECT {
         return self.wfp_handle;

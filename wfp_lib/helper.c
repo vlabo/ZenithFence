@@ -26,19 +26,9 @@
 #include <stdbool.h>
 #include <ntstrsafe.h>
 
-
-/************************************
-    Private Data and Prototypes
-************************************/
-// Global handle to the WFP Base Filter Engine
-
-// #define PORTMASTER_DEVICE_NAME L"PortmasterTest"
-// #define PORTMASTER_DEVICE_STRING L"\\Device\\" PORTMASTER_DEVICE_NAME //L"\\Device\\PortmasterTest"
-// #define PORTMASTER_DOS_DEVICE_STRING L"\\??\\" PORTMASTER_DEVICE_NAME
-
 EVT_WDF_DRIVER_UNLOAD emptyEventUnload;
 
-NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name) {
+NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name, WDF_OBJECT_ATTRIBUTES * objectAttributes) {
 	UNICODE_STRING deviceName = { 0 };
 	RtlInitUnicodeString(&deviceName, win_device_name);
 
@@ -68,7 +58,7 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 	(void) WdfPdoInitAssignRawDevice(deviceInit, &GUID_DEVCLASS_NET);
 	WdfDeviceInitSetDeviceClass(deviceInit, &GUID_DEVCLASS_NET);
 
-	status = WdfDeviceCreate(&deviceInit, WDF_NO_OBJECT_ATTRIBUTES, device);
+	status = WdfDeviceCreate(&deviceInit, objectAttributes, device);
 	if (!NT_SUCCESS(status)) {
 	  WdfDeviceInitFree(deviceInit);
 		return status;
@@ -82,8 +72,13 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 	return STATUS_SUCCESS;
 }
 
+// TODO: Move to rust.
 void emptyEventUnload(WDFDRIVER Driver) {
   UNREFERENCED_PARAMETER(Driver);
+}
+
+void* pm_WdfObjectGetTypedContextWorker(WDFOBJECT wdfObject, PCWDF_OBJECT_CONTEXT_TYPE_INFO typeInfo) {
+    return WdfObjectGetTypedContextWorker(wdfObject, typeInfo);
 }
 
 NTSTATUS pm_CreateFilterEngine(HANDLE *handle) {
@@ -194,47 +189,3 @@ NTSTATUS pm_RegisterFilter(
 UINT64 pm_GetFilterID(const FWPS_FILTER *filter) {
     return filter->filterId;
 }
-
-UINT16 pm_GetLocalPort(const FWPS_INCOMING_VALUES *inFixedValues) {
-    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_IP_LOCAL_PORT].value.uint16;
-}
-
-UINT16 pm_GetRemotePort(const FWPS_INCOMING_VALUES *inFixedValues) {
-    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_IP_REMOTE_PORT].value.uint16;
-}
-
-UINT8 pm_GetDirection(const FWPS_INCOMING_VALUES *inFixedValues) {
-    return inFixedValues->incomingValue[FWPS_FIELD_DATAGRAM_DATA_V6_DIRECTION].value.uint8;
-}
-
-UINT32 pm_GetLocalIPv4(const FWPS_INCOMING_VALUES *inFixedValues) {
-    return inFixedValues->incomingValue[FWPS_FIELD_INBOUND_IPPACKET_V4_IP_LOCAL_ADDRESS].value.uint32;
-}
-
-UINT32 pm_GetRemoteIPv4(const FWPS_INCOMING_VALUES *inFixedValues) {
-    return inFixedValues->incomingValue[FWPS_FIELD_INBOUND_IPPACKET_V4_IP_REMOTE_ADDRESS].value.uint32;
-}
-
-
-// static NTSTATUS copyIPv6(const FWPS_INCOMING_VALUES* inFixedValues, FWPS_FIELDS_OUTBOUND_IPPACKET_V6 idx, UINT32* ip) {
-//     // sanity check
-//     if (!inFixedValues || !ip) {
-//         ERR("Invalid parameters");
-//         return STATUS_INVALID_PARAMETER;
-//     }
-
-//     // check type
-//     if (inFixedValues->incomingValue[idx].value.type != FWP_BYTE_ARRAY16_TYPE) {
-//         ERR("invalid IPv6 data type: 0x%X", inFixedValues->incomingValue[idx].value.type);
-//         ip[0] = ip[1] = ip[2] = ip[3] = 0;
-//         return STATUS_INVALID_PARAMETER;
-//     }
-
-//     // copy and swap
-//     UINT32* ipV6 = (UINT32*) inFixedValues->incomingValue[idx].value.byteArray16->byteArray16;
-//     for (int i = 0; i < 4; i++) {
-//         ip[i]= RtlUlongByteSwap(ipV6[i]);
-//     }
-
-//     return STATUS_SUCCESS;
-// }
