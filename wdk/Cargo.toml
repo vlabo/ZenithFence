@@ -16,7 +16,7 @@ features = ["alloc"]
 
 [dependencies.windows-sys]
 git = "https://github.com/microsoft/windows-rs"
-features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Security", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_WindowsFilteringPlatform"]
+features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Security", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_WindowsFilteringPlatform", "Win32_System_Rpc"]
 
 [target.'cfg(windows)'.build-dependencies]
 winreg = "0.7.0"

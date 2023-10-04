@@ -11,7 +11,7 @@ pub mod error;
 pub mod filter_engine;
 pub mod interface;
 pub mod ioqueue;
-pub mod lock;
+// pub mod lock;
 pub mod utils;
 
 // Needed by the linker for legacy reasons. Not important for rust.

@@ -10,7 +10,6 @@ extern "C" {
 #[repr(C)]
 #[allow(dead_code)]
 struct KSpinLockQueue {
-    //
     next: *mut c_void, // struct _KSPIN_LOCK_QUEUE * volatile Next;
     lock: *mut c_void, // PKSPIN_LOCK volatile Lock;
 }
@@ -36,7 +35,7 @@ impl KSpinLock {
                 ptr: ptr::null_mut(),
             };
             KeInitializeSpinLock(ptr::addr_of_mut!(p));
-            p
+            return p;
         }
     }
 

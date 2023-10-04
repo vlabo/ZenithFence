@@ -81,24 +81,8 @@ void* pm_WdfObjectGetTypedContextWorker(WDFOBJECT wdfObject, PCWDF_OBJECT_CONTEX
     return WdfObjectGetTypedContextWorker(wdfObject, typeInfo);
 }
 
-NTSTATUS pm_CreateFilterEngine(HANDLE *handle) {
-    FWPM_SESSION wdfSession = { 0 };
-    wdfSession.flags = FWPM_SESSION_FLAG_DYNAMIC;
-    return FwpmEngineOpen(NULL, RPC_C_AUTHN_WINNT, NULL, &wdfSession, handle);
-}
-
 DEVICE_OBJECT* pm_GetDeviceObject(WDFDEVICE device) {
     return WdfDeviceWdmGetDeviceObject(device);
-}
-
-NTSTATUS pm_RegisterSublayer(HANDLE filter_engine_handle, wchar_t* name, wchar_t* description, GUID guid) {
-    FWPM_SUBLAYER sublayer = { 0 };
-    sublayer.subLayerKey = guid;
-    sublayer.displayData.name = name;
-    sublayer.displayData.description = description;
-    sublayer.flags = 0;
-    sublayer.weight = 0xFFFF;
-    return FwpmSubLayerAdd(filter_engine_handle, &sublayer, NULL);
 }
 
 NTSTATUS genericNotify(
@@ -160,32 +144,4 @@ NTSTATUS pm_RegisterCallout(
     mCallout.applicableLayer = layer_guid;
     mCallout.flags = 0;
     return FwpmCalloutAdd(filter_engine_handle, &mCallout, NULL, NULL);
-}
-
-NTSTATUS pm_RegisterFilter(
-    HANDLE filter_negine_handle,
-    GUID sublayer_guid,
-    wchar_t *name,
-    wchar_t *description,
-    GUID callout_guid,
-    GUID layer_guid,
-    UINT32 action,
-    UINT64 *filter_id) {
-
-    FWPM_FILTER filter = { 0 };
-    filter.displayData.name = name;
-    filter.displayData.description = description;
-    filter.action.type = action;   // Says this filter's callout MUST make a block/permit decision. Also see doc excerpts below.
-    filter.subLayerKey = sublayer_guid;
-    filter.weight.type = FWP_UINT8;
-    filter.weight.uint8 = 15;     // The weight of this filter within its sublayer
-    filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
-    filter.numFilterConditions = 0;    // If you specify 0, this filter invokes its callout for all traffic in its layer
-    filter.layerKey = layer_guid;   // This layer must match the layer that ExampleCallout is registered to
-    filter.action.calloutKey = callout_guid;
-    return FwpmFilterAdd(filter_negine_handle, &filter, NULL, filter_id);
-}
-
-UINT64 pm_GetFilterID(const FWPS_FILTER *filter) {
-    return filter->filterId;
 }

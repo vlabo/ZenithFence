@@ -12,6 +12,7 @@ use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 use self::callout::Callout;
 use self::classify::ClassifyOut;
+use self::ffi::FWPS_FILTER2;
 use self::layer::FwpsIncomingValues;
 use self::metadata::FwpsIncomingMetadataValues;
 
@@ -197,11 +198,11 @@ unsafe extern "C" fn catch_all_callout(
     meta_values: *const FwpsIncomingMetadataValues,
     _layer_data: *mut c_void,
     _context: *const c_void,
-    filter: *const c_void,
+    filter: *const FWPS_FILTER2,
     _flow_context: u64,
     classify_out: *mut ClassifyOut,
 ) {
-    let filter_id = ffi::pm_GetFilterID(filter);
+    let filter_id = (*filter).filterId;
 
     if let Ok(fe) = FILTER_ENGINE.imp.try_borrow() {
         let callout = &fe.callouts[&filter_id];
