@@ -9,7 +9,10 @@ use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
 use windows_sys::{
     core::PCWSTR,
-    Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT},
+    Wdk::{
+        Foundation::{DEVICE_OBJECT, DRIVER_OBJECT},
+        System::SystemServices::DbgPrint,
+    },
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, UNICODE_STRING},
 };
 #[derive(Debug, onlyerror::Error)]
@@ -22,11 +25,15 @@ pub enum Error {
     UnknownResult,
 }
 
-extern "C" {
-    // Debug
-    fn DbgPrint(str: *const i8);
-}
-
+#[link(name = "WdfDriverEntry", kind = "static")]
+#[link(name = "WdfLdr", kind = "static")]
+#[link(name = "BufferOverflowK", kind = "static")]
+#[link(name = "uuid", kind = "static")]
+#[link(name = "wdmsec", kind = "static")]
+#[link(name = "wmilib", kind = "static")]
+#[link(name = "ntoskrnl", kind = "static")]
+#[link(name = "ndis", kind = "static")]
+#[link(name = "wfp_lib", kind = "static")]
 extern "C" {
     // Helper
     fn pm_InitDriverObject(
@@ -38,19 +45,20 @@ extern "C" {
         dos_driver_path: PCWSTR,
         object_attributes: *mut WdfObjectAttributes,
     ) -> NTSTATUS;
-    //
+
     fn pm_WdfObjectGetTypedContextWorker(
         wdf_object: HANDLE,
         type_info: *const WdfObjectContextTypeInfo,
     ) -> *mut c_void;
 
+    fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
 }
 
 // Debug
 pub fn dbg_print(str: String) {
     if let Ok(c_str) = CString::new(str) {
         unsafe {
-            DbgPrint(c_str.as_ptr());
+            DbgPrint(c_str.as_ptr() as _);
         }
     }
 }
@@ -193,6 +201,12 @@ pub fn get_device_context_from_wdf_device<T>(
 ) -> &mut T {
     unsafe {
         return core::mem::transmute(pm_WdfObjectGetTypedContextWorker(wdf_device, type_info));
+    }
+}
+
+pub(crate) fn wdf_device_wdm_get_device_object(wdf_device: HANDLE) -> *mut DEVICE_OBJECT {
+    unsafe {
+        return pm_GetDeviceObject(wdf_device);
     }
 }
 

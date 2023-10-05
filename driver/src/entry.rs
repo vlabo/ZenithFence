@@ -15,14 +15,11 @@ use wdk::{
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
 
-// Global driver messaging queue.
-pub static IO_QUEUE: IOQueue<Info> = IOQueue::default();
-// static LEFTOVER_BUFFER: ArrayHolder = ArrayHolder::default();
-
-#[repr(C)]
+// Device Context
 struct DeviceContext {
     _wdf_driver: HANDLE,
     read_leftover: ArrayHolder,
+    io_queue: IOQueue<Info>,
 }
 
 static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
@@ -64,10 +61,10 @@ pub extern "system" fn DriverEntry(
     // let derivce_context = driver.get_device_context::<DeviceContext>(driver_config);
     // derivce_context.read_leftover = ArrayHolder::default();
 
-    IO_QUEUE.init();
+    // IO_QUEUE.init();
 
     // Initialize filter engine.
-    if let Err(err) = FILTER_ENGINE.init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
+    if let Err(err) = FILTER_ENGINE.init(&driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0) {
         err!("{}", err);
     }
 
@@ -77,10 +74,14 @@ pub extern "system" fn DriverEntry(
         0x58545073_f893_454c_bbea_a57bc964f46d,
         Layer::FwpmLayerAleAuthConnectV4,
         consts::FWP_ACTION_CALLOUT_TERMINATING,
-        |mut data| {
+        |mut data, device_object| {
+            let Ok(context) =
+                interface::get_device_context_from_device_object::<DeviceContext>(device_object)
+            else {
+                return;
+            };
             let packet = PacketInfo::from_call_data(&data);
-            // let _ = IO_QUEUE.push(Info::LogLine(format!("packet: {:?}", packet)));
-            let _ = IO_QUEUE.push(Info::PacketInfo(packet));
+            let _ = context.io_queue.push(Info::PacketInfo(packet));
             data.permit();
         },
     )];
@@ -97,7 +98,7 @@ pub extern "system" fn DriverEntry(
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Starting driver unload");
     FILTER_ENGINE.deinit();
-    IO_QUEUE.deinit();
+    // IO_QUEUE.deinit();
 
     // Clear buffer
     info!("Unloading complete");
@@ -113,9 +114,10 @@ unsafe extern "system" fn driver_create(
         return STATUS_SUCCESS;
     };
 
+    device_context.io_queue.init();
     device_context.read_leftover = ArrayHolder::default();
 
-    crate::info!("Device create");
+    // crate::info!("Device create");
     STATUS_SUCCESS
 }
 
@@ -123,13 +125,16 @@ unsafe extern "system" fn driver_close(
     device_object: &mut DEVICE_OBJECT,
     _irp: &mut IRP,
 ) -> NTSTATUS {
-    IO_QUEUE.rundown();
+    // IO_QUEUE.rundown();
 
     let Ok(device_context) =
         interface::get_device_context_from_device_object::<DeviceContext>(device_object)
     else {
         return STATUS_SUCCESS;
     };
+
+    device_context.io_queue.rundown();
+    device_context.io_queue.deinit();
 
     // Clear buffer
     device_context.read_leftover.load();
@@ -142,7 +147,7 @@ unsafe extern "system" fn driver_clanup(
     _irp: &mut IRP,
 ) -> NTSTATUS {
     info!("Cleanup");
-    IO_QUEUE.rundown();
+    // IO_QUEUE.rundown();
     STATUS_SUCCESS
 }
 
@@ -181,7 +186,7 @@ unsafe extern "system" fn driver_read(
         return read_request.get_status();
     }
 
-    match IO_QUEUE.wait_and_pop() {
+    match device_context.io_queue.wait_and_pop() {
         Ok(info) => {
             protocol::serialize_info(info, |data| {
                 let size = (data.len() as u32).to_le_bytes();
@@ -190,7 +195,7 @@ unsafe extern "system" fn driver_read(
             });
 
             while read_request.free_space() > 4 {
-                if let Ok(info) = IO_QUEUE.pop() {
+                if let Ok(info) = device_context.io_queue.pop() {
                     protocol::serialize_info(info, |data| {
                         let size = (data.len() as u32).to_le_bytes();
                         let _ = read_request.write(&size);
@@ -214,15 +219,21 @@ unsafe extern "system" fn driver_read(
 }
 
 unsafe extern "system" fn driver_write(
-    _device_object: &mut DEVICE_OBJECT,
+    device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut write_request = wdk::utils::WriteRequest::new(irp);
+    let Ok(device_context) =
+        interface::get_device_context_from_device_object::<DeviceContext>(device_object)
+    else {
+        write_request.complete();
+        return write_request.get_status();
+    };
     info!("Write buffer: {:?}", write_request.get_buffer());
     if let Some(command) = protocol::read_command(write_request.get_buffer()) {
         match command {
             CommandUnion::Shutdown => {
-                IO_QUEUE.rundown();
+                device_context.io_queue.rundown();
             }
             CommandUnion::Response => {
                 info!("Verdict response");
@@ -278,25 +289,25 @@ pub extern "system" fn _DllMainCRTStartup() {}
 //     return STATUS_SUCCESS;
 // }
 
-#[macro_export]
-macro_rules! log {
-    ($level:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        _ = IO_QUEUE.push(Info::LogLine(alloc::format!("{} {}: {}", $level, core::module_path!(), message)))
-    });
-}
+// #[macro_export]
+// macro_rules! log {
+//     ($level:expr, $($arg:tt)*) => ({
+//         let message = alloc::format!($($arg)*);
+//         _ = IO_QUEUE.push(Info::LogLine(alloc::format!("{} {}: {}", $level, core::module_path!(), message)))
+//     });
+// }
 
-#[macro_export]
-macro_rules! err {
-    ($($arg:tt)*) => ($crate::log!("ERROR", $($arg)*));
-}
+// #[macro_export]
+// macro_rules! err {
+//     ($($arg:tt)*) => ($crate::log!("ERROR", $($arg)*));
+// }
 
-#[macro_export]
-macro_rules! dbg {
-    ($($arg:tt)*) => ($crate::log!("DEBUG", $($arg)*));
-}
+// #[macro_export]
+// macro_rules! dbg {
+//     ($($arg:tt)*) => ($crate::log!("DEBUG", $($arg)*));
+// }
 
-#[macro_export]
-macro_rules! info {
-    ($($arg:tt)*) => ($crate::log!("INFO", $($arg)*));
-}
+// #[macro_export]
+// macro_rules! info {
+//     ($($arg:tt)*) => ($crate::log!("INFO", $($arg)*));
+// }

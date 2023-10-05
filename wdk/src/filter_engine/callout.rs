@@ -1,6 +1,7 @@
 use super::{ffi, layer::Layer};
 use crate::{filter_engine::FilterEngineInternal, utils::CallData};
 use alloc::{borrow::ToOwned, format, string::String};
+use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 pub struct Callout {
     pub(crate) name: String,
@@ -11,7 +12,8 @@ pub struct Callout {
     pub(crate) registerd: bool,
     pub(crate) filter_id: u64,
     pub(crate) callout_id: u32,
-    pub(crate) callout_fn: fn(CallData),
+    pub(crate) device_object: *mut DEVICE_OBJECT,
+    pub(crate) callout_fn: fn(CallData, &mut DEVICE_OBJECT),
 }
 
 impl Callout {
@@ -21,7 +23,7 @@ impl Callout {
         guid: u128,
         layer: Layer,
         action: u32,
-        callout_fn: fn(CallData),
+        callout_fn: fn(CallData, &mut DEVICE_OBJECT),
     ) -> Self {
         Self {
             name: name.to_owned(),
@@ -32,6 +34,7 @@ impl Callout {
             registerd: false,
             filter_id: 0,
             callout_id: 0,
+            device_object: core::ptr::null_mut(),
             callout_fn,
         }
     }
@@ -45,6 +48,7 @@ impl Callout {
             self.guid,
             self.layer,
             self.action,
+            (self as *const Self) as u64,
         ) {
             Ok(id) => {
                 self.filter_id = id;
@@ -60,10 +64,11 @@ impl Callout {
     pub(crate) fn register_callout(
         &mut self,
         filter_engine: &FilterEngineInternal,
-        callout_fn: ffi::CalloutFunctionType,
+        callout_fn: ffi::FwpsCalloutClassifyFn,
     ) -> Result<(), String> {
+        self.device_object = filter_engine.device_object;
         match ffi::register_callout(
-            filter_engine.driver.get_wfp_object(),
+            self.device_object,
             filter_engine.filter_engine_handle,
             &format!("{}-callout", self.name),
             &self.description,

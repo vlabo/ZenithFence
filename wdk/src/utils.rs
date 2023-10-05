@@ -1,17 +1,17 @@
 use crate::filter_engine::classify::ClassifyOut;
-use crate::filter_engine::ffi;
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
+use crate::interface;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{
-    HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
+    HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
 };
 
 pub struct Driver {
     // driver_handle: HANDLE,
     _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
-    wfp_handle: *mut DEVICE_OBJECT,
+    device_object: *mut DEVICE_OBJECT,
 }
 
 unsafe impl Sync for Driver {}
@@ -20,13 +20,13 @@ pub type UnloadFnType = unsafe extern "system" fn(driverobject: *const DRIVER_OB
 pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
 
 impl Driver {
-    pub(crate) const fn default() -> Self {
-        Self {
-            _device_handle: INVALID_HANDLE_VALUE,
-            driver_object: core::ptr::null_mut(),
-            wfp_handle: core::ptr::null_mut(),
-        }
-    }
+    // pub(crate) const fn default() -> Self {
+    //     Self {
+    //         _device_handle: INVALID_HANDLE_VALUE,
+    //         driver_object: core::ptr::null_mut(),
+    //         device_object: core::ptr::null_mut(),
+    //     }
+    // }
     pub(crate) fn new(
         driver_object: *mut DRIVER_OBJECT,
         _driver_handle: HANDLE,
@@ -36,19 +36,12 @@ impl Driver {
             // driver_handle,
             _device_handle: device_handle,
             driver_object,
-            wfp_handle: ffi::wdf_device_wdm_get_device_object(device_handle),
+            device_object: interface::wdf_device_wdm_get_device_object(device_handle),
         };
     }
 
-    // pub fn get_device_context<'a, T: 'static>(
-    //     &self,
-    //     context_info: &'static WdfObjectContextTypeInfo,
-    // ) -> &'a mut T {
-    //     interface::get_device_context_from_wdf_device(self.device_handle, context_info)
-    // }
-
-    pub fn get_wfp_object(&self) -> *mut DEVICE_OBJECT {
-        return self.wfp_handle;
+    pub fn get_device_object(&self) -> *mut DEVICE_OBJECT {
+        return self.device_object;
     }
 
     pub fn set_driver_unload(&mut self, driver_unload: UnloadFnType) {

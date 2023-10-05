@@ -7,6 +7,7 @@ use crate::{dbg, info};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
+use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 // use winapi::shared::ntdef::{PCVOID, PVOID};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
@@ -23,7 +24,8 @@ pub mod layer;
 pub(crate) mod metadata;
 
 pub struct FilterEngineInternal {
-    driver: Driver,
+    // driver: Driver,
+    device_object: *mut DEVICE_OBJECT,
     filter_engine_handle: HANDLE,
     sublayer_guid: u128,
     commited: bool,
@@ -33,7 +35,7 @@ pub struct FilterEngineInternal {
 impl FilterEngineInternal {
     pub const fn default() -> Self {
         Self {
-            driver: Driver::default(),
+            device_object: core::ptr::null_mut(),
             filter_engine_handle: INVALID_HANDLE_VALUE,
             sublayer_guid: 0,
             commited: false,
@@ -41,7 +43,7 @@ impl FilterEngineInternal {
         }
     }
 
-    pub fn init(&mut self, driver: Driver, layer_guid: u128) -> Result<(), String> {
+    pub fn init(&mut self, driver: &Driver, layer_guid: u128) -> Result<(), String> {
         let filter_engine_handle: HANDLE;
         match ffi::create_filter_engine() {
             Ok(handle) => {
@@ -51,7 +53,7 @@ impl FilterEngineInternal {
                 return Err(format!("failed to initialize filter engine {}", code).to_owned());
             }
         }
-        self.driver = driver;
+        self.device_object = driver.get_device_object();
         self.filter_engine_handle = filter_engine_handle;
         self.sublayer_guid = layer_guid;
         return Ok(());
@@ -162,7 +164,7 @@ impl FilterEngine {
         };
     }
 
-    pub fn init(&self, driver: Driver, layer_guid: u128) -> Result<(), String> {
+    pub fn init(&self, driver: &Driver, layer_guid: u128) -> Result<(), String> {
         if let Ok(mut fe) = self.imp.try_borrow_mut() {
             if let Err(err) = fe.init(driver, layer_guid) {
                 return Err(err);
@@ -202,7 +204,8 @@ unsafe extern "C" fn catch_all_callout(
     _flow_context: u64,
     classify_out: *mut ClassifyOut,
 ) {
-    let filter_id = (*filter).filterId;
+    let filter = &(*filter);
+    let filter_id = filter.filterId;
 
     if let Ok(fe) = FILTER_ENGINE.imp.try_borrow() {
         let callout = &fe.callouts[&filter_id];
@@ -211,6 +214,8 @@ unsafe extern "C" fn catch_all_callout(
             (*fixed_values).value_count as usize,
         );
         let data = CallData::new(callout.layer, array, meta_values, classify_out);
-        (callout.callout_fn)(data);
+        if let Some(device_object) = callout.device_object.as_mut() {
+            (callout.callout_fn)(data, device_object);
+        }
     }
 }
