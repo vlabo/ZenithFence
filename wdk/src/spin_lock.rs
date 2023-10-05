@@ -1,10 +1,9 @@
-use core::{ffi::c_void, ptr};
+use core::{ffi::c_void, mem::MaybeUninit, ptr};
 
-extern "C" {
-    fn KeInitializeSpinLock(lock: *mut KSpinLock);
-    fn KeAcquireInStackQueuedSpinLock(handle: *mut KSpinLock, lock: *mut KLockQueueHandle);
-    fn KeReleaseInStackQueuedSpinLock(handle: *mut KLockQueueHandle);
-}
+use windows_sys::Wdk::System::SystemServices::{
+    KeAcquireInStackQueuedSpinLock, KeInitializeSpinLock, KeReleaseInStackQueuedSpinLock,
+    KLOCK_QUEUE_HANDLE,
+};
 
 // Copy of KSPIN_LOCK_QUEUE WDK C struct
 #[repr(C)]
@@ -15,50 +14,40 @@ struct KSpinLockQueue {
 }
 
 // Copy of KLOCK_QUEUE_HANDLE WDK C struct
-#[repr(C)]
-#[allow(dead_code)]
 pub struct KLockQueueHandle {
-    lock_queue: KSpinLockQueue, // KSPIN_LOCK_QUEUE LockQueue;
-    old_irql: u8,               // KIRQL OldIrql;
+    lock: KLOCK_QUEUE_HANDLE,
 }
 
 // Copy of KSpinLock WDK C struct
 #[repr(C)]
 pub struct KSpinLock {
-    ptr: *mut c_void,
+    ptr: *mut usize,
 }
 
 impl KSpinLock {
     pub fn create() -> Self {
         unsafe {
-            let mut p: KSpinLock = KSpinLock {
+            let p: KSpinLock = KSpinLock {
                 ptr: ptr::null_mut(),
             };
-            KeInitializeSpinLock(ptr::addr_of_mut!(p));
+            KeInitializeSpinLock(p.ptr);
             return p;
         }
     }
 
     pub fn lock(&mut self) -> KLockQueueHandle {
-        let mut handle = KLockQueueHandle {
-            lock_queue: KSpinLockQueue {
-                next: ptr::null_mut(),
-                lock: ptr::null_mut(),
-            },
-            old_irql: 0,
-        };
         unsafe {
-            KeAcquireInStackQueuedSpinLock(self, &mut handle);
+            let mut handle = MaybeUninit::zeroed().assume_init();
+            KeAcquireInStackQueuedSpinLock(self.ptr, &mut handle);
+            KLockQueueHandle { lock: handle }
         }
-
-        handle
     }
 }
 
 impl Drop for KLockQueueHandle {
     fn drop(&mut self) {
         unsafe {
-            KeReleaseInStackQueuedSpinLock(self as *mut KLockQueueHandle);
+            KeReleaseInStackQueuedSpinLock(&mut self.lock);
         }
     }
 }
