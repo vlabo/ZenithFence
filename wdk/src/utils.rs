@@ -20,13 +20,6 @@ pub type UnloadFnType = unsafe extern "system" fn(driverobject: *const DRIVER_OB
 pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
 
 impl Driver {
-    // pub(crate) const fn default() -> Self {
-    //     Self {
-    //         _device_handle: INVALID_HANDLE_VALUE,
-    //         driver_object: core::ptr::null_mut(),
-    //         device_object: core::ptr::null_mut(),
-    //     }
-    // }
     pub(crate) fn new(
         driver_object: *mut DRIVER_OBJECT,
         _driver_handle: HANDLE,
@@ -42,6 +35,10 @@ impl Driver {
 
     pub fn get_device_object(&self) -> *mut DEVICE_OBJECT {
         return self.device_object;
+    }
+
+    pub fn get_device_object_ref(&self) -> Option<&mut DEVICE_OBJECT> {
+        return unsafe { self.device_object.as_mut() };
     }
 
     pub fn set_driver_unload(&mut self, driver_unload: UnloadFnType) {

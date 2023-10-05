@@ -106,7 +106,7 @@ impl WdfObjectContextTypeInfo {
 }
 
 #[repr(C)]
-struct WdfObjectAttributes {
+pub struct WdfObjectAttributes {
     size: u32,
     evt_cleanup_callback: Option<extern "C" fn(wdf_object: HANDLE)>,
     evt_destroy_callback: Option<extern "C" fn(wdf_object: HANDLE)>,
@@ -118,7 +118,7 @@ struct WdfObjectAttributes {
 }
 
 impl WdfObjectAttributes {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             size: core::mem::size_of::<WdfObjectAttributes>() as u32,
             evt_cleanup_callback: None,
@@ -131,19 +131,27 @@ impl WdfObjectAttributes {
         }
     }
 
-    fn add_context<T>(&mut self, context_info: &'static mut WdfObjectContextTypeInfo) {
+    pub fn add_context<T>(&mut self, context_info: &'static mut WdfObjectContextTypeInfo) {
         context_info.context_size = core::mem::size_of::<T>();
         context_info.unique_type = context_info;
         self.context_size_override = 0;
         self.context_type_info = context_info.unique_type;
     }
+
+    pub fn set_cleanup_fn(&mut self, callback: extern "C" fn(wdf_object: HANDLE)) {
+        self.evt_cleanup_callback = Some(callback);
+    }
+
+    pub fn set_destroy_fn(&mut self, callback: extern "C" fn(wdf_object: HANDLE)) {
+        self.evt_destroy_callback = Some(callback);
+    }
 }
 
-pub fn init_driver_object<'a, T>(
+pub fn init_driver_object(
     driver_object: *mut DRIVER_OBJECT,
     registry_path: *mut UNICODE_STRING,
     driver_name: &str,
-    context_info: &'static mut WdfObjectContextTypeInfo,
+    mut object_attributes: WdfObjectAttributes,
 ) -> Result<Driver, Error> {
     let win_driver_path = format!("\\Device\\{}", driver_name);
     let dos_driver_path = format!("\\??\\{}", driver_name);
@@ -161,8 +169,8 @@ pub fn init_driver_object<'a, T>(
     let win_driver_path = win_driver.into_raw();
     let dos_driver_path = dos_driver.into_raw();
 
-    let mut object_attributes = WdfObjectAttributes::new();
-    object_attributes.add_context::<T>(context_info);
+    // let mut object_attributes = WdfObjectAttributes::new();
+    // object_attributes.add_context::<T>(context_info);
 
     unsafe {
         let status = pm_InitDriverObject(
