@@ -33,16 +33,16 @@ func (rcv *VerdictResponse) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *VerdictResponse) Id() uint32 {
+func (rcv *VerdictResponse) Id() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
-		return rcv._tab.GetUint32(o + rcv._tab.Pos)
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
 	}
 	return 0
 }
 
-func (rcv *VerdictResponse) MutateId(n uint32) bool {
-	return rcv._tab.MutateUint32Slot(4, n)
+func (rcv *VerdictResponse) MutateId(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(4, n)
 }
 
 func (rcv *VerdictResponse) Verdict() byte {
@@ -60,8 +60,8 @@ func (rcv *VerdictResponse) MutateVerdict(n byte) bool {
 func VerdictResponseStart(builder *flatbuffers.Builder) {
 	builder.StartObject(2)
 }
-func VerdictResponseAddId(builder *flatbuffers.Builder, id uint32) {
-	builder.PrependUint32Slot(0, id, 0)
+func VerdictResponseAddId(builder *flatbuffers.Builder, id uint64) {
+	builder.PrependUint64Slot(0, id, 0)
 }
 func VerdictResponseAddVerdict(builder *flatbuffers.Builder, verdict byte) {
 	builder.PrependByteSlot(1, verdict, 0)

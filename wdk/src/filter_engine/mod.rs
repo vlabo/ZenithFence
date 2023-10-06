@@ -117,8 +117,10 @@ impl FilterEngine {
 
         return Ok(());
     }
+}
 
-    pub fn deinit(&mut self) {
+impl Drop for FilterEngine {
+    fn drop(&mut self) {
         dbg!("Unregistering callouts");
         unsafe {
             if let Some(callouts) = CALLOUTS.take() {
@@ -148,12 +150,6 @@ impl FilterEngine {
         if self.filter_engine_handle != INVALID_HANDLE_VALUE {
             _ = ffi::filter_engine_close(self.filter_engine_handle);
         }
-    }
-}
-
-impl Drop for FilterEngine {
-    fn drop(&mut self) {
-        self.deinit();
     }
 }
 

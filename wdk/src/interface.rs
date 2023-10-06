@@ -206,7 +206,7 @@ pub fn init_driver_object(
 pub fn get_device_context_from_wdf_device<T>(
     wdf_device: HANDLE,
     type_info: &'static WdfObjectContextTypeInfo,
-) -> &mut T {
+) -> *mut T {
     unsafe {
         return core::mem::transmute(pm_WdfObjectGetTypedContextWorker(wdf_device, type_info));
     }

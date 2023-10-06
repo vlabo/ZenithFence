@@ -1,7 +1,9 @@
 use crate::array_holder::ArrayHolder;
+use crate::id_cache::IdCache;
 use crate::protocol::{self, CommandUnion};
 use crate::types::{Info, PacketInfo};
-use alloc::vec;
+use alloc::{boxed::Box, vec};
+use wdk::allocator::EmptyAllocator;
 use wdk::consts;
 use wdk::filter_engine::callout::Callout;
 use wdk::filter_engine::layer::Layer;
@@ -9,7 +11,7 @@ use wdk::filter_engine::FilterEngine;
 use wdk::interface::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::utils::ReadRequest;
 use wdk::{
-    err, info, interface,
+    dbg, err, info, interface,
     ioqueue::{self, IOQueue},
 };
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
@@ -20,13 +22,20 @@ struct DeviceContext {
     filter_engine: FilterEngine,
     read_leftover: ArrayHolder,
     io_queue: IOQueue<Info>,
+    packet_cache: IdCache<PacketInfo>,
 }
 
 impl DeviceContext {
-    fn clean(&mut self) {
-        self.filter_engine.deinit();
-        self.io_queue.deinit();
-        self.read_leftover.load();
+    fn init(&mut self) {
+        self.io_queue.init();
+        self.read_leftover = ArrayHolder::default();
+        self.packet_cache.init();
+    }
+}
+
+impl Drop for DeviceContext {
+    fn drop(&mut self) {
+        dbg!("Device Context drop called.");
     }
 }
 
@@ -68,15 +77,7 @@ pub extern "system" fn DriverEntry(
             interface::get_device_context_from_device_object::<DeviceContext>(device_object)
         {
             // Init all global objects.
-            context.io_queue.init();
-            context.read_leftover = ArrayHolder::default();
-
-            if let Err(err) = context
-                .filter_engine
-                .init(&driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0)
-            {
-                err!("{}", err);
-            }
+            context.init();
 
             let callouts = vec![Callout::new(
                 "AleLayerOutbound",
@@ -91,7 +92,8 @@ pub extern "system" fn DriverEntry(
                         return;
                     };
                     let packet = PacketInfo::from_call_data(&data);
-                    let _ = context.io_queue.push(Info::PacketInfo(packet));
+                    // let id = context.packet_cache.push(packet.clone());
+                    let _ = context.io_queue.push(Info::PacketInfo(0, packet));
                     data.permit();
                 },
             )];
@@ -113,7 +115,14 @@ extern "C" fn device_cleanup(device: HANDLE) {
         interface::get_device_context_from_wdf_device::<DeviceContext>(device, unsafe {
             &DRIVER_CONFIG
         });
-    device_context.clean();
+
+    unsafe {
+        // Call drop without freeing memory. Memory is manged by the kernel.
+        if !device_context.is_null() {
+            let owned_device_contex = Box::from_raw_in(device_context, EmptyAllocator {});
+            drop(owned_device_contex);
+        }
+    }
 }
 
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
@@ -124,7 +133,7 @@ fn write_buffer(device_context: &DeviceContext, read_request: &mut ReadRequest, 
     let command_size = data.len();
     let count = read_request.write(data);
 
-    // Check if full command was written
+    // Check if full command was written.
     if count < command_size {
         // Save the leftovers for later.
         device_context.read_leftover.save(&data[count..]);
@@ -198,12 +207,14 @@ unsafe extern "system" fn driver_write(
     };
     info!("Write buffer: {:?}", write_request.get_buffer());
     if let Some(command) = protocol::read_command(write_request.get_buffer()) {
-        match command {
+        match command.command_type() {
             CommandUnion::Shutdown => {
                 device_context.io_queue.rundown();
             }
             CommandUnion::Response => {
-                info!("Verdict response");
+                let response = command.command_as_response().unwrap();
+                // let packet = device_context.packet_cache.pop_id(response.id());
+                // info!("Verdict response: {:?} -> {}", packet, response.verdict());
             }
             _ => {
                 err!("unrecognized command");

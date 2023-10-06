@@ -7,13 +7,12 @@ use wdk::{
 };
 
 pub enum Info {
-    PacketInfo(PacketInfo),
+    PacketInfo(u64, PacketInfo),
     LogLine(String),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PacketInfo {
-    pub id: u32,
     pub process_id: Option<u64>,
     pub process_path: Option<String>,
     pub direction: u8,

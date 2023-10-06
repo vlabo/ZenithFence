@@ -193,20 +193,15 @@ impl<T> IOQueue<T> {
             }
         }
     }
-
-    pub fn deinit(&self) {
-        self.rundown();
-        unsafe {
-            let ptr = self.kernel_queue.get();
-            *ptr = core::mem::zeroed();
-        }
-    }
 }
 
 impl<T> Drop for IOQueue<T> {
     fn drop(&mut self) {
         // Deinitialize queue.
         self.rundown();
-        self.deinit();
+        unsafe {
+            let ptr = self.kernel_queue.get();
+            *ptr = core::mem::zeroed();
+        }
     }
 }

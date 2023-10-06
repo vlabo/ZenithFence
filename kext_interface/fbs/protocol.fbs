@@ -3,7 +3,7 @@ namespace Protocol;
 
 // Driver -> App
 table Packet {
-    id: uint32;
+    id: uint64;
     process_id: uint64 = null;
     process_path: string;
     direction: ubyte;
@@ -30,7 +30,7 @@ table Info {
 
 // App -> Driver
 table VerdictResponse {
-	id: uint32;
+	id: uint64;
 	verdict: ubyte;
 }
 

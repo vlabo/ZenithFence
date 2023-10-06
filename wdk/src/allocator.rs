@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use core::{
-    alloc::{GlobalAlloc, Layout},
+    alloc::{Allocator, GlobalAlloc, Layout},
     ffi::c_void,
 };
 
@@ -65,5 +65,21 @@ unsafe impl GlobalAlloc for WindowsAllocator {
             }
         }
         new_ptr
+    }
+}
+
+pub struct EmptyAllocator {}
+unsafe impl Sync for EmptyAllocator {}
+
+unsafe impl Allocator for EmptyAllocator {
+    fn allocate(
+        &self,
+        _layout: Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError> {
+        panic!("Empty allocator should not be used for allocation");
+    }
+
+    unsafe fn deallocate(&self, _ptr: core::ptr::NonNull<u8>, _layout: Layout) {
+        // Do nothing
     }
 }

@@ -33,16 +33,16 @@ func (rcv *Packet) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *Packet) Id() uint32 {
+func (rcv *Packet) Id() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
-		return rcv._tab.GetUint32(o + rcv._tab.Pos)
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
 	}
 	return 0
 }
 
-func (rcv *Packet) MutateId(n uint32) bool {
-	return rcv._tab.MutateUint32Slot(4, n)
+func (rcv *Packet) MutateId(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(4, n)
 }
 
 func (rcv *Packet) ProcessId() *uint64 {
@@ -181,8 +181,8 @@ func (rcv *Packet) MutateRemotePort(n uint16) bool {
 func PacketStart(builder *flatbuffers.Builder) {
 	builder.StartObject(10)
 }
-func PacketAddId(builder *flatbuffers.Builder, id uint32) {
-	builder.PrependUint32Slot(0, id, 0)
+func PacketAddId(builder *flatbuffers.Builder, id uint64) {
+	builder.PrependUint64Slot(0, id, 0)
 }
 func PacketAddProcessId(builder *flatbuffers.Builder, processId uint64) {
 	builder.PrependUint64(processId)

@@ -22,7 +22,7 @@ func GetShutdownRequest() []byte {
 	return buildCommand(builder, Protocol.CommandUnionShutdown, shutdownBuffer)
 }
 
-func GetVerdirctResponse(id uint32, verdict byte) []byte {
+func GetVerdirctResponse(id uint64, verdict byte) []byte {
 	builder := flatbuffers.NewBuilder(0)
 
 	// VerdictReponse command
@@ -71,7 +71,7 @@ func ReadLogLine(info *Protocol.Info) *Protocol.LogLine {
 }
 
 func ReadInfo(reader io.Reader, dataChan chan *Protocol.Info) {
-	var readBuffer []byte = make([]byte, 1000)
+	var readBuffer []byte = make([]byte, 50)
 	var buffer []byte = nil
 	var structBuf []byte = nil
 	var structSize uint32 = 0

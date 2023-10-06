@@ -1,17 +1,16 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
+#![feature(allocator_api)]
 
 extern crate alloc;
 
-mod types;
-// mod cache;
 mod array_holder;
 mod entry;
+mod id_cache;
 mod protocol;
+mod types;
 
 use wdk::allocator::WindowsAllocator;
-
-// use common::Verdict;
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;

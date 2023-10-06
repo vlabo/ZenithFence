@@ -15,8 +15,8 @@ mod protocol_generated;
 pub fn serialize_info(info: Info, mut writer: impl FnMut(&[u8])) {
     let mut buffer_builder = FlatBufferBuilder::new();
     match info {
-        Info::PacketInfo(packet) => {
-            serialize_packet(&mut buffer_builder, packet);
+        Info::PacketInfo(id, packet) => {
+            serialize_packet(&mut buffer_builder, id, packet);
             writer(buffer_builder.finished_data());
         }
         Info::LogLine(line) => {
@@ -26,7 +26,7 @@ pub fn serialize_info(info: Info, mut writer: impl FnMut(&[u8])) {
     }
 }
 
-fn serialize_packet(buffer_builder: &mut FlatBufferBuilder, packet: PacketInfo) {
+fn serialize_packet(buffer_builder: &mut FlatBufferBuilder, id: u64, packet: PacketInfo) {
     let mut process_path = None;
     if let Some(path) = packet.process_path {
         process_path = Some(buffer_builder.create_string(&path));
@@ -47,7 +47,7 @@ fn serialize_packet(buffer_builder: &mut FlatBufferBuilder, packet: PacketInfo) 
     let packet = Packet::create(
         buffer_builder,
         &PacketArgs {
-            id: packet.id,
+            id,
             process_id: packet.process_id,
             process_path,
             direction: packet.direction,
@@ -91,9 +91,9 @@ fn serialize_log_lines(buffer_builder: &mut FlatBufferBuilder, line: String) {
     buffer_builder.finish_minimal(data);
 }
 
-pub fn read_command(data: &[u8]) -> Option<CommandUnion> {
+pub fn read_command(data: &[u8]) -> Option<Command> {
     if let Ok(command) = flatbuffers::root::<Command>(data) {
-        return Some(command.command_type());
+        return Some(command);
     }
 
     None

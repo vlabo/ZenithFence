@@ -50,6 +50,7 @@ func main() {
 						{
 							packet := kext_interface.ReadPacket(info)
 							log.Printf("connection from: %s", packet.ProcessPath())
+							file.Write(kext_interface.GetVerdirctResponse(packet.Id(), 9))
 						}
 					case Protocol.InfoUnionLogLine:
 						{

@@ -238,10 +238,10 @@ impl<'a> Packet<'a> {
   ) -> flatbuffers::WIPOffset<Packet<'bldr>> {
     let mut builder = PacketBuilder::new(_fbb);
     if let Some(x) = args.process_id { builder.add_process_id(x); }
+    builder.add_id(args.id);
     if let Some(x) = args.remote_ip { builder.add_remote_ip(x); }
     if let Some(x) = args.local_ip { builder.add_local_ip(x); }
     if let Some(x) = args.process_path { builder.add_process_path(x); }
-    builder.add_id(args.id);
     builder.add_remote_port(args.remote_port);
     builder.add_local_port(args.local_port);
     builder.add_protocol(args.protocol);
@@ -252,11 +252,11 @@ impl<'a> Packet<'a> {
 
 
   #[inline]
-  pub fn id(&self) -> u32 {
+  pub fn id(&self) -> u64 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(Packet::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(Packet::VT_ID, Some(0)).unwrap()}
   }
   #[inline]
   pub fn process_id(&self) -> Option<u64> {
@@ -330,7 +330,7 @@ impl flatbuffers::Verifiable for Packet<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<u32>("id", Self::VT_ID, false)?
+     .visit_field::<u64>("id", Self::VT_ID, false)?
      .visit_field::<u64>("process_id", Self::VT_PROCESS_ID, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("process_path", Self::VT_PROCESS_PATH, false)?
      .visit_field::<u8>("direction", Self::VT_DIRECTION, false)?
@@ -345,7 +345,7 @@ impl flatbuffers::Verifiable for Packet<'_> {
   }
 }
 pub struct PacketArgs<'a> {
-    pub id: u32,
+    pub id: u64,
     pub process_id: Option<u64>,
     pub process_path: Option<flatbuffers::WIPOffset<&'a str>>,
     pub direction: u8,
@@ -380,8 +380,8 @@ pub struct PacketBuilder<'a: 'b, 'b> {
 }
 impl<'a: 'b, 'b> PacketBuilder<'a, 'b> {
   #[inline]
-  pub fn add_id(&mut self, id: u32) {
-    self.fbb_.push_slot::<u32>(Packet::VT_ID, id, 0);
+  pub fn add_id(&mut self, id: u64) {
+    self.fbb_.push_slot::<u64>(Packet::VT_ID, id, 0);
   }
   #[inline]
   pub fn add_process_id(&mut self, process_id: u64) {
@@ -751,11 +751,11 @@ impl<'a> VerdictResponse<'a> {
 
 
   #[inline]
-  pub fn id(&self) -> u32 {
+  pub fn id(&self) -> u64 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<u32>(VerdictResponse::VT_ID, Some(0)).unwrap()}
+    unsafe { self._tab.get::<u64>(VerdictResponse::VT_ID, Some(0)).unwrap()}
   }
   #[inline]
   pub fn verdict(&self) -> u8 {
@@ -773,14 +773,14 @@ impl flatbuffers::Verifiable for VerdictResponse<'_> {
   ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
-     .visit_field::<u32>("id", Self::VT_ID, false)?
+     .visit_field::<u64>("id", Self::VT_ID, false)?
      .visit_field::<u8>("verdict", Self::VT_VERDICT, false)?
      .finish();
     Ok(())
   }
 }
 pub struct VerdictResponseArgs {
-    pub id: u32,
+    pub id: u64,
     pub verdict: u8,
 }
 impl<'a> Default for VerdictResponseArgs {
@@ -799,8 +799,8 @@ pub struct VerdictResponseBuilder<'a: 'b, 'b> {
 }
 impl<'a: 'b, 'b> VerdictResponseBuilder<'a, 'b> {
   #[inline]
-  pub fn add_id(&mut self, id: u32) {
-    self.fbb_.push_slot::<u32>(VerdictResponse::VT_ID, id, 0);
+  pub fn add_id(&mut self, id: u64) {
+    self.fbb_.push_slot::<u64>(VerdictResponse::VT_ID, id, 0);
   }
   #[inline]
   pub fn add_verdict(&mut self, verdict: u8) {
