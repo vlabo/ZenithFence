@@ -1,6 +1,6 @@
 use alloc::{boxed::Box, vec::Vec};
 
-use crate::{packet_info::PortmasterPacketInfo, lock::KSpinLock, log};
+use crate::{lock::KSpinLock, log, packet_info::PortmasterPacketInfo};
 
 struct Item {
     packet_id: u32,
@@ -30,7 +30,7 @@ impl PacketCache {
         let cache = Box::new(PacketCache {
             items: items,
             next_packet_id: 1,
-            spin_lock: KSpinLock::create()
+            spin_lock: KSpinLock::create(),
         });
 
         return cache;
@@ -64,7 +64,7 @@ impl PacketCache {
         log!("packet cache register");
 
         let _lock_guard = self.spin_lock.lock();
-        
+
         let packet_id = self.next_packet_id as u32;
         let index_to_write = self.get_index_from_packet_id(packet_id) as usize;
 
@@ -96,7 +96,10 @@ impl PacketCache {
         return true;
     }
 
-    pub fn retrieve(&mut self, packet_id: u32) -> Option<(*mut PortmasterPacketInfo, *const u8, usize)> {
+    pub fn retrieve(
+        &mut self,
+        packet_id: u32,
+    ) -> Option<(*mut PortmasterPacketInfo, *const u8, usize)> {
         log!("packet cache retrieve");
         let _lock_guard = self.spin_lock.lock();
 
@@ -140,4 +143,3 @@ impl PacketCache {
         return result;
     }
 }
-

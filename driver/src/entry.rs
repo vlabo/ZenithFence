@@ -78,6 +78,12 @@ pub extern "system" fn DriverEntry(
         {
             // Init all global objects.
             context.init();
+            if let Err(err) = context
+                .filter_engine
+                .init(&driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0)
+            {
+                err!("{}", err);
+            }
 
             let callouts = vec![Callout::new(
                 "AleLayerOutbound",
@@ -92,8 +98,8 @@ pub extern "system" fn DriverEntry(
                         return;
                     };
                     let packet = PacketInfo::from_call_data(&data);
-                    // let id = context.packet_cache.push(packet.clone());
-                    let _ = context.io_queue.push(Info::PacketInfo(0, packet));
+                    let id = context.packet_cache.push(packet.clone());
+                    let _ = context.io_queue.push(Info::PacketInfo(id, packet));
                     data.permit();
                 },
             )];
@@ -213,8 +219,8 @@ unsafe extern "system" fn driver_write(
             }
             CommandUnion::Response => {
                 let response = command.command_as_response().unwrap();
-                // let packet = device_context.packet_cache.pop_id(response.id());
-                // info!("Verdict response: {:?} -> {}", packet, response.verdict());
+                let packet = device_context.packet_cache.pop_id(response.id());
+                info!("Verdict response: {:?} -> {}", packet, response.verdict());
             }
             _ => {
                 err!("unrecognized command");
