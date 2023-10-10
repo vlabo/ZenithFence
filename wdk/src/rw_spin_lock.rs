@@ -10,11 +10,16 @@ pub struct RwSpinLock {
 }
 
 impl RwSpinLock {
+    pub const fn default() -> Self {
+        Self {
+            data: UnsafeCell::new(0),
+        }
+    }
     pub fn init(&mut self) {
         self.data = UnsafeCell::new(0);
     }
 
-    pub fn read_lock(&mut self) -> RwLockGuard {
+    pub fn read_lock(&self) -> RwLockGuard {
         let irq = unsafe { ExAcquireSpinLockShared(self.data.get()) };
         RwLockGuard {
             data: &self.data,
@@ -23,7 +28,7 @@ impl RwSpinLock {
         }
     }
 
-    pub fn write_lock(&mut self) -> RwLockGuard {
+    pub fn write_lock(&self) -> RwLockGuard {
         let irq = unsafe { ExAcquireSpinLockExclusive(self.data.get()) };
         RwLockGuard {
             data: &self.data,

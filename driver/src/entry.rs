@@ -1,12 +1,13 @@
 use crate::array_holder::ArrayHolder;
+use crate::connection_cache::ConnectionCache;
 use crate::id_cache::IdCache;
 use crate::protocol::{self, CommandUnion};
-use crate::types::{Info, PacketInfo};
+use crate::types::{Info, PacketInfo, Verdict};
 use alloc::{boxed::Box, vec};
-use wdk::allocator::EmptyAllocator;
+use wdk::allocator::NullAllocator;
 use wdk::consts;
 use wdk::filter_engine::callout::Callout;
-use wdk::filter_engine::layer::Layer;
+use wdk::filter_engine::layer::{FwpsFieldsAleAuthConnectV4, Layer};
 use wdk::filter_engine::FilterEngine;
 use wdk::interface::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::utils::ReadRequest;
@@ -16,6 +17,7 @@ use wdk::{
 };
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_FLAG_IS_REAUTHORIZE;
 
 // Device Context
 struct DeviceContext {
@@ -23,6 +25,7 @@ struct DeviceContext {
     read_leftover: ArrayHolder,
     io_queue: IOQueue<Info>,
     packet_cache: IdCache<PacketInfo>,
+    connection_cache: ConnectionCache,
 }
 
 impl DeviceContext {
@@ -30,6 +33,7 @@ impl DeviceContext {
         self.io_queue.init();
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
+        self.connection_cache.init();
     }
 }
 
@@ -97,10 +101,61 @@ pub extern "system" fn DriverEntry(
                     >(device_object) else {
                         return;
                     };
-                    let packet = PacketInfo::from_call_data(&data);
-                    let id = context.packet_cache.push(packet.clone());
-                    let _ = context.io_queue.push(Info::PacketInfo(id, packet));
-                    data.permit();
+                    let mut packet = PacketInfo::from_callout_data(&data);
+                    if let Some(verdict) = context.connection_cache.get_connection_verdict(&packet)
+                    {
+                        // We already have a verdict for it.
+                        match verdict {
+                            Verdict::Accept => {
+                                data.permit();
+                            }
+                            Verdict::Block => {
+                                data.block();
+                            }
+                            Verdict::Drop => {
+                                data.block();
+                            }
+                            Verdict::RerouteToNameserver => {
+                                // TODO: forward to redirect.
+                                data.block();
+                            }
+                            Verdict::RerouteToTunnel => {
+                                // TODO: forward to redirect.
+                                data.block();
+                            }
+                            Verdict::Failed => {
+                                data.block();
+                            }
+                            _ => {}
+                        }
+                    } else if data.get_value_u32(FwpsFieldsAleAuthConnectV4::Flags as usize)
+                        & FWP_CONDITION_FLAG_IS_REAUTHORIZE
+                        == 0
+                    {
+                        // Send request to userspace.
+                        let promise = match data.pend_operation() {
+                            Ok(cc) => cc,
+                            Err(error) => {
+                                err!("failed to postpone decision: {}", error);
+                                data.block();
+                                return;
+                            }
+                        };
+                        let packet_clone = packet.clone();
+
+                        packet.classify_promise = Some(promise);
+                        let id = context.packet_cache.push(packet);
+                        let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                    } else {
+                        // Send request to userspace.
+                        // let promise = data.pend_classification();
+                        // let packet_clone = packet.clone();
+
+                        // packet.classify_promise = Some(promise);
+                        // let id = context.packet_cache.push(packet);
+                        // let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                        data.permit();
+                    }
                 },
             )];
 
@@ -125,7 +180,7 @@ extern "C" fn device_cleanup(device: HANDLE) {
     unsafe {
         // Call drop without freeing memory. Memory is manged by the kernel.
         if !device_context.is_null() {
-            let owned_device_contex = Box::from_raw_in(device_context, EmptyAllocator {});
+            let owned_device_contex = Box::from_raw_in(device_context, NullAllocator {});
             drop(owned_device_contex);
         }
     }
@@ -168,7 +223,7 @@ unsafe extern "system" fn driver_read(
     };
 
     if let Some(data) = device_context.read_leftover.load() {
-        // There is leftovers from previos request.
+        // There are leftovers from previos request.
         write_buffer(device_context, &mut read_request, &data);
     } else {
         // Noting left from before. Wait for next commands.
@@ -211,7 +266,6 @@ unsafe extern "system" fn driver_write(
         write_request.complete();
         return write_request.get_status();
     };
-    info!("Write buffer: {:?}", write_request.get_buffer());
     if let Some(command) = protocol::read_command(write_request.get_buffer()) {
         match command.command_type() {
             CommandUnion::Shutdown => {
@@ -219,11 +273,26 @@ unsafe extern "system" fn driver_write(
             }
             CommandUnion::Response => {
                 let response = command.command_as_response().unwrap();
-                let packet = device_context.packet_cache.pop_id(response.id());
-                info!("Verdict response: {:?} -> {}", packet, response.verdict());
+                if let Some(packet) = device_context.packet_cache.pop_id(response.id()) {
+                    if let Some(verdict) =
+                        num::FromPrimitive::from_i8(response.verdict()) as Option<Verdict>
+                    {
+                        info!("Verdict response: {:?} -> {}", packet, verdict);
+                        let completion_promise = device_context
+                            .connection_cache
+                            .add_connection(packet, verdict);
+                        if let Some(mut promise) = completion_promise {
+                            if let Err(err) = promise.complete(&device_context.filter_engine) {
+                                err!("error compliting connection decision: {}", err);
+                            }
+                        }
+                    }
+                } else {
+                    err!("Invalid id: {}", response.id());
+                }
             }
             _ => {
-                err!("unrecognized command");
+                err!("Unrecognized command");
             }
         }
     } else {

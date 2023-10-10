@@ -1,14 +1,43 @@
 use alloc::{format, string::String};
-use core::fmt::Debug;
+use core::fmt::{Debug, Display};
+use num_derive::FromPrimitive;
 use wdk::{
     err,
     filter_engine::layer::{self, Layer},
-    utils::CallData,
+    utils::{CallData, ClassifyPromise},
 };
 
 pub enum Info {
     PacketInfo(u64, PacketInfo),
     LogLine(String),
+}
+
+#[derive(Copy, Clone, FromPrimitive)]
+pub enum Verdict {
+    // VerdictUndecided is the default status of new connections.
+    Undecided = 0,
+    Undeterminable = 1,
+    Accept = 2,
+    Block = 3,
+    Drop = 4,
+    RerouteToNameserver = 5,
+    RerouteToTunnel = 6,
+    Failed = 7,
+}
+
+impl Display for Verdict {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Verdict::Undecided => write!(f, "Undecided"),
+            Verdict::Undeterminable => write!(f, "Undeterminable"),
+            Verdict::Accept => write!(f, "Accept"),
+            Verdict::Block => write!(f, "Block"),
+            Verdict::Drop => write!(f, "Drop"),
+            Verdict::RerouteToNameserver => write!(f, "RerouteToNameserver"),
+            Verdict::RerouteToTunnel => write!(f, "RerouteToTunnel"),
+            Verdict::Failed => write!(f, "Failed"),
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -23,14 +52,11 @@ pub struct PacketInfo {
     pub remote_ip: [u32; 4],
     pub local_port: u16,
     pub remote_port: u16,
-    pub compartment_id: u64,
-    pub interface_index: u32,
-    pub sub_interface_index: u32,
-    pub packet_size: u32,
+    pub classify_promise: Option<ClassifyPromise>,
 }
 
 impl PacketInfo {
-    pub fn from_call_data(data: &CallData) -> Self {
+    pub fn from_callout_data(data: &CallData) -> Self {
         match data.layer {
             Layer::FwpmLayerInboundIppacketV4 => {
                 type Field = layer::FwpsFieldsInboundIppacketV4;

@@ -1,7 +1,15 @@
+use core::ffi::c_void;
+
 use crate::filter_engine::classify::ClassifyOut;
+use crate::filter_engine::ffi::{
+    self, FwpsAcquireClassifyHandle0, FwpsCompleteClassify0, FwpsPendClassify0, FwpsPendOperation0,
+};
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
+use crate::filter_engine::{self, FilterEngine};
 use crate::interface;
+use alloc::string::{String, ToString};
+use ntstatus::ntstatus::NtStatus;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{
     HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
@@ -194,28 +202,52 @@ impl WriteRequest<'_> {
     }
 }
 
+#[derive(Clone)]
+pub enum ClassifyPromise {
+    Initial(HANDLE),
+    Reauthorization(usize),
+}
+
+impl ClassifyPromise {
+    pub fn complete(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
+        unsafe {
+            match self {
+                ClassifyPromise::Initial(context) => {
+                    ffi::FwpsCompleteOperation0(*context, core::ptr::null_mut());
+                    return Ok(());
+                }
+                ClassifyPromise::Reauthorization(callout_index) => {
+                    return filter_engine.reset_callout_filter(*callout_index);
+                }
+            }
+        }
+    }
+}
+
+// impl Drop for ClassifyPromise {
+//     fn drop(&mut self) {
+//         unsafe {
+//             match self {
+//                 ClassifyPromise::Initial(_) => {}
+//                 ClassifyPromise::Reauthorization(classify_handle) => {
+//                     // FwpsReleaseClassifyHandle0(*classify_handle);
+//                 }
+//             }
+//         }
+//     }
+// }
+
 pub struct CallData<'a> {
     pub layer: Layer,
+    pub(crate) callout_index: usize,
     pub(crate) values: &'a [Value],
-    metadata: *const FwpsIncomingMetadataValues,
-    classify_out: *mut ClassifyOut,
+    pub(crate) metadata: *const FwpsIncomingMetadataValues,
+    pub(crate) classify_out: *mut ClassifyOut,
+    pub(crate) classify_context: *mut c_void,
+    pub(crate) filter_id: u64,
 }
 
 impl<'a> CallData<'a> {
-    pub(crate) fn new(
-        layer: Layer,
-        values: &'a [Value],
-        metadata: *const FwpsIncomingMetadataValues,
-        classify_out: *mut ClassifyOut,
-    ) -> Self {
-        Self {
-            layer,
-            values,
-            metadata,
-            classify_out,
-        }
-    }
-
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
         unsafe {
             return self.values[index].value.uint8;
@@ -247,6 +279,34 @@ impl<'a> CallData<'a> {
             }
         }
         return None;
+    }
+
+    pub fn pend_operation(&mut self) -> Result<ClassifyPromise, String> {
+        unsafe {
+            let mut completion_context = 0;
+            if let Some(completion_handle) = (*self.metadata).get_completeion_handle() {
+                let status = FwpsPendOperation0(completion_handle, &mut completion_context);
+                let Some(status) = NtStatus::from_i32(status) else {
+                    return Err("Unknown result".to_string());
+                };
+
+                if status != NtStatus::STATUS_SUCCESS {
+                    return Err(status.to_string());
+                }
+
+                if let Some(classify_out) = self.classify_out.as_mut() {
+                    classify_out.action_block();
+                    classify_out.set_absorb();
+                }
+                return Ok(ClassifyPromise::Initial(completion_context));
+            }
+
+            Err("callout not supported".to_string())
+        }
+    }
+
+    pub fn pend_classification(&mut self) -> ClassifyPromise {
+        return ClassifyPromise::Reauthorization(self.callout_index);
     }
 
     pub fn permit(&mut self) {

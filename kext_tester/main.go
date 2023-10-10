@@ -13,6 +13,20 @@ import (
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface/Protocol"
 )
 
+type Verdict int8
+
+const (
+	// VerdictUndecided is the default status of new connections.
+	VerdictUndecided           Verdict = 0
+	VerdictUndeterminable      Verdict = 1
+	VerdictAccept              Verdict = 2
+	VerdictBlock               Verdict = 3
+	VerdictDrop                Verdict = 4
+	VerdictRerouteToNameserver Verdict = 5
+	VerdictRerouteToTunnel     Verdict = 6
+	VerdictFailed              Verdict = 7
+)
+
 func main() {
 	driverName := "PortmasterTest"
 	sysPath := "C:\\Dev\\portmaster-kext\\driver\\target\\x86_64-pc-windows-msvc\\debug\\driver.sys"
@@ -50,7 +64,7 @@ func main() {
 						{
 							packet := kext_interface.ReadPacket(info)
 							log.Printf("connection from: %s", packet.ProcessPath())
-							file.Write(kext_interface.GetVerdirctResponse(packet.Id(), 9))
+							file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
 						}
 					case Protocol.InfoUnionLogLine:
 						{

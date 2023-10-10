@@ -39,7 +39,8 @@ const FWP_CONDITION_FLAG_IS_CONNECTION_REDIRECTED: u32 = 0x00100000;
 const FWPS_RIGHT_ACTION_WRITE: u32 = 0x00000001;
 
 #[repr(C)]
-pub(crate) struct ClassifyOut {
+#[derive(Clone, Copy)]
+pub struct ClassifyOut {
     action_type: u32,
     _out_context: u64, // System use
     _filter_id: u64,   // System use

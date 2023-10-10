@@ -30,7 +30,7 @@ pub(crate) type FwpsCalloutClassifyFn = unsafe extern "C" fn(
     inFixedValues: *const FwpsIncomingValues,
     inMetaValues: *const FwpsIncomingMetadataValues,
     layerData: *mut c_void,
-    classifyContext: *const c_void,
+    classifyContext: *mut c_void,
     filter: *const FWPS_FILTER2,
     flowContext: u64,
     classifyOut: *mut ClassifyOut,
@@ -99,11 +99,40 @@ pub enum Error {
 #[link(name = "Fwpuclnt", kind = "static")]
 extern "C" {
     fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
+
     fn FwpsCalloutRegister1(
         deviceObject: *mut c_void,
         callout: *const FWPS_CALLOUT3,
         calloutId: *mut u32,
     ) -> NTSTATUS;
+
+    pub(crate) fn FwpsPendOperation0(
+        completionHandle: HANDLE,
+        completionContext: *mut HANDLE,
+    ) -> NTSTATUS;
+
+    pub(crate) fn FwpsCompleteOperation0(completionContext: HANDLE, netBufferList: *mut c_void);
+
+    pub(crate) fn FwpsAcquireClassifyHandle0(
+        classifyContext: *mut c_void,
+        _reserved: u32, // Must be zero.
+        classifyHandle: *mut u64,
+    ) -> NTSTATUS;
+
+    pub(crate) fn FwpsReleaseClassifyHandle0(classifyHandle: u64);
+
+    pub(crate) fn FwpsPendClassify0(
+        classifyHandle: u64,
+        filterId: u64,
+        flags: u32, // Must be zero.
+        classifyOut: *const ClassifyOut,
+    ) -> NTSTATUS;
+
+    pub(crate) fn FwpsCompleteClassify0(
+        classifyHandle: u64,
+        flags: u32, // Must be zero.
+        classifyOut: *const ClassifyOut,
+    );
 }
 
 pub(crate) fn create_filter_engine() -> Result<HANDLE, Error> {

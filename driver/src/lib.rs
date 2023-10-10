@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod array_holder;
+mod connection_cache;
 mod entry;
 mod id_cache;
 mod protocol;

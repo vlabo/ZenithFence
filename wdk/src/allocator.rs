@@ -68,10 +68,10 @@ unsafe impl GlobalAlloc for WindowsAllocator {
     }
 }
 
-pub struct EmptyAllocator {}
-unsafe impl Sync for EmptyAllocator {}
+pub struct NullAllocator {}
+unsafe impl Sync for NullAllocator {}
 
-unsafe impl Allocator for EmptyAllocator {
+unsafe impl Allocator for NullAllocator {
     fn allocate(
         &self,
         _layout: Layout,

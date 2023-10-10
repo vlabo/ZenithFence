@@ -758,11 +758,11 @@ impl<'a> VerdictResponse<'a> {
     unsafe { self._tab.get::<u64>(VerdictResponse::VT_ID, Some(0)).unwrap()}
   }
   #[inline]
-  pub fn verdict(&self) -> u8 {
+  pub fn verdict(&self) -> i8 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<u8>(VerdictResponse::VT_VERDICT, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i8>(VerdictResponse::VT_VERDICT, Some(0)).unwrap()}
   }
 }
 
@@ -774,14 +774,14 @@ impl flatbuffers::Verifiable for VerdictResponse<'_> {
     use self::flatbuffers::Verifiable;
     v.visit_table(pos)?
      .visit_field::<u64>("id", Self::VT_ID, false)?
-     .visit_field::<u8>("verdict", Self::VT_VERDICT, false)?
+     .visit_field::<i8>("verdict", Self::VT_VERDICT, false)?
      .finish();
     Ok(())
   }
 }
 pub struct VerdictResponseArgs {
     pub id: u64,
-    pub verdict: u8,
+    pub verdict: i8,
 }
 impl<'a> Default for VerdictResponseArgs {
   #[inline]
@@ -803,8 +803,8 @@ impl<'a: 'b, 'b> VerdictResponseBuilder<'a, 'b> {
     self.fbb_.push_slot::<u64>(VerdictResponse::VT_ID, id, 0);
   }
   #[inline]
-  pub fn add_verdict(&mut self, verdict: u8) {
-    self.fbb_.push_slot::<u8>(VerdictResponse::VT_VERDICT, verdict, 0);
+  pub fn add_verdict(&mut self, verdict: i8) {
+    self.fbb_.push_slot::<i8>(VerdictResponse::VT_VERDICT, verdict, 0);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> VerdictResponseBuilder<'a, 'b> {

@@ -5,8 +5,8 @@ use windows_sys::Win32::{
     NetworkManagement::{
         IpHelper::IP_ADDRESS_PREFIX,
         WindowsFilteringPlatform::{
-            FWPS_METADATA_FIELD_PROCESS_ID, FWPS_METADATA_FIELD_PROCESS_PATH, FWP_BYTE_BLOB,
-            FWP_DIRECTION,
+            FWPS_METADATA_FIELD_COMPLETION_HANDLE, FWPS_METADATA_FIELD_PROCESS_ID,
+            FWPS_METADATA_FIELD_PROCESS_PATH, FWP_BYTE_BLOB, FWP_DIRECTION,
         },
     },
     Networking::WinSock::SCOPE_ID,
@@ -103,6 +103,13 @@ impl FwpsIncomingMetadataValues {
         }
 
         return None;
+    }
+
+    pub(crate) fn get_completeion_handle(&self) -> Option<HANDLE> {
+        if self.has_field(FWPS_METADATA_FIELD_COMPLETION_HANDLE) {
+            return Some(self.completion_handle);
+        }
+        None
     }
 }
 

@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 
 use crate::alloc::borrow::ToOwned;
+use crate::rw_spin_lock::RwSpinLock;
 use crate::utils::{CallData, Driver};
 use crate::{dbg, info};
 use alloc::string::String;
@@ -25,19 +26,22 @@ pub struct FilterEngine {
     filter_engine_handle: HANDLE,
     sublayer_guid: u128,
     commited: bool,
+    lock: RwSpinLock,
 }
 
 impl FilterEngine {
-    pub const fn default() -> Self {
-        Self {
-            device_object: core::ptr::null_mut(),
-            filter_engine_handle: INVALID_HANDLE_VALUE,
-            sublayer_guid: 0,
-            commited: false,
-        }
-    }
+    // pub const fn default() -> Self {
+    //     Self {
+    //         device_object: core::ptr::null_mut(),
+    //         filter_engine_handle: INVALID_HANDLE_VALUE,
+    //         sublayer_guid: 0,
+    //         commited: false,
+    //         lock: RwSpinLock::default(),
+    //     }
+    // }
 
     pub fn init(&mut self, driver: &Driver, layer_guid: u128) -> Result<(), String> {
+        self.lock = RwSpinLock::default();
         let filter_engine_handle: HANDLE;
         match ffi::create_filter_engine() {
             Ok(handle) => {
@@ -54,6 +58,7 @@ impl FilterEngine {
     }
 
     pub fn commit(&mut self, mut callouts: Vec<Callout>) -> Result<(), String> {
+        // let _guard = self.lock.write_lock();
         if let Err(code) = ffi::filter_engine_transaction_begin(self.filter_engine_handle, 0) {
             return Err(format!(
                 "filter-engine: failed to begin transaction: {}",
@@ -101,6 +106,46 @@ impl FilterEngine {
         self.commited = true;
         info!("transaction commited");
 
+        return Ok(());
+    }
+
+    pub(crate) fn reset_callout_filter(&self, _callout_index: usize) -> Result<(), String> {
+        let _guard = self.lock.write_lock();
+        if let Err(code) = ffi::filter_engine_transaction_begin(self.filter_engine_handle, 0) {
+            return Err(format!(
+                "filter-engine: failed to begin transaction: {}",
+                code
+            ));
+        }
+        _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
+        // unsafe {
+        // if let Some(_callouts) = CALLOUTS.as_ref() {
+        // if let Some(callout) = callouts.get_mut(callout_index) {
+        // if callout.filter_id != 0 {
+        //     // Remove old filter.
+        //     if let Err(err) =
+        //         ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
+        //     {
+        //         // _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
+        //         return Err(format!("filter_engine: {}", err));
+        //     }
+        // callout.filter_id = 0;
+        // }
+        // }
+        // // Create new filter.
+        // if let Err(err) = callout.register_filter(self) {
+        //     _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
+        //     return Err(format!("filter_engine: {}", err));
+        // }
+        // }
+        // }
+        // Commit transaction.
+        // if let Err(code) = ffi::filter_engine_transaction_commit(self.filter_engine_handle) {
+        //     return Err(format!(
+        //         "filter-engine: failed to commit transaction: {}",
+        //         code
+        //     ));
+        // }
         return Ok(());
     }
 
@@ -160,7 +205,7 @@ unsafe extern "C" fn catch_all_callout(
     fixed_values: *const FwpsIncomingValues,
     meta_values: *const FwpsIncomingMetadataValues,
     _layer_data: *mut c_void,
-    _context: *const c_void,
+    context: *mut c_void,
     filter: *const FWPS_FILTER2,
     _flow_context: u64,
     classify_out: *mut ClassifyOut,
@@ -172,7 +217,15 @@ unsafe extern "C" fn catch_all_callout(
                 (*fixed_values).incoming_value_array,
                 (*fixed_values).value_count as usize,
             );
-            let data = CallData::new(callout.layer, array, meta_values, classify_out);
+            let data = CallData {
+                callout_index: filter.context as usize,
+                layer: callout.layer,
+                values: array,
+                metadata: meta_values,
+                classify_out,
+                classify_context: context,
+                filter_id: callout.filter_id,
+            };
             if let Some(device_object) = callout.device_object.as_mut() {
                 (callout.callout_fn)(data, device_object);
             }

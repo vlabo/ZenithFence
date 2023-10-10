@@ -24,8 +24,8 @@ impl<T> IdCache<T> {
         let id = self.next_id;
         self.values.push_back(ValueId { value, id });
 
-        self.next_id += 1; // Assuming this will not overlap?
-        return id;
+        self.next_id += 1; // Assuming this will not overflow.
+        id
     }
 
     pub fn pop_id(&mut self, id: u64) -> Option<T> {
@@ -33,6 +33,6 @@ impl<T> IdCache<T> {
         if let Ok(index) = self.values.binary_search_by_key(&id, |val| val.id) {
             return Some(self.values.remove(index).unwrap().value);
         }
-        return None;
+        None
     }
 }

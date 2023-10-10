@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 
-use crate::alloc::borrow::ToOwned;
 use crate::utils::Driver;
+use crate::{alloc::borrow::ToOwned, filter_engine::metadata::FwpsIncomingMetadataValues};
 use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::String;
@@ -52,6 +52,8 @@ extern "C" {
     ) -> *mut c_void;
 
     fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
+
+    pub(crate) fn pm_GetCompletionHandle(metadata: *const FwpsIncomingMetadataValues) -> HANDLE;
 }
 
 // Debug
