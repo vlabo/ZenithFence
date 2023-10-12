@@ -1,11 +1,18 @@
+use crate::types::{PacketInfo, Verdict};
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use wdk::{rw_spin_lock::RwSpinLock, utils::ClassifyPromise};
 
-use crate::types::{PacketInfo, Verdict};
+#[derive(Clone)]
+pub enum ConnectionAction {
+    Verdict(Verdict),
+    RedirectIPv4(Vec<u8>, u16),
+    RedirectIPv6(Vec<u8>, u16),
+}
 
 struct Connection {
     info: PacketInfo,
-    verdict: Verdict,
+    action: ConnectionAction,
 }
 
 pub struct ConnectionCache {
@@ -22,7 +29,7 @@ impl ConnectionCache {
     pub fn add_connection(
         &mut self,
         mut packet: PacketInfo,
-        verdict: Verdict,
+        verdict: ConnectionAction,
     ) -> Option<ClassifyPromise> {
         let promise = packet.classify_promise.take();
         let _quard = self.lock.write_lock();
@@ -30,17 +37,17 @@ impl ConnectionCache {
             packet.local_port,
             Connection {
                 info: packet,
-                verdict,
+                action: verdict,
             },
         );
         return promise;
     }
 
-    pub fn get_connection_verdict(&self, packet: &PacketInfo) -> Option<Verdict> {
+    pub fn get_connection_action(&self, packet: &PacketInfo) -> Option<ConnectionAction> {
         let _quard = self.lock.read_lock();
 
         if let Some(connection) = self.connections.get(&packet.local_port) {
-            return Some(connection.verdict);
+            return Some(connection.action.clone());
         }
 
         None

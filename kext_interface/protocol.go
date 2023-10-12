@@ -35,6 +35,22 @@ func GetVerdirctResponse(id uint64, verdict int8) []byte {
 	return buildCommand(builder, Protocol.CommandUnionResponse, responseBuffer)
 }
 
+func GetRedirectResponse(id uint64, ip []byte, port uint16) []byte {
+	builder := flatbuffers.NewBuilder(0)
+	bufferIp := builder.CreateByteVector(ip)
+
+	// RedirectReponse command
+	Protocol.RedirectResponseStart(builder)
+	Protocol.RedirectResponseAddId(builder, id)
+	Protocol.RedirectResponseAddIpv6(builder, false)
+	Protocol.RedirectResponseAddRemoteIp(builder, bufferIp)
+	Protocol.RedirectResponseAddRemotePort(builder, port)
+	responseBuffer := Protocol.RedirectResponseEnd(builder)
+
+	// Finish
+	return buildCommand(builder, Protocol.CommandUnionRedirect, responseBuffer)
+}
+
 func buildCommand(builder *flatbuffers.Builder, commandType Protocol.CommandUnion, commandBuffer flatbuffers.UOffsetT) []byte {
 	// Command wrapper
 	Protocol.CommandStart(builder)

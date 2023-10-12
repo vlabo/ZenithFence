@@ -112,12 +112,13 @@ pub struct InfoUnionUnionTableOffset {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_COMMAND_UNION: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_COMMAND_UNION: u8 = 2;
+pub const ENUM_MAX_COMMAND_UNION: u8 = 3;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_COMMAND_UNION: [CommandUnion; 3] = [
+pub const ENUM_VALUES_COMMAND_UNION: [CommandUnion; 4] = [
   CommandUnion::NONE,
   CommandUnion::Response,
+  CommandUnion::Redirect,
   CommandUnion::Shutdown,
 ];
 
@@ -128,13 +129,15 @@ pub struct CommandUnion(pub u8);
 impl CommandUnion {
   pub const NONE: Self = Self(0);
   pub const Response: Self = Self(1);
-  pub const Shutdown: Self = Self(2);
+  pub const Redirect: Self = Self(2);
+  pub const Shutdown: Self = Self(3);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 2;
+  pub const ENUM_MAX: u8 = 3;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NONE,
     Self::Response,
+    Self::Redirect,
     Self::Shutdown,
   ];
   /// Returns the variant's name or "" if unknown.
@@ -142,6 +145,7 @@ impl CommandUnion {
     match self {
       Self::NONE => Some("NONE"),
       Self::Response => Some("Response"),
+      Self::Redirect => Some("Redirect"),
       Self::Shutdown => Some("Shutdown"),
       _ => None,
     }
@@ -829,6 +833,154 @@ impl core::fmt::Debug for VerdictResponse<'_> {
       ds.finish()
   }
 }
+pub enum RedirectResponseOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct RedirectResponse<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for RedirectResponse<'a> {
+  type Inner = RedirectResponse<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> RedirectResponse<'a> {
+  pub const VT_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_IPV6: flatbuffers::VOffsetT = 6;
+  pub const VT_REMOTE_IP: flatbuffers::VOffsetT = 8;
+  pub const VT_REMOTE_PORT: flatbuffers::VOffsetT = 10;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    RedirectResponse { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
+    args: &'args RedirectResponseArgs<'args>
+  ) -> flatbuffers::WIPOffset<RedirectResponse<'bldr>> {
+    let mut builder = RedirectResponseBuilder::new(_fbb);
+    builder.add_id(args.id);
+    if let Some(x) = args.remote_ip { builder.add_remote_ip(x); }
+    builder.add_remote_port(args.remote_port);
+    builder.add_ipv6(args.ipv6);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn id(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(RedirectResponse::VT_ID, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn ipv6(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(RedirectResponse::VT_IPV6, Some(false)).unwrap()}
+  }
+  #[inline]
+  pub fn remote_ip(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(RedirectResponse::VT_REMOTE_IP, None)}
+  }
+  #[inline]
+  pub fn remote_port(&self) -> u16 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u16>(RedirectResponse::VT_REMOTE_PORT, Some(0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for RedirectResponse<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u64>("id", Self::VT_ID, false)?
+     .visit_field::<bool>("ipv6", Self::VT_IPV6, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("remote_ip", Self::VT_REMOTE_IP, false)?
+     .visit_field::<u16>("remote_port", Self::VT_REMOTE_PORT, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct RedirectResponseArgs<'a> {
+    pub id: u64,
+    pub ipv6: bool,
+    pub remote_ip: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    pub remote_port: u16,
+}
+impl<'a> Default for RedirectResponseArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    RedirectResponseArgs {
+      id: 0,
+      ipv6: false,
+      remote_ip: None,
+      remote_port: 0,
+    }
+  }
+}
+
+pub struct RedirectResponseBuilder<'a: 'b, 'b> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b> RedirectResponseBuilder<'a, 'b> {
+  #[inline]
+  pub fn add_id(&mut self, id: u64) {
+    self.fbb_.push_slot::<u64>(RedirectResponse::VT_ID, id, 0);
+  }
+  #[inline]
+  pub fn add_ipv6(&mut self, ipv6: bool) {
+    self.fbb_.push_slot::<bool>(RedirectResponse::VT_IPV6, ipv6, false);
+  }
+  #[inline]
+  pub fn add_remote_ip(&mut self, remote_ip: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(RedirectResponse::VT_REMOTE_IP, remote_ip);
+  }
+  #[inline]
+  pub fn add_remote_port(&mut self, remote_port: u16) {
+    self.fbb_.push_slot::<u16>(RedirectResponse::VT_REMOTE_PORT, remote_port, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> RedirectResponseBuilder<'a, 'b> {
+    let start = _fbb.start_table();
+    RedirectResponseBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<RedirectResponse<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for RedirectResponse<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("RedirectResponse");
+      ds.field("id", &self.id());
+      ds.field("ipv6", &self.ipv6());
+      ds.field("remote_ip", &self.remote_ip());
+      ds.field("remote_port", &self.remote_port());
+      ds.finish()
+  }
+}
 pub enum ShutdownOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -974,6 +1126,21 @@ impl<'a> Command<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
+  pub fn command_as_redirect(&self) -> Option<RedirectResponse<'a>> {
+    if self.command_type() == CommandUnion::Redirect {
+      self.command().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { RedirectResponse::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
   pub fn command_as_shutdown(&self) -> Option<Shutdown<'a>> {
     if self.command_type() == CommandUnion::Shutdown {
       self.command().map(|t| {
@@ -999,6 +1166,7 @@ impl flatbuffers::Verifiable for Command<'_> {
      .visit_union::<CommandUnion, _>("command_type", Self::VT_COMMAND_TYPE, "command", Self::VT_COMMAND, false, |key, v, pos| {
         match key {
           CommandUnion::Response => v.verify_union_variant::<flatbuffers::ForwardsUOffset<VerdictResponse>>("CommandUnion::Response", pos),
+          CommandUnion::Redirect => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RedirectResponse>>("CommandUnion::Redirect", pos),
           CommandUnion::Shutdown => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Shutdown>>("CommandUnion::Shutdown", pos),
           _ => Ok(()),
         }
@@ -1056,6 +1224,13 @@ impl core::fmt::Debug for Command<'_> {
       match self.command_type() {
         CommandUnion::Response => {
           if let Some(x) = self.command_as_response() {
+            ds.field("command", &x)
+          } else {
+            ds.field("command", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        CommandUnion::Redirect => {
+          if let Some(x) = self.command_as_redirect() {
             ds.field("command", &x)
           } else {
             ds.field("command", &"InvalidFlatbuffer: Union discriminant does not match value.")

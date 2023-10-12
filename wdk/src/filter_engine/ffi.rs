@@ -114,24 +114,37 @@ extern "C" {
     pub(crate) fn FwpsCompleteOperation0(completionContext: HANDLE, netBufferList: *mut c_void);
 
     pub(crate) fn FwpsAcquireClassifyHandle0(
-        classifyContext: *mut c_void,
-        _reserved: u32, // Must be zero.
-        classifyHandle: *mut u64,
+        classify_context: *mut c_void,
+        reserved: u32, // Must be zero.
+        classify_handle: *mut u64,
     ) -> NTSTATUS;
 
-    pub(crate) fn FwpsReleaseClassifyHandle0(classifyHandle: u64);
+    pub(crate) fn FwpsReleaseClassifyHandle0(classify_handle: u64);
 
     pub(crate) fn FwpsPendClassify0(
-        classifyHandle: u64,
+        classify_handle: u64,
         filterId: u64,
         flags: u32, // Must be zero.
         classifyOut: *const ClassifyOut,
     ) -> NTSTATUS;
 
     pub(crate) fn FwpsCompleteClassify0(
-        classifyHandle: u64,
+        classify_handle: u64,
         flags: u32, // Must be zero.
         classifyOut: *const ClassifyOut,
+    );
+    pub(crate) fn FwpsAcquireWritableLayerDataPointer0(
+        classify_handle: u64,
+        filter_id: u64,
+        flags: u32,
+        writable_layer_data: *mut c_void,
+        classify_out: *mut ClassifyOut,
+    ) -> NTSTATUS;
+
+    pub(crate) fn FwpsApplyModifiedLayerData0(
+        classifyHandle: u64,
+        modifiedLayerData: *mut *mut c_void,
+        flags: u32,
     );
 }
 

@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 
 use crate::alloc::borrow::ToOwned;
-use crate::rw_spin_lock::RwSpinLock;
+use crate::filter_engine::transaction::Transaction;
 use crate::utils::{CallData, Driver};
 use crate::{dbg, info};
 use alloc::string::String;
@@ -17,31 +17,21 @@ use self::metadata::FwpsIncomingMetadataValues;
 
 pub mod callout;
 pub(crate) mod classify;
+pub mod connect_request;
 pub mod ffi;
 pub mod layer;
 pub(crate) mod metadata;
+pub mod transaction;
 
 pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
     filter_engine_handle: HANDLE,
     sublayer_guid: u128,
     commited: bool,
-    lock: RwSpinLock,
 }
 
 impl FilterEngine {
-    // pub const fn default() -> Self {
-    //     Self {
-    //         device_object: core::ptr::null_mut(),
-    //         filter_engine_handle: INVALID_HANDLE_VALUE,
-    //         sublayer_guid: 0,
-    //         commited: false,
-    //         lock: RwSpinLock::default(),
-    //     }
-    // }
-
     pub fn init(&mut self, driver: &Driver, layer_guid: u128) -> Result<(), String> {
-        self.lock = RwSpinLock::default();
         let filter_engine_handle: HANDLE;
         match ffi::create_filter_engine() {
             Ok(handle) => {
@@ -58,94 +48,81 @@ impl FilterEngine {
     }
 
     pub fn commit(&mut self, mut callouts: Vec<Callout>) -> Result<(), String> {
-        // let _guard = self.lock.write_lock();
-        if let Err(code) = ffi::filter_engine_transaction_begin(self.filter_engine_handle, 0) {
-            return Err(format!(
-                "filter-engine: failed to begin transaction: {}",
-                code
-            ));
-        }
+        {
+            // Begin write trasacction. This is also a lock guard.
+            let mut transaction = match Transaction::begin_write(self) {
+                Ok(transaction) => transaction,
+                Err(err) => {
+                    return Err(err);
+                }
+            };
 
-        if let Err(err) = self.register_sublayer() {
-            _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
-            return Err(format!("filter_engine: {}", err));
-        }
+            if let Err(err) = self.register_sublayer() {
+                return Err(format!("filter_engine: {}", err));
+            }
 
-        dbg!("Callouts count: {}", callouts.len());
-        // Register all callouts
-        for (i, callout) in callouts.iter_mut().enumerate() {
-            callout.index = i as u64;
+            dbg!("Callouts count: {}", callouts.len());
+            // Register all callouts
+            for (i, callout) in callouts.iter_mut().enumerate() {
+                callout.index = i as u64;
 
-            if let Err(err) = callout.register_callout(self, catch_all_callout) {
-                // This will destroy the callout structs.
-                _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
+                if let Err(err) = callout.register_callout(self, catch_all_callout) {
+                    // This will destroy the callout structs.
+                    return Err(err);
+                }
+                if let Err(err) = callout.register_filter(self) {
+                    // This will destory the callout structs.
+                    return Err(err);
+                }
+                dbg!(
+                    "registerging callout: {} -> {}",
+                    callout.name,
+                    callout.filter_id
+                );
+            }
+            unsafe { CALLOUTS.replace(callouts) };
+
+            if let Err(err) = transaction.commit() {
                 return Err(err);
             }
-            if let Err(err) = callout.register_filter(self) {
-                // This will destory the callout structs.
-                _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
-                return Err(err);
-            }
-            dbg!(
-                "registerging callout: {} -> {}",
-                callout.name,
-                callout.filter_id
-            );
         }
-        unsafe { CALLOUTS.replace(callouts) };
-
-        if let Err(code) = ffi::filter_engine_transaction_commit(self.filter_engine_handle) {
-            return Err(format!(
-                "filter-engine: failed to commit transaction: {}",
-                code
-            ));
-        }
-
-        // TODO: auto abort on error
-
         self.commited = true;
         info!("transaction commited");
 
         return Ok(());
     }
 
-    pub(crate) fn reset_callout_filter(&self, _callout_index: usize) -> Result<(), String> {
-        let _guard = self.lock.write_lock();
-        if let Err(code) = ffi::filter_engine_transaction_begin(self.filter_engine_handle, 0) {
-            return Err(format!(
-                "filter-engine: failed to begin transaction: {}",
-                code
-            ));
+    pub(crate) fn reset_callout_filter(&self, callout_index: usize) -> Result<(), String> {
+        // Begin write trasacction. This is also a lock guard.
+        let mut transaction = match Transaction::begin_write(self) {
+            Ok(transaction) => transaction,
+            Err(err) => {
+                return Err(err);
+            }
+        };
+        unsafe {
+            if let Some(callouts) = CALLOUTS.as_mut() {
+                if let Some(callout) = callouts.get_mut(callout_index) {
+                    if callout.filter_id != 0 {
+                        // Remove old filter.
+                        if let Err(err) =
+                            ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
+                        {
+                            return Err(format!("filter_engine: {}", err));
+                        }
+                        callout.filter_id = 0;
+                    }
+                    // Create new filter.
+                    if let Err(err) = callout.register_filter(self) {
+                        return Err(format!("filter_engine: {}", err));
+                    }
+                }
+            }
         }
-        _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
-        // unsafe {
-        // if let Some(_callouts) = CALLOUTS.as_ref() {
-        // if let Some(callout) = callouts.get_mut(callout_index) {
-        // if callout.filter_id != 0 {
-        //     // Remove old filter.
-        //     if let Err(err) =
-        //         ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
-        //     {
-        //         // _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
-        //         return Err(format!("filter_engine: {}", err));
-        //     }
-        // callout.filter_id = 0;
-        // }
-        // }
-        // // Create new filter.
-        // if let Err(err) = callout.register_filter(self) {
-        //     _ = ffi::filter_engine_transaction_abort(self.filter_engine_handle);
-        //     return Err(format!("filter_engine: {}", err));
-        // }
-        // }
-        // }
         // Commit transaction.
-        // if let Err(code) = ffi::filter_engine_transaction_commit(self.filter_engine_handle) {
-        //     return Err(format!(
-        //         "filter-engine: failed to commit transaction: {}",
-        //         code
-        //     ));
-        // }
+        if let Err(err) = transaction.commit() {
+            return Err(err);
+        }
         return Ok(());
     }
 
@@ -174,10 +151,12 @@ impl Drop for FilterEngine {
                         if let Err(code) = ffi::unregister_callout(ele.id) {
                             dbg!("faild to unregister callout: {}", code);
                         }
-                        if let Err(code) =
-                            ffi::unregister_filter(self.filter_engine_handle, ele.filter_id)
-                        {
-                            dbg!("failed to unregister filter: {}", code)
+                        if ele.filter_id != 0 {
+                            if let Err(code) =
+                                ffi::unregister_filter(self.filter_engine_handle, ele.filter_id)
+                            {
+                                dbg!("failed to unregister filter: {}", code)
+                            }
                         }
                     }
                 }

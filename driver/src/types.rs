@@ -98,8 +98,22 @@ impl PacketInfo {
                     ..Default::default()
                 }
             }
+            Layer::FwpmLayerAleConnectRedirectV4 => {
+                type Field = layer::FwpsFieldsAleConnectRedirectV4;
+                Self {
+                    direction: 0,
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
+                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
+                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    remote_port: data.get_value_u16(Field::IpRemotePort as usize),
+                    ..Default::default()
+                }
+            }
             _ => {
-                err!("unsupported layer");
+                let guid = data.layer.get_guid();
+                err!("unsupported layer: {:#x}", guid.data1);
                 Self::default()
             }
         }
@@ -112,19 +126,11 @@ impl Debug for PacketInfo {
         let remote_ip: [u8; 4] = self.remote_ip[0].to_be_bytes();
         let local = format!(
             "{}.{}.{}.{}:{}",
-            local_ip[0],
-            local_ip[1],
-            local_ip[2],
-            local_ip[3],
-            u16::to_be(self.local_port)
+            local_ip[0], local_ip[1], local_ip[2], local_ip[3], self.local_port
         );
         let remote = format!(
             "{}.{}.{}.{}:{}",
-            remote_ip[0],
-            remote_ip[1],
-            remote_ip[2],
-            remote_ip[3],
-            u16::to_be(self.remote_port)
+            remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], self.remote_port
         );
         f.debug_struct("Key")
             .field("local", &local)

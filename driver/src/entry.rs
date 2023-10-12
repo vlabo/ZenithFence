@@ -1,4 +1,5 @@
 use crate::array_holder::ArrayHolder;
+use crate::connection_cache::ConnectionAction;
 use crate::connection_cache::ConnectionCache;
 use crate::id_cache::IdCache;
 use crate::protocol::{self, CommandUnion};
@@ -89,75 +90,132 @@ pub extern "system" fn DriverEntry(
                 err!("{}", err);
             }
 
-            let callouts = vec![Callout::new(
-                "AleLayerOutbound",
-                "A Test ALE layer for outbund connections",
-                0x58545073_f893_454c_bbea_a57bc964f46d,
-                Layer::FwpmLayerAleAuthConnectV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                |mut data, device_object| {
-                    let Ok(context) = interface::get_device_context_from_device_object::<
-                        DeviceContext,
-                    >(device_object) else {
-                        return;
-                    };
-                    let mut packet = PacketInfo::from_callout_data(&data);
-                    if let Some(verdict) = context.connection_cache.get_connection_verdict(&packet)
-                    {
-                        // We already have a verdict for it.
-                        match verdict {
-                            Verdict::Accept => {
-                                data.permit();
-                            }
-                            Verdict::Block => {
-                                data.block();
-                            }
-                            Verdict::Drop => {
-                                data.block();
-                            }
-                            Verdict::RerouteToNameserver => {
-                                // TODO: forward to redirect.
-                                data.block();
-                            }
-                            Verdict::RerouteToTunnel => {
-                                // TODO: forward to redirect.
-                                data.block();
-                            }
-                            Verdict::Failed => {
-                                data.block();
-                            }
-                            _ => {}
-                        }
-                    } else if data.get_value_u32(FwpsFieldsAleAuthConnectV4::Flags as usize)
-                        & FWP_CONDITION_FLAG_IS_REAUTHORIZE
-                        == 0
-                    {
-                        // Send request to userspace.
-                        let promise = match data.pend_operation() {
-                            Ok(cc) => cc,
-                            Err(error) => {
-                                err!("failed to postpone decision: {}", error);
-                                data.block();
-                                return;
-                            }
+            let callouts = vec![
+                Callout::new(
+                    "AleLayerOutbound",
+                    "A Test ALE layer for outbund connections",
+                    0x58545073_f893_454c_bbea_a57bc964f46d,
+                    Layer::FwpmLayerAleAuthConnectV4,
+                    consts::FWP_ACTION_CALLOUT_TERMINATING,
+                    |mut data, device_object| {
+                        let Ok(context) = interface::get_device_context_from_device_object::<
+                            DeviceContext,
+                        >(device_object) else {
+                            return;
                         };
-                        let packet_clone = packet.clone();
+                        let mut packet = PacketInfo::from_callout_data(&data);
+                        dbg!("Connect callout: {:?}", packet);
+                        if let Some(action) =
+                            context.connection_cache.get_connection_action(&packet)
+                        {
+                            match action {
+                                // We already have a verdict for it.
+                                ConnectionAction::Verdict(verdict) => match verdict {
+                                    Verdict::Accept => {
+                                        data.permit();
+                                    }
+                                    Verdict::Block => {
+                                        data.block();
+                                    }
+                                    Verdict::Drop => {
+                                        data.block_and_absorb();
+                                    }
+                                    Verdict::Failed => {
+                                        data.block();
+                                    }
+                                    _ => {}
+                                },
+                                _ => {}
+                            }
+                        } else if data.get_value_u32(FwpsFieldsAleAuthConnectV4::Flags as usize)
+                            & FWP_CONDITION_FLAG_IS_REAUTHORIZE
+                            == 0
+                        {
+                            // Send request to userspace.
+                            let promise = match data.pend_operation() {
+                                Ok(cc) => cc,
+                                Err(error) => {
+                                    err!("failed to postpone decision: {}", error);
+                                    data.block();
+                                    return;
+                                }
+                            };
+                            let packet_clone = packet.clone();
 
-                        packet.classify_promise = Some(promise);
-                        let id = context.packet_cache.push(packet);
-                        let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
-                    } else {
-                        // Send request to userspace.
-                        // let promise = data.pend_classification();
-                        // let packet_clone = packet.clone();
+                            packet.classify_promise = Some(promise);
+                            let id = context.packet_cache.push(packet);
+                            let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                        } else {
+                            // Send request to userspace.
+                            let promise = data.pend_classification();
+                            let packet_clone = packet.clone();
 
-                        // packet.classify_promise = Some(promise);
-                        // let id = context.packet_cache.push(packet);
-                        // let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
-                        data.permit();
-                    }
-                },
-            )];
+                            packet.classify_promise = Some(promise);
+                            let id = context.packet_cache.push(packet);
+                            let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                            data.block_and_absorb();
+                        }
+                    },
+                ),
+                // Callout::new(
+                //     "AleRedirect",
+                //     "Redirects connections",
+                //     0xf72e1faf_4f8b_496a_ac62_1f3286edde44,
+                //     Layer::FwpmLayerAleConnectRedirectV4,
+                //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+                //     |mut data, device_object| {
+                //         let Ok(context) = interface::get_device_context_from_device_object::<
+                //             DeviceContext,
+                //         >(device_object) else {
+                //             return;
+                //         };
+                //         let packet = PacketInfo::from_callout_data(&data);
+                //         dbg!("Redirect callout: {:?}", packet);
+                //         if let Some(action) =
+                //             context.connection_cache.get_connection_action(&packet)
+                //         {
+                //             match action {
+                //                 ConnectionAction::RedirectIPv4(ip, port) => {
+                //                     info!("Reddirecting -> {:?}:{}", ip, port);
+                //                     if let Err(err) = data.redirect(&[9, 9, 9, 9], port) {
+                //                         err!("failed to redirect connection: {}", err)
+                //                     }
+                //                 }
+                //                 _ => {}
+                //             }
+                //         } else {
+                //             dbg!("Noting to redirect");
+                //         }
+                //     },
+                // ),
+                // Callout::new(
+                //     "AleRedirectv6",
+                //     "Redirects connections",
+                //     0xb3b97159_922f_4c22_a5a5_023be433ebcf,
+                //     Layer::FwpmLayerAleConnectRedirectV6,
+                //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+                //     |mut data, device_object| {
+                //         let Ok(context) = interface::get_device_context_from_device_object::<
+                //             DeviceContext,
+                //         >(device_object) else {
+                //             return;
+                //         };
+                //         let packet = PacketInfo::from_callout_data(&data);
+                //         if let Some(action) =
+                //             context.connection_cache.get_connection_action(&packet)
+                //         {
+                //             match action {
+                //                 ConnectionAction::RedirectIPv6(ip, port) => {
+                //                     if let Err(err) = data.redirect(&ip, port) {
+                //                         err!("failed to redirect connection: {}", err)
+                //                     }
+                //                 }
+                //                 _ => {}
+                //             }
+                //         }
+                //     },
+                // ),
+            ];
 
             if let Err(err) = context.filter_engine.commit(callouts) {
                 err!("{}", err);
@@ -280,11 +338,29 @@ unsafe extern "system" fn driver_write(
                         info!("Verdict response: {:?} -> {}", packet, verdict);
                         let completion_promise = device_context
                             .connection_cache
-                            .add_connection(packet, verdict);
+                            .add_connection(packet, ConnectionAction::Verdict(verdict));
                         if let Some(mut promise) = completion_promise {
                             if let Err(err) = promise.complete(&device_context.filter_engine) {
                                 err!("error compliting connection decision: {}", err);
                             }
+                        }
+                    }
+                } else {
+                    err!("Invalid id: {}", response.id());
+                }
+            }
+            CommandUnion::Redirect => {
+                let response = command.command_as_redirect().unwrap();
+                if let Some(packet) = device_context.packet_cache.pop_id(response.id()) {
+                    let remote_ip = response.remote_ip().unwrap().bytes().to_vec();
+                    let port = response.remote_port();
+                    info!("Redirect connection: {:?}", packet);
+                    let completion_promise = device_context
+                        .connection_cache
+                        .add_connection(packet, ConnectionAction::RedirectIPv4(remote_ip, port));
+                    if let Some(mut promise) = completion_promise {
+                        if let Err(err) = promise.complete(&device_context.filter_engine) {
+                            err!("error compliting connection decision: {}", err);
                         }
                     }
                 } else {

@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	// "net"
 	"os"
 
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
@@ -63,7 +64,16 @@ func main() {
 					case Protocol.InfoUnionPacket:
 						{
 							packet := kext_interface.ReadPacket(info)
-							log.Printf("connection from: %s", packet.ProcessPath())
+							path := packet.ProcessPath()
+
+							log.Printf("connection from: %s %d", path, *packet.ProcessId())
+							// if packet.RemotePort() == 53 {
+							// 	log.Println("Redirect dns")
+							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept))) //.GetRedirectResponse(packet.Id(), net.IPv4(9, 9, 9, 9), 53))
+							// } else {
+							// 	log.Println("Allow connection")
+							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
+							// }
 							file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
 						}
 					case Protocol.InfoUnionLogLine:

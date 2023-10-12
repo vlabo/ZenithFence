@@ -34,10 +34,18 @@ table VerdictResponse {
 	verdict: int8;
 }
 
+table RedirectResponse {
+	id: uint64;
+	ipv6: bool;
+	remote_ip: [uint8];
+	remote_port: uint16;
+}
+
 table Shutdown {}
 
 union CommandUnion {
 	Response: VerdictResponse,
+	Redirect: RedirectResponse,
 	Shutdown: Shutdown,
 }
 

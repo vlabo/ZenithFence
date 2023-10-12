@@ -111,8 +111,11 @@ pub enum Layer {
     FwpmLayerAleFlowEstablishedV4Discard,
     FwpmLayerAleFlowEstablishedV6,
     FwpmLayerAleFlowEstablishedV6Discard,
+    FwpmLayerAleConnectRedirectV4,
+    FwpmLayerAleConnectRedirectV6,
+    FwpmLayerAleBindRedirectV4,
+    FwpmLayerAleBindRedirectV6,
 }
-
 impl Layer {
     pub fn get_guid(&self) -> GUID {
         match self {
@@ -275,6 +278,18 @@ impl Layer {
             }
             Layer::FwpmLayerAleFlowEstablishedV6Discard => {
                 GUID::from_u128(0x46928636_bbca_4b76_941d_0fa7f5d7d372)
+            }
+            Layer::FwpmLayerAleConnectRedirectV4 => {
+                GUID::from_u128(0xc6e63c8c_b784_4562_aa7d_0a67cfcaf9a3)
+            }
+            Layer::FwpmLayerAleConnectRedirectV6 => {
+                GUID::from_u128(0x587e54a7_8046_42ba_a0aa_b716250fc7fd)
+            }
+            Layer::FwpmLayerAleBindRedirectV4 => {
+                GUID::from_u128(0x66978cad_c704_42ac_86ac_7c1a231bd253)
+            }
+            Layer::FwpmLayerAleBindRedirectV6 => {
+                GUID::from_u128(0xbef02c9c_606b_4536_8c26_1c2fc7b631d4)
             }
         }
     }

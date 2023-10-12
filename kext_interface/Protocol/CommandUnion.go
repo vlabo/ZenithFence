@@ -9,18 +9,21 @@ type CommandUnion byte
 const (
 	CommandUnionNONE     CommandUnion = 0
 	CommandUnionResponse CommandUnion = 1
-	CommandUnionShutdown CommandUnion = 2
+	CommandUnionRedirect CommandUnion = 2
+	CommandUnionShutdown CommandUnion = 3
 )
 
 var EnumNamesCommandUnion = map[CommandUnion]string{
 	CommandUnionNONE:     "NONE",
 	CommandUnionResponse: "Response",
+	CommandUnionRedirect: "Redirect",
 	CommandUnionShutdown: "Shutdown",
 }
 
 var EnumValuesCommandUnion = map[string]CommandUnion{
 	"NONE":     CommandUnionNONE,
 	"Response": CommandUnionResponse,
+	"Redirect": CommandUnionRedirect,
 	"Shutdown": CommandUnionShutdown,
 }
 

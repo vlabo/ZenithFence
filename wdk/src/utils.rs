@@ -1,12 +1,12 @@
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
 
 use crate::filter_engine::classify::ClassifyOut;
-use crate::filter_engine::ffi::{
-    self, FwpsAcquireClassifyHandle0, FwpsCompleteClassify0, FwpsPendClassify0, FwpsPendOperation0,
-};
+use crate::filter_engine::connect_request::FwpsConnectRequest0;
+use crate::filter_engine::ffi::{self, FwpsPendOperation0};
 use crate::filter_engine::layer::{Layer, Value};
 use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
-use crate::filter_engine::{self, FilterEngine};
+use crate::filter_engine::FilterEngine;
 use crate::interface;
 use alloc::string::{String, ToString};
 use ntstatus::ntstatus::NtStatus;
@@ -15,13 +15,23 @@ use windows_sys::Win32::Foundation::{
     HANDLE, NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT,
 };
 
+pub fn check_ntstatus(status: i32) -> Result<(), String> {
+    let Some(status) = NtStatus::from_i32(status) else {
+        return Err("Unknown result".to_string());
+    };
+
+    if status != NtStatus::STATUS_SUCCESS {
+        return Err(status.to_string());
+    }
+    return Ok(());
+}
+
 pub struct Driver {
     // driver_handle: HANDLE,
     _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
     device_object: *mut DEVICE_OBJECT,
 }
-
 unsafe impl Sync for Driver {}
 
 pub type UnloadFnType = unsafe extern "system" fn(driverobject: *const DRIVER_OBJECT);
@@ -318,8 +328,51 @@ impl<'a> CallData<'a> {
     pub fn block(&mut self) {
         unsafe {
             (*self.classify_out).action_block();
-            // (*self.classify_out).set_absorb();
             (*self.classify_out).clear_write_flag();
+        }
+    }
+
+    pub fn block_and_absorb(&mut self) {
+        unsafe {
+            (*self.classify_out).action_block();
+            (*self.classify_out).set_absorb();
+            (*self.classify_out).clear_write_flag();
+        }
+    }
+
+    pub fn redirect(&mut self, remote_ip: &[u8], remote_port: u16) -> Result<(), String> {
+        unsafe {
+            let mut classify_handle: u64 = 0;
+            let status =
+                ffi::FwpsAcquireClassifyHandle0(self.classify_context, 0, &mut classify_handle);
+            if let Err(status) = check_ntstatus(status) {
+                return Err(status);
+            };
+
+            let mut layer_data: *mut FwpsConnectRequest0 = core::ptr::null_mut();
+
+            let status = ffi::FwpsAcquireWritableLayerDataPointer0(
+                classify_handle,
+                self.filter_id,
+                0,
+                core::ptr::addr_of_mut!(layer_data) as _,
+                self.classify_out,
+            );
+
+            if let Err(err) = check_ntstatus(status) {
+                // TODO: use guard for releasing the handle.
+                ffi::FwpsReleaseClassifyHandle0(classify_handle);
+                return Err(err);
+            }
+
+            if let Some(data) = layer_data.as_mut() {
+                data.set_remote(remote_ip, remote_port);
+            }
+
+            ffi::FwpsApplyModifiedLayerData0(classify_handle, layer_data as _, 0);
+            ffi::FwpsReleaseClassifyHandle0(classify_handle);
+
+            return Ok(());
         }
     }
 }
