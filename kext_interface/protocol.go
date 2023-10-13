@@ -43,8 +43,8 @@ func ParseInfo(data []byte) (*Info, error) {
 }
 
 type Verdict struct {
-	id      uint64
-	verdict uint8
+	Id      uint64 `json:"id"`
+	Verdict uint8  `json:"verdict"`
 }
 
 type Command struct {
@@ -57,7 +57,7 @@ func BuildShutdown() Command {
 }
 
 func BuildVerdict(id uint64, verdict uint8) Command {
-	return Command{Verdict: &Verdict{id: id, verdict: verdict}}
+	return Command{Verdict: &Verdict{Id: id, Verdict: verdict}}
 }
 
 func WriteCommand(writer io.Writer, command Command) {

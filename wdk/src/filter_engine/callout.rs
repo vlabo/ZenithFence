@@ -1,5 +1,5 @@
-use super::{ffi, layer::Layer};
-use crate::{filter_engine::FilterEngine, utils::CallData};
+use super::{callout_data::CalloutData, ffi, layer::Layer};
+use crate::filter_engine::FilterEngine;
 use alloc::{borrow::ToOwned, format, string::String};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
@@ -14,7 +14,7 @@ pub struct Callout {
     pub(crate) registerd: bool,
     pub(crate) filter_id: u64,
     pub(crate) device_object: *mut DEVICE_OBJECT,
-    pub(crate) callout_fn: fn(CallData, &mut DEVICE_OBJECT),
+    pub(crate) callout_fn: fn(CalloutData, &mut DEVICE_OBJECT),
 }
 
 impl Callout {
@@ -24,7 +24,7 @@ impl Callout {
         guid: u128,
         layer: Layer,
         action: u32,
-        callout_fn: fn(CallData, &mut DEVICE_OBJECT),
+        callout_fn: fn(CalloutData, &mut DEVICE_OBJECT),
     ) -> Self {
         Self {
             id: 0,

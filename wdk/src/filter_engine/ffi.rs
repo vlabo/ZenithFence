@@ -1,9 +1,9 @@
 use crate::alloc::borrow::ToOwned;
+use crate::utils::check_ntstatus;
 use alloc::string::String;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::ptr;
-use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
 
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
@@ -85,16 +85,6 @@ struct FWPS_CALLOUT3 {
     flowDeleteFn: Option<FwpsCalloutFlowDeleteNotifyFn>,
 }
 
-#[derive(Debug, onlyerror::Error)]
-pub enum Error {
-    #[error("invalid string argument: {0}")]
-    InvalidString(String),
-    #[error("ntstatus: {0}")]
-    NTStatus(NtStatus),
-    #[error("unknown result")]
-    UnknownResult,
-}
-
 #[link(name = "Fwpkclnt", kind = "static")]
 #[link(name = "Fwpuclnt", kind = "static")]
 extern "C" {
@@ -148,7 +138,7 @@ extern "C" {
     );
 }
 
-pub(crate) fn create_filter_engine() -> Result<HANDLE, Error> {
+pub(crate) fn create_filter_engine() -> Result<HANDLE, String> {
     unsafe {
         let mut handle: HANDLE = INVALID_HANDLE_VALUE;
         let mut wdf_session: FWPM_SESSION0 = MaybeUninit::zeroed().assume_init();
@@ -160,14 +150,9 @@ pub(crate) fn create_filter_engine() -> Result<HANDLE, Error> {
             &wdf_session,
             &mut handle,
         );
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(handle);
-        }
+        check_ntstatus(status as i32)?;
 
-        return Err(Error::NTStatus(status));
+        return Ok(handle);
     }
 }
 
@@ -176,12 +161,12 @@ pub(crate) fn register_sublayer(
     name: &str,
     description: &str,
     guid: u128,
-) -> Result<(), Error> {
+) -> Result<(), String> {
     let Ok(name) = U16CString::from_str(name) else {
-        return Err(Error::InvalidString("name".to_owned()));
+        return Err("invalid argument name".to_owned());
     };
     let Ok(description) = U16CString::from_str(description) else {
-        return Err(Error::InvalidString("description".to_owned()));
+        return Err("invalid argument description".to_owned());
     };
 
     unsafe {
@@ -193,29 +178,18 @@ pub(crate) fn register_sublayer(
         sublayer.weight = 0xFFFF;
 
         let status = FwpmSubLayerAdd0(filter_engine_handle, &sublayer, core::ptr::null_mut());
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
+        check_ntstatus(status as i32)?;
 
-        return Err(Error::NTStatus(status));
+        return Ok(());
     }
 }
 
-pub(crate) fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(), Error> {
+pub(crate) fn unregister_sublayer(filter_engine_handle: HANDLE, guid: u128) -> Result<(), String> {
     let guid = GUID::from_u128(guid);
     unsafe {
         let status = FwpmSubLayerDeleteByKey0(filter_engine_handle, ptr::addr_of!(guid));
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
@@ -237,7 +211,7 @@ pub(crate) fn register_callout(
     guid: u128,
     layer: Layer,
     callout_fn: FwpsCalloutClassifyFn,
-) -> Result<u32, Error> {
+) -> Result<u32, String> {
     let s_callout = FWPS_CALLOUT3 {
         calloutKey: GUID::from_u128(guid),
         flags: 0,
@@ -250,13 +224,7 @@ pub(crate) fn register_callout(
         let mut callout_id: u32 = 0;
         let status = FwpsCalloutRegister1(device_object as _, &s_callout, &mut callout_id);
 
-        let Some(status) = NtStatus::from_i32(status) else {
-            return Err(Error::UnknownResult);
-        };
-
-        if status != NtStatus::STATUS_SUCCESS {
-            return Err(Error::NTStatus(status));
-        }
+        check_ntstatus(status)?;
 
         if let Err(err) = callout_add(filter_engine_handle, guid, layer, name, description) {
             return Err(err);
@@ -272,12 +240,12 @@ fn callout_add(
     layer: Layer,
     name: &str,
     description: &str,
-) -> Result<(), Error> {
+) -> Result<(), String> {
     let Ok(name) = U16CString::from_str(name) else {
-        return Err(Error::InvalidString("name".to_owned()));
+        return Err("invalid argument name".to_owned());
     };
     let Ok(description) = U16CString::from_str(description) else {
-        return Err(Error::InvalidString("description".to_owned()));
+        return Err("invalid argument description".to_owned());
     };
     let display_data = FWPM_DISPLAY_DATA0 {
         name: name.as_ptr() as _,
@@ -296,29 +264,17 @@ fn callout_add(
             core::ptr::null_mut(),
             core::ptr::null_mut(),
         );
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status != NtStatus::STATUS_SUCCESS {
-            return Err(Error::NTStatus(status));
-        }
+        check_ntstatus(status as i32)?;
     };
     return Ok(());
 }
 
-pub(crate) fn unregister_callout(callout_id: u32) -> Result<(), Error> {
+pub(crate) fn unregister_callout(callout_id: u32) -> Result<(), String> {
     unsafe {
         let status = FwpsCalloutUnregisterById0(callout_id);
 
-        let Some(status) = NtStatus::from_i32(status) else {
-            return Err(Error::UnknownResult);
-        };
-
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
@@ -331,12 +287,12 @@ pub(crate) fn register_filter(
     layer: Layer,
     action: u32,
     context: u64,
-) -> Result<u64, Error> {
+) -> Result<u64, String> {
     let Ok(name) = U16CString::from_str(name) else {
-        return Err(Error::InvalidString("name".to_owned()));
+        return Err("invalid argument name".to_owned());
     };
     let Ok(description) = U16CString::from_str(description) else {
-        return Err(Error::InvalidString("description".to_owned()));
+        return Err("invalid argument description".to_owned());
     };
     let mut filter_id: u64 = 0;
     unsafe {
@@ -359,82 +315,54 @@ pub(crate) fn register_filter(
             &mut filter_id,
         );
 
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(filter_id);
-        }
+        check_ntstatus(status as i32)?;
 
-        return Err(Error::NTStatus(status));
+        return Ok(filter_id);
     }
 }
 
-pub(crate) fn unregister_filter(filter_engine_handle: HANDLE, filter_id: u64) -> Result<(), Error> {
+pub(crate) fn unregister_filter(
+    filter_engine_handle: HANDLE,
+    filter_id: u64,
+) -> Result<(), String> {
     unsafe {
         let status = FwpmFilterDeleteById0(filter_engine_handle, filter_id);
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
-pub(crate) fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), String> {
     unsafe {
         let status = FwpmEngineClose0(filter_engine_handle);
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
 pub(crate) fn filter_engine_transaction_begin(
     filter_engine_handle: HANDLE,
     flags: u32,
-) -> Result<(), Error> {
+) -> Result<(), String> {
     unsafe {
         let status = FwpmTransactionBegin0(filter_engine_handle, flags);
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
-pub(crate) fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_transaction_commit(filter_engine_handle: HANDLE) -> Result<(), String> {
     unsafe {
         let status = FwpmTransactionCommit0(filter_engine_handle);
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(());
-        }
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }
 
-pub(crate) fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<(), Error> {
+pub(crate) fn filter_engine_transaction_abort(filter_engine_handle: HANDLE) -> Result<(), String> {
     unsafe {
         let status = FwpmTransactionAbort0(filter_engine_handle);
-        let Some(status) = NtStatus::from_u32(status) else {
-            return Err(Error::UnknownResult);
-        };
-        if let NtStatus::STATUS_SUCCESS = status {
-            return Ok(());
-        }
-        return Err(Error::NTStatus(status));
+        check_ntstatus(status as i32)?;
+        return Ok(());
     }
 }

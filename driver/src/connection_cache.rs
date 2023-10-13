@@ -1,7 +1,8 @@
 use crate::types::{PacketInfo, Verdict};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use wdk::{rw_spin_lock::RwSpinLock, utils::ClassifyPromise};
+use wdk::filter_engine::callout_data::ClassifyPromise;
+use wdk::rw_spin_lock::RwSpinLock;
 
 #[derive(Clone)]
 #[allow(dead_code)]

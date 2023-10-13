@@ -1,5 +1,7 @@
 use core::ffi::c_void;
 
+use alloc::string::String;
+use widestring::U16CString;
 use windows_sys::Win32::{
     Foundation::HANDLE,
     NetworkManagement::{
@@ -94,12 +96,16 @@ impl FwpsIncomingMetadataValues {
         return None;
     }
 
-    pub(crate) unsafe fn get_process_path(&self) -> Option<&[u8]> {
+    pub(crate) unsafe fn get_process_path(&self) -> Option<String> {
         if self.has_field(FWPS_METADATA_FIELD_PROCESS_PATH) {
-            return Some(core::slice::from_raw_parts(
-                (*self.process_path).data,
-                (*self.process_path).size as usize,
-            ));
+            if let Ok(path16) = U16CString::from_ptr(
+                core::mem::transmute((*self.process_path).data),
+                (*self.process_path).size as usize / 2,
+            ) {
+                if let Ok(path) = path16.to_string() {
+                    return Some(path);
+                }
+            }
         }
 
         return None;

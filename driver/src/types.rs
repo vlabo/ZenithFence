@@ -4,8 +4,10 @@ use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use wdk::{
     err,
-    filter_engine::layer::{self, Layer},
-    utils::{CallData, ClassifyPromise},
+    filter_engine::{
+        callout_data::{CalloutData, ClassifyPromise},
+        layer::{self, Layer},
+    },
 };
 
 #[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
@@ -44,23 +46,27 @@ pub struct PacketInfo {
     pub ip_v6: bool,
     pub protocol: u8,
     pub flags: u8,
-    pub local_ip: [u32; 4],
-    pub remote_ip: [u32; 4],
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
     pub local_port: u16,
     pub remote_port: u16,
     pub classify_promise: Option<ClassifyPromise>,
 }
 
 impl PacketInfo {
-    pub fn from_callout_data(data: &CallData) -> Self {
+    pub fn from_callout_data(data: &CalloutData) -> Self {
         match data.layer {
             Layer::FwpmLayerInboundIppacketV4 => {
                 type Field = layer::FwpsFieldsInboundIppacketV4;
                 Self {
                     direction: 1,
                     ip_v6: false,
-                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
-                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_le_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_le_bytes(),
                     ..Default::default()
                 }
             }
@@ -72,8 +78,12 @@ impl PacketInfo {
                     direction: 0,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
-                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
-                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_le_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_le_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     ..Default::default()
@@ -87,8 +97,12 @@ impl PacketInfo {
                     direction: 1,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
-                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
-                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_le_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_le_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     ..Default::default()
@@ -100,8 +114,12 @@ impl PacketInfo {
                     direction: 0,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
-                    local_ip: [data.get_value_u32(Field::IpLocalAddress as usize), 0, 0, 0],
-                    remote_ip: [data.get_value_u32(Field::IpRemoteAddress as usize), 0, 0, 0],
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_le_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_le_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     ..Default::default()
@@ -118,15 +136,17 @@ impl PacketInfo {
 
 impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let local_ip: [u8; 4] = self.local_ip[0].to_be_bytes();
-        let remote_ip: [u8; 4] = self.remote_ip[0].to_be_bytes();
         let local = format!(
             "{}.{}.{}.{}:{}",
-            local_ip[0], local_ip[1], local_ip[2], local_ip[3], self.local_port
+            self.local_ip[3], self.local_ip[2], self.local_ip[1], self.local_ip[0], self.local_port
         );
         let remote = format!(
             "{}.{}.{}.{}:{}",
-            remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], self.remote_port
+            self.remote_ip[3],
+            self.remote_ip[2],
+            self.remote_ip[1],
+            self.remote_ip[0],
+            self.remote_port
         );
         f.debug_struct("Key")
             .field("local", &local)

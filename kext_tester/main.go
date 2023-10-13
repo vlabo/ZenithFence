@@ -62,7 +62,9 @@ func main() {
 					switch {
 					case info.Connection != nil:
 						{
-							// connection := info.Connection
+							connection := info.Connection
+							kext_interface.WriteCommand(file, kext_interface.BuildVerdict(*connection.ProcessId, uint8(VerdictAccept)))
+
 							// path := *connection.ProcessPath
 
 							// log.Printf("connection from: %d", *connection.ProcessId)

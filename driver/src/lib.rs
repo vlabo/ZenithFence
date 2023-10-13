@@ -5,7 +5,9 @@
 extern crate alloc;
 
 mod array_holder;
+mod callouts;
 mod connection_cache;
+mod device;
 mod entry;
 mod id_cache;
 mod protocol;
@@ -19,6 +21,9 @@ use core::panic::PanicInfo;
 // Declaration of the global memory allocator
 #[global_allocator]
 static HEAP: WindowsAllocator = WindowsAllocator {};
+
+#[no_mangle]
+pub extern "system" fn _DllMainCRTStartup() {}
 
 // macro converts struct S to struct H
 

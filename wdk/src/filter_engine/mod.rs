@@ -1,8 +1,8 @@
 use core::ffi::c_void;
 
 use crate::alloc::borrow::ToOwned;
+use crate::driver::Driver;
 use crate::filter_engine::transaction::Transaction;
-use crate::utils::{CallData, Driver};
 use crate::{dbg, info};
 use alloc::string::String;
 use alloc::{format, vec::Vec};
@@ -10,12 +10,14 @@ use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
 use self::callout::Callout;
+use self::callout_data::CalloutData;
 use self::classify::ClassifyOut;
 use self::ffi::FWPS_FILTER2;
 use self::layer::FwpsIncomingValues;
 use self::metadata::FwpsIncomingMetadataValues;
 
 pub mod callout;
+pub mod callout_data;
 pub(crate) mod classify;
 pub mod connect_request;
 #[allow(dead_code)]
@@ -197,7 +199,7 @@ unsafe extern "C" fn catch_all_callout(
                 (*fixed_values).incoming_value_array,
                 (*fixed_values).value_count as usize,
             );
-            let data = CallData {
+            let data = CalloutData {
                 callout_index: filter.context as usize,
                 layer: callout.layer,
                 values: array,

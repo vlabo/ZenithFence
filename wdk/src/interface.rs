@@ -1,11 +1,9 @@
 use core::ffi::c_void;
 
-use crate::alloc::borrow::ToOwned;
-use crate::utils::Driver;
+use crate::{alloc::borrow::ToOwned, driver::Driver, utils::check_ntstatus};
 use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::String;
-use ntstatus::ntstatus::NtStatus;
 use widestring::U16CString;
 use windows_sys::{
     core::PCWSTR,
@@ -15,15 +13,15 @@ use windows_sys::{
     },
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, UNICODE_STRING},
 };
-#[derive(Debug, onlyerror::Error)]
-pub enum Error {
-    #[error("invalid string argument: {0}")]
-    InvalidString(String),
-    #[error("ntstatus: {0}")]
-    NTStatus(NtStatus),
-    #[error("unknown result")]
-    UnknownResult,
-}
+// #[derive(Debug, onlyerror::Error)]
+// pub enum Error {
+//     #[error("invalid string argument: {0}")]
+//     InvalidString(String),
+//     #[error("ntstatus: {0}")]
+//     NTStatus(NtStatus),
+//     #[error("unknown result")]
+//     UnknownResult,
+// }
 
 #[link(name = "WdfDriverEntry", kind = "static")]
 #[link(name = "WdfLdr", kind = "static")]
@@ -152,7 +150,7 @@ pub fn init_driver_object(
     registry_path: *mut UNICODE_STRING,
     driver_name: &str,
     mut object_attributes: WdfObjectAttributes,
-) -> Result<Driver, Error> {
+) -> Result<Driver, String> {
     let win_driver_path = format!("\\Device\\{}", driver_name);
     let dos_driver_path = format!("\\??\\{}", driver_name);
 
@@ -160,17 +158,11 @@ pub fn init_driver_object(
     let mut wdf_device_handle = INVALID_HANDLE_VALUE;
 
     let Ok(win_driver) = U16CString::from_str(win_driver_path) else {
-        return Err(Error::InvalidString("win_driver_path".to_owned()));
+        return Err("Invalid argument win_driver_path".to_owned());
     };
     let Ok(dos_driver) = U16CString::from_str(dos_driver_path) else {
-        return Err(Error::InvalidString("dos_driver_path".to_owned()));
+        return Err("Invalid argument dos_driver_path".to_owned());
     };
-
-    let win_driver_path = win_driver.into_raw();
-    let dos_driver_path = dos_driver.into_raw();
-
-    // let mut object_attributes = WdfObjectAttributes::new();
-    // object_attributes.add_context::<T>(context_info);
 
     unsafe {
         let status = pm_InitDriverObject(
@@ -178,28 +170,18 @@ pub fn init_driver_object(
             registry_path,
             &mut wdf_driver_handle,
             &mut wdf_device_handle,
-            win_driver_path,
-            dos_driver_path,
+            win_driver.as_ptr(),
+            dos_driver.as_ptr(),
             &mut object_attributes,
         );
 
-        // Free string memory
-        let _ = U16CString::from_raw(win_driver_path);
-        let _ = U16CString::from_raw(dos_driver_path);
+        check_ntstatus(status)?;
 
-        let Some(status) = NtStatus::from_i32(status) else {
-            return Err(Error::UnknownResult);
-        };
-
-        if status == NtStatus::STATUS_SUCCESS {
-            return Ok(Driver::new(
-                driver_object,
-                wdf_driver_handle,
-                wdf_device_handle,
-            ));
-        }
-
-        Err(Error::NTStatus(status))
+        return Ok(Driver::new(
+            driver_object,
+            wdf_driver_handle,
+            wdf_device_handle,
+        ));
     }
 }
 

@@ -135,11 +135,11 @@ impl<T> IOQueue<T> {
                 // Pop and check the return value.
                 let list_entry =
                     KeRemoveQueue(kqueue, KprocessorMode::KernelMode, timeout) as *mut Entry<T>;
-                let error_code = NtStatus::from_u32(list_entry as u32);
+                let error_code = NtStatus::try_from(list_entry as u32);
                 match error_code {
-                    Some(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
-                    Some(NtStatus::STATUS_USER_APC) => return Err(Status::UserAPC),
-                    Some(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandened),
+                    Ok(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
+                    Ok(NtStatus::STATUS_USER_APC) => return Err(Status::UserAPC),
+                    Ok(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandened),
                     _ => {
                         // The return value is a pointer.
                         let list_entry = Box::from_raw(list_entry);

@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ntstatus = { git = "https://github.com/vlabo/ntstatus", default-features = false}
-onlyerror = {version = "0.1", default-features = false }
+ntstatus = { version = "0.1.2", default-features = false }
+onlyerror = { version = "0.1", default-features = false }
 
 [dependencies.widestring]
 version = "1.0.2"

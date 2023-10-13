@@ -53,8 +53,8 @@ pub enum Info {
         direction: u8,
         ip_v6: bool,
         protocol: u8,
-        local_ip: [u32; 4],
-        remote_ip: [u32; 4],
+        local_ip: [u8; 4],
+        remote_ip: [u8; 4],
         local_port: u16,
         remote_port: u16,
     },
@@ -104,9 +104,6 @@ pub enum Command {
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {
     if USE_JSON {
-        if let Ok(s) = serde_json::to_string(&Command::Shutdown()) {
-            wdk::dbg!("shutdown: {}", s);
-        }
         match serde_json::from_slice(data) {
             Ok(command) => Ok(command),
             Err(err) => Err(format!("{}", err)),
