@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 ntstatus = { git = "https://github.com/vlabo/ntstatus", default-features = false}
 onlyerror = {version = "0.1", default-features = false }
-scopeguard = {version = "1.2", default-features = false }
 
 [dependencies.widestring]
 version = "1.0.2"

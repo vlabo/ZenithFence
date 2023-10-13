@@ -1,6 +1,3 @@
-use core::ffi::c_void;
-use core::mem::MaybeUninit;
-
 use crate::filter_engine::classify::ClassifyOut;
 use crate::filter_engine::connect_request::FwpsConnectRequest0;
 use crate::filter_engine::ffi::{self, FwpsPendOperation0};
@@ -9,6 +6,7 @@ use crate::filter_engine::metadata::FwpsIncomingMetadataValues;
 use crate::filter_engine::FilterEngine;
 use crate::interface;
 use alloc::string::{String, ToString};
+use core::ffi::c_void;
 use ntstatus::ntstatus::NtStatus;
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{

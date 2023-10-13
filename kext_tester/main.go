@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
-	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface/Protocol"
 )
 
 type Verdict int8
@@ -49,24 +48,24 @@ func main() {
 	}
 	defer file.Close()
 
-	dataChan := make(chan *Protocol.Info)
+	infoChan := make(chan *kext_interface.Info)
 	endChan := make(chan struct{})
 	go func() {
-		kext_interface.ReadInfo(file, dataChan)
+		kext_interface.ReadInfo(file, infoChan)
 	}()
 
 	go func() {
 		for true {
 			select {
-			case info := <-dataChan:
+			case info := <-infoChan:
 				{
-					switch info.ValueType() {
-					case Protocol.InfoUnionPacket:
+					switch {
+					case info.Connection != nil:
 						{
-							packet := kext_interface.ReadPacket(info)
-							path := packet.ProcessPath()
+							// connection := info.Connection
+							// path := *connection.ProcessPath
 
-							log.Printf("connection from: %s %d", path, *packet.ProcessId())
+							// log.Printf("connection from: %d", *connection.ProcessId)
 							// if packet.RemotePort() == 53 {
 							// 	log.Println("Redirect dns")
 							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept))) //.GetRedirectResponse(packet.Id(), net.IPv4(9, 9, 9, 9), 53))
@@ -74,13 +73,13 @@ func main() {
 							// 	log.Println("Allow connection")
 							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
 							// }
-							file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
+							// file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
 						}
-					case Protocol.InfoUnionLogLine:
-						{
-							logLine := kext_interface.ReadLogLine(info)
-							fmt.Println(string(logLine.Line()))
-						}
+						// case Protocol.InfoUnionLogLine:
+						// 	{
+						// 		logLine := kext_interface.ReadLogLine(info)
+						// 		fmt.Println(string(logLine.Line()))
+						// 	}
 					}
 
 				}
@@ -94,7 +93,9 @@ func main() {
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
 	// file.Close()
+	kext_interface.WriteCommand(file, kext_interface.BuildShutdown())
 	endChan <- struct{}{}
-	file.Write(kext_interface.GetShutdownRequest())
+	// close(commandChan)
+	// file.Write(kext_interface.GetShutdownRequest())
 	// file.Write(kext_interface.GetVerdirctResponse(1, 2))
 }

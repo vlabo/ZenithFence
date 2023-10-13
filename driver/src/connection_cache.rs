@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use wdk::{rw_spin_lock::RwSpinLock, utils::ClassifyPromise};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub enum ConnectionAction {
     Verdict(Verdict),
     RedirectIPv4(Vec<u8>, u16),
@@ -11,7 +12,7 @@ pub enum ConnectionAction {
 }
 
 struct Connection {
-    info: PacketInfo,
+    // info: PacketInfo,
     action: ConnectionAction,
 }
 
@@ -28,7 +29,7 @@ impl ConnectionCache {
 
     pub fn add_connection(
         &mut self,
-        mut packet: PacketInfo,
+        packet: &mut PacketInfo,
         verdict: ConnectionAction,
     ) -> Option<ClassifyPromise> {
         let promise = packet.classify_promise.take();
@@ -36,11 +37,12 @@ impl ConnectionCache {
         self.connections.insert(
             packet.local_port,
             Connection {
-                info: packet,
+                // info: packet,
                 action: verdict,
             },
         );
-        return promise;
+
+        promise
     }
 
     pub fn get_connection_action(&self, packet: &PacketInfo) -> Option<ConnectionAction> {

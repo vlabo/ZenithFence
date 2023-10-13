@@ -2,9 +2,10 @@ use crate::array_holder::ArrayHolder;
 use crate::connection_cache::ConnectionAction;
 use crate::connection_cache::ConnectionCache;
 use crate::id_cache::IdCache;
-use crate::protocol::{self, CommandUnion};
-use crate::types::{Info, PacketInfo, Verdict};
-use alloc::{boxed::Box, vec};
+use crate::protocol::Command;
+use crate::protocol::{self};
+use crate::types::{PacketInfo, Verdict};
+use alloc::{boxed::Box, vec, vec::Vec};
 use wdk::allocator::NullAllocator;
 use wdk::consts;
 use wdk::filter_engine::callout::Callout;
@@ -24,7 +25,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITI
 struct DeviceContext {
     filter_engine: FilterEngine,
     read_leftover: ArrayHolder,
-    io_queue: IOQueue<Info>,
+    io_queue: IOQueue<Vec<u8>>,
     packet_cache: IdCache<PacketInfo>,
     connection_cache: ConnectionCache,
 }
@@ -108,9 +109,9 @@ pub extern "system" fn DriverEntry(
                         if let Some(action) =
                             context.connection_cache.get_connection_action(&packet)
                         {
-                            match action {
-                                // We already have a verdict for it.
-                                ConnectionAction::Verdict(verdict) => match verdict {
+                            // We already have a verdict for it.
+                            if let ConnectionAction::Verdict(verdict) = action {
+                                match verdict {
                                     Verdict::Accept => {
                                         data.permit();
                                     }
@@ -124,8 +125,7 @@ pub extern "system" fn DriverEntry(
                                         data.block();
                                     }
                                     _ => {}
-                                },
-                                _ => {}
+                                }
                             }
                         } else if data.get_value_u32(FwpsFieldsAleAuthConnectV4::Flags as usize)
                             & FWP_CONDITION_FLAG_IS_REAUTHORIZE
@@ -140,19 +140,23 @@ pub extern "system" fn DriverEntry(
                                     return;
                                 }
                             };
-                            let packet_clone = packet.clone();
-
+                            let clone = packet.clone();
                             packet.classify_promise = Some(promise);
                             let id = context.packet_cache.push(packet);
-                            let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                            if let Ok(bytes) = clone.serialize(id) {
+                                let _ = context.io_queue.push(bytes);
+                            }
                         } else {
                             // Send request to userspace.
                             let promise = data.pend_classification();
-                            let packet_clone = packet.clone();
 
+                            let clone = packet.clone();
                             packet.classify_promise = Some(promise);
                             let id = context.packet_cache.push(packet);
-                            let _ = context.io_queue.push(Info::PacketInfo(id, packet_clone));
+                            if let Ok(bytes) = clone.serialize(id) {
+                                let _ = context.io_queue.push(bytes);
+                            }
+
                             data.block_and_absorb();
                         }
                     },
@@ -259,12 +263,14 @@ fn write_buffer(device_context: &DeviceContext, read_request: &mut ReadRequest, 
     }
 }
 
-fn write_info_object(device_context: &DeviceContext, read_request: &mut ReadRequest, info: Info) {
-    protocol::serialize_info(info, |data| {
-        let size = (data.len() as u32).to_le_bytes();
-        let _ = read_request.write(&size);
-        write_buffer(device_context, read_request, data);
-    });
+fn write_info_object(
+    device_context: &DeviceContext,
+    read_request: &mut ReadRequest,
+    data: Vec<u8>,
+) {
+    let size = (data.len() as u32).to_le_bytes();
+    let _ = read_request.write(&size);
+    write_buffer(device_context, read_request, data.as_slice());
 }
 
 unsafe extern "system" fn driver_read(
@@ -324,55 +330,52 @@ unsafe extern "system" fn driver_write(
         write_request.complete();
         return write_request.get_status();
     };
-    if let Some(command) = protocol::read_command(write_request.get_buffer()) {
-        match command.command_type() {
-            CommandUnion::Shutdown => {
-                device_context.io_queue.rundown();
-            }
-            CommandUnion::Response => {
-                let response = command.command_as_response().unwrap();
-                if let Some(packet) = device_context.packet_cache.pop_id(response.id()) {
-                    if let Some(verdict) =
-                        num::FromPrimitive::from_i8(response.verdict()) as Option<Verdict>
-                    {
-                        info!("Verdict response: {:?} -> {}", packet, verdict);
+    info!("Write called");
+    match protocol::parse_command(write_request.get_buffer()) {
+        Ok(command) => {
+            match command {
+                Command::Shutdown() => {
+                    info!("Shutdown command");
+                    device_context.io_queue.rundown();
+                }
+                Command::Verdict { id, verdict } => {
+                    if let Some(mut packet) = device_context.packet_cache.pop_id(id) {
+                        info!("Packet: {:?}", packet);
+                        info!("Verdict response: {}", verdict);
                         let completion_promise = device_context
                             .connection_cache
-                            .add_connection(packet, ConnectionAction::Verdict(verdict));
+                            .add_connection(&mut packet, ConnectionAction::Verdict(verdict));
                         if let Some(mut promise) = completion_promise {
                             if let Err(err) = promise.complete(&device_context.filter_engine) {
                                 err!("error compliting connection decision: {}", err);
                             }
                         }
+                    } else {
+                        err!("Invalid id: {}", id);
                     }
-                } else {
-                    err!("Invalid id: {}", response.id());
-                }
-            }
-            CommandUnion::Redirect => {
-                let response = command.command_as_redirect().unwrap();
-                if let Some(packet) = device_context.packet_cache.pop_id(response.id()) {
-                    let remote_ip = response.remote_ip().unwrap().bytes().to_vec();
-                    let port = response.remote_port();
-                    info!("Redirect connection: {:?}", packet);
-                    let completion_promise = device_context
-                        .connection_cache
-                        .add_connection(packet, ConnectionAction::RedirectIPv4(remote_ip, port));
-                    if let Some(mut promise) = completion_promise {
-                        if let Err(err) = promise.complete(&device_context.filter_engine) {
-                            err!("error compliting connection decision: {}", err);
-                        }
-                    }
-                } else {
-                    err!("Invalid id: {}", response.id());
-                }
-            }
-            _ => {
-                err!("Unrecognized command");
+                } // CommandUnion::Redirect => {
+                  //     let response = command.command_as_redirect().unwrap();
+                  //     if let Some(packet) = device_context.packet_cache.pop_id(response.id()) {
+                  //         let remote_ip = response.remote_ip().unwrap().bytes().to_vec();
+                  //         let port = response.remote_port();
+                  //         info!("Redirect connection: {:?}", packet);
+                  //         let completion_promise = device_context
+                  //             .connection_cache
+                  //             .add_connection(packet, ConnectionAction::RedirectIPv4(remote_ip, port));
+                  //         if let Some(mut promise) = completion_promise {
+                  //             if let Err(err) = promise.complete(&device_context.filter_engine) {
+                  //                 err!("error compliting connection decision: {}", err);
+                  //             }
+                  //         }
+                  //     } else {
+                  //         err!("Invalid id: {}", response.id());
+                  //     }
+                  // }
             }
         }
-    } else {
-        err!("Faield to read command");
+        Err(err) => {
+            err!("Faield to read command: {}", err);
+        }
     }
     write_request.mark_all_as_read();
     write_request.complete();

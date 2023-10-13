@@ -1,18 +1,14 @@
 use alloc::{format, string::String};
 use core::fmt::{Debug, Display};
 use num_derive::FromPrimitive;
+use serde::{Deserialize, Serialize};
 use wdk::{
     err,
     filter_engine::layer::{self, Layer},
     utils::{CallData, ClassifyPromise},
 };
 
-pub enum Info {
-    PacketInfo(u64, PacketInfo),
-    LogLine(String),
-}
-
-#[derive(Copy, Clone, FromPrimitive)]
+#[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
 pub enum Verdict {
     // VerdictUndecided is the default status of new connections.
     Undecided = 0,

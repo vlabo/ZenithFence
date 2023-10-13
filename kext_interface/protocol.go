@@ -5,88 +5,78 @@ package kext_interface
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"github.com/fxamacker/cbor/v2"
 	"io"
 	"log"
-
-	flatbuffers "github.com/google/flatbuffers/go"
-	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface/Protocol"
 )
 
-func GetShutdownRequest() []byte {
-	builder := flatbuffers.NewBuilder(0)
+const use_json = true
 
-	// Shutdown command
-	Protocol.ShutdownStart(builder)
-	shutdownBuffer := Protocol.ShutdownEnd(builder)
-
-	return buildCommand(builder, Protocol.CommandUnionShutdown, shutdownBuffer)
+// Driver structs
+type Connection struct {
+	ProcessId   *uint64  `json:"process_id"`
+	ProcessPath *string  `json:"process_path"`
+	Direction   byte     `json:"direction"`
+	IpV6        bool     `json:"ip_v6"`
+	Protocol    byte     `json:"protocol"`
+	LocalIp     []uint32 `json:"local_ip"`
+	RemoteIp    []uint32 `json:"remote_ip"`
+	LocalPort   uint16   `json:"local_port"`
+	RemotePort  uint16   `json:"remote_port"`
 }
 
-func GetVerdirctResponse(id uint64, verdict int8) []byte {
-	builder := flatbuffers.NewBuilder(0)
-
-	// VerdictReponse command
-	Protocol.VerdictResponseStart(builder)
-	Protocol.VerdictResponseAddId(builder, id)
-	Protocol.VerdictResponseAddVerdict(builder, verdict)
-	responseBuffer := Protocol.VerdictResponseEnd(builder)
-
-	// Finish
-	return buildCommand(builder, Protocol.CommandUnionResponse, responseBuffer)
+type Info struct {
+	Connection *Connection
 }
 
-func GetRedirectResponse(id uint64, ip []byte, port uint16) []byte {
-	builder := flatbuffers.NewBuilder(0)
-	bufferIp := builder.CreateByteVector(ip)
-
-	// RedirectReponse command
-	Protocol.RedirectResponseStart(builder)
-	Protocol.RedirectResponseAddId(builder, id)
-	Protocol.RedirectResponseAddIpv6(builder, false)
-	Protocol.RedirectResponseAddRemoteIp(builder, bufferIp)
-	Protocol.RedirectResponseAddRemotePort(builder, port)
-	responseBuffer := Protocol.RedirectResponseEnd(builder)
-
-	// Finish
-	return buildCommand(builder, Protocol.CommandUnionRedirect, responseBuffer)
-}
-
-func buildCommand(builder *flatbuffers.Builder, commandType Protocol.CommandUnion, commandBuffer flatbuffers.UOffsetT) []byte {
-	// Command wrapper
-	Protocol.CommandStart(builder)
-	Protocol.CommandAddCommandType(builder, commandType)
-	Protocol.CommandAddCommand(builder, commandBuffer)
-	command := Protocol.CommandEnd(builder)
-
-	builder.Finish(command)
-	return builder.FinishedBytes()
-}
-
-func ParseInfo(data []byte) *Protocol.Info {
-	return Protocol.GetRootAsInfo(data, 0)
-}
-
-func ReadPacket(data *Protocol.Info) *Protocol.Packet {
-	unionTable := new(flatbuffers.Table)
-	if data.Value(unionTable) {
-		packet := new(Protocol.Packet)
-		packet.Init(unionTable.Bytes, unionTable.Pos)
-		return packet
+func ParseInfo(data []byte) (*Info, error) {
+	var info Info
+	var err error
+	if use_json {
+		log.Printf("Info: %s\n", string(data))
+		err = json.Unmarshal(data, &info)
+	} else {
+		err = cbor.Unmarshal(data, &info)
 	}
-	return nil
+	return &info, err
 }
 
-func ReadLogLine(info *Protocol.Info) *Protocol.LogLine {
-	unionTable := new(flatbuffers.Table)
-	if info.Value(unionTable) {
-		logLine := new(Protocol.LogLine)
-		logLine.Init(unionTable.Bytes, unionTable.Pos)
-		return logLine
+type Verdict struct {
+	id      uint64
+	verdict uint8
+}
+
+type Command struct {
+	Shutdown *[]struct{} `json:"Shutdown,omitempty"`
+	Verdict  *Verdict    `json:"Verdict,omitempty"`
+}
+
+func BuildShutdown() Command {
+	return Command{Shutdown: &[]struct{}{}}
+}
+
+func BuildVerdict(id uint64, verdict uint8) Command {
+	return Command{Verdict: &Verdict{id: id, verdict: verdict}}
+}
+
+func WriteCommand(writer io.Writer, command Command) {
+	var data []byte
+	var err error
+	if use_json {
+		data, err = json.Marshal(&command)
+		log.Printf("Command: %s\n", string(data))
+	} else {
+		data, err = cbor.Marshal(&command)
 	}
-	return nil
+	if err != nil {
+		log.Printf("failed to marshal command: %s\n", err)
+		return
+	}
+	writer.Write(data)
 }
 
-func ReadInfo(reader io.Reader, dataChan chan *Protocol.Info) {
+func ReadInfo(reader io.Reader, dataChan chan *Info) {
 	var readBuffer []byte = make([]byte, 500)
 	var buffer []byte = nil
 	var structBuf []byte = nil
@@ -98,16 +88,16 @@ func ReadInfo(reader io.Reader, dataChan chan *Protocol.Info) {
 			// Read data from the file
 			count, err := reader.Read(readBuffer)
 			if err != nil {
-				log.Printf("failed to read from driver: %s", err)
+				log.Printf("failed to read from driver: %s\n", err)
 				return
 			}
 
 			if count == 0 {
-				log.Printf("failed to read from driver: empty buffer")
+				log.Printf("failed to read from driver: empty buffer\n")
 				return
 			}
 
-			log.Printf("recived %d bytes", count)
+			// log.Printf("recived %d bytes", count)
 
 			// Slice only with the actual data
 			buffer = readBuffer[0:count]
@@ -124,7 +114,12 @@ func ReadInfo(reader io.Reader, dataChan chan *Protocol.Info) {
 			if len(buffer) >= int(structSize) {
 				// The read buffer contains the whole struct
 				copy(structBuf, buffer[0:structSize])
-				dataChan <- ParseInfo(structBuf)
+				info, err := ParseInfo(structBuf)
+				if err == nil {
+					dataChan <- info
+				} else {
+					log.Printf("failed to parse info: %s", err)
+				}
 				structBuf = nil
 				fillIndex = 0
 
@@ -152,8 +147,12 @@ func ReadInfo(reader io.Reader, dataChan chan *Protocol.Info) {
 				// This is the last part of the struct.
 				size := int(structSize) - fillIndex
 				copy(structBuf[fillIndex:], buffer[0:size])
-				_ = ParseInfo(structBuf)
-				dataChan <- ParseInfo(structBuf)
+				info, err := ParseInfo(structBuf)
+				if err == nil {
+					dataChan <- info
+				} else {
+					log.Printf("failed to parse info: %s", err)
+				}
 				structBuf = nil
 				fillIndex = 0
 

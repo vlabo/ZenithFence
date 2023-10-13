@@ -1,100 +1,121 @@
-use flatbuffers::FlatBufferBuilder;
+use crate::types::{PacketInfo, Verdict};
+use alloc::{format, string::String, vec::Vec};
+use serde::{Deserialize, Serialize};
 
-use crate::types::{Info, PacketInfo};
+static USE_JSON: bool = true;
 
-pub use self::protocol_generated::protocol::CommandUnion;
-use self::protocol_generated::protocol::{
-    self, Command, InfoArgs, InfoUnion, LogLine, LogLineArgs, Packet, PacketArgs,
-};
-use alloc::string::String;
+struct ByteWriter(Vec<u8>);
 
-#[allow(unused_imports)]
-#[allow(clippy::all)]
-mod protocol_generated;
+impl ByteWriter {
+    fn get(self) -> Vec<u8> {
+        self.0
+    }
+}
 
-pub fn serialize_info(info: Info, mut writer: impl FnMut(&[u8])) {
-    let mut buffer_builder = FlatBufferBuilder::new();
-    match info {
-        Info::PacketInfo(id, packet) => {
-            serialize_packet(&mut buffer_builder, id, packet);
-            writer(buffer_builder.finished_data());
+impl ciborium_io::Write for ByteWriter {
+    type Error = ();
+    fn write_all(&mut self, data: &[u8]) -> Result<(), ()> {
+        self.0.extend_from_slice(data);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+struct ByteReader<'a>(&'a [u8]);
+
+impl<'a> ciborium_io::Read for ByteReader<'a> {
+    type Error = ();
+
+    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
+        for (i, value) in data.iter_mut().enumerate() {
+            if i >= self.0.len() {
+                return Err(());
+            }
+            *value = self.0[i];
         }
-        Info::LogLine(line) => {
-            serialize_log_lines(&mut buffer_builder, line);
-            writer(buffer_builder.finished_data());
+
+        self.0 = &self.0[data.len()..];
+
+        Ok(())
+    }
+}
+
+// Driver structs
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Info {
+    Connection {
+        id: u64,
+        process_id: Option<u64>,
+        process_path: Option<String>,
+        direction: u8,
+        ip_v6: bool,
+        protocol: u8,
+        local_ip: [u32; 4],
+        remote_ip: [u32; 4],
+        local_port: u16,
+        remote_port: u16,
+    },
+}
+
+impl Info {
+    pub fn serialize(self) -> Result<Vec<u8>, ()> {
+        if USE_JSON {
+            if let Ok(vec) = serde_json::to_vec(&self) {
+                return Ok(vec);
+            }
+            Err(())
+        } else {
+            let mut buffer = ByteWriter(Vec::new());
+            _ = ciborium::into_writer(&self, &mut buffer);
+            Ok(buffer.get())
         }
     }
 }
 
-fn serialize_packet(buffer_builder: &mut FlatBufferBuilder, id: u64, packet: PacketInfo) {
-    let mut process_path = None;
-    if let Some(path) = packet.process_path {
-        process_path = Some(buffer_builder.create_string(&path));
-    }
-
-    let local_ip = if packet.ip_v6 {
-        buffer_builder.create_vector(&packet.local_ip)
-    } else {
-        buffer_builder.create_vector(&packet.local_ip[0..1])
-    };
-
-    let remote_ip = if packet.ip_v6 {
-        buffer_builder.create_vector(&packet.remote_ip)
-    } else {
-        buffer_builder.create_vector(&packet.remote_ip[0..1])
-    };
-
-    let packet = Packet::create(
-        buffer_builder,
-        &PacketArgs {
+impl PacketInfo {
+    pub fn serialize(&self, id: u64) -> Result<Vec<u8>, ()> {
+        // Build data.
+        let connection = Info::Connection {
             id,
-            process_id: packet.process_id,
-            process_path,
-            direction: packet.direction,
-            ip_v6: packet.ip_v6,
-            protocol: packet.protocol,
-            local_ip: Some(local_ip),
-            remote_ip: Some(remote_ip),
-            local_port: packet.local_port,
-            remote_port: packet.remote_port,
-        },
-    );
+            process_id: self.process_id,
+            process_path: self.process_path.clone(),
+            direction: self.direction,
+            ip_v6: self.ip_v6,
+            protocol: self.protocol,
+            local_ip: self.local_ip,
+            remote_ip: self.remote_ip,
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+        };
 
-    let data = protocol::Info::create(
-        buffer_builder,
-        &InfoArgs {
-            value_type: InfoUnion::Packet,
-            value: Some(packet.as_union_value()),
-        },
-    );
-
-    buffer_builder.finish_minimal(data);
-}
-
-fn serialize_log_lines(buffer_builder: &mut FlatBufferBuilder, line: String) {
-    let buffer_line = buffer_builder.create_string(&line);
-    let log_line = LogLine::create(
-        buffer_builder,
-        &LogLineArgs {
-            line: Some(buffer_line),
-        },
-    );
-
-    let data = protocol::Info::create(
-        buffer_builder,
-        &InfoArgs {
-            value_type: InfoUnion::LogLine,
-            value: Some(log_line.as_union_value()),
-        },
-    );
-
-    buffer_builder.finish_minimal(data);
-}
-
-pub fn read_command(data: &[u8]) -> Option<Command> {
-    if let Ok(command) = flatbuffers::root::<Command>(data) {
-        return Some(command);
+        connection.serialize()
     }
+}
 
-    None
+// User structs
+#[derive(Serialize, Deserialize)]
+pub enum Command {
+    Shutdown(),
+    Verdict { id: u64, verdict: Verdict },
+}
+
+pub fn parse_command(data: &[u8]) -> Result<Command, String> {
+    if USE_JSON {
+        if let Ok(s) = serde_json::to_string(&Command::Shutdown()) {
+            wdk::dbg!("shutdown: {}", s);
+        }
+        match serde_json::from_slice(data) {
+            Ok(command) => Ok(command),
+            Err(err) => Err(format!("{}", err)),
+        }
+    } else {
+        let byte_reader = ByteReader(data);
+        match ciborium::from_reader::<Command, ByteReader>(byte_reader) {
+            Ok(command) => Ok(command),
+            Err(err) => Err(format!("{}", err)),
+        }
+    }
 }

@@ -18,6 +18,7 @@ use self::metadata::FwpsIncomingMetadataValues;
 pub mod callout;
 pub(crate) mod classify;
 pub mod connect_request;
+#[allow(dead_code)]
 pub mod ffi;
 pub mod layer;
 pub(crate) mod metadata;
