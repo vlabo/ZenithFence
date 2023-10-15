@@ -24,6 +24,7 @@ pub mod connect_request;
 pub mod ffi;
 pub mod layer;
 pub(crate) mod metadata;
+pub mod packet;
 pub mod transaction;
 
 pub struct FilterEngine {
@@ -186,7 +187,7 @@ static mut CALLOUTS: Option<Vec<Callout>> = None;
 unsafe extern "C" fn catch_all_callout(
     fixed_values: *const FwpsIncomingValues,
     meta_values: *const FwpsIncomingMetadataValues,
-    _layer_data: *mut c_void,
+    layer_data: *mut c_void,
     context: *mut c_void,
     filter: *const FWPS_FILTER2,
     _flow_context: u64,
@@ -207,6 +208,7 @@ unsafe extern "C" fn catch_all_callout(
                 classify_out,
                 classify_context: context,
                 filter_id: callout.filter_id,
+                layer_data,
             };
             if let Some(device_object) = callout.device_object.as_mut() {
                 (callout.callout_fn)(data, device_object);

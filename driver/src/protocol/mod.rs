@@ -99,7 +99,7 @@ impl PacketInfo {
 #[derive(Serialize, Deserialize)]
 pub enum Command {
     Shutdown(),
-    Verdict { id: u64, verdict: Verdict },
+    Verdict { id: u64, verdict: u8 },
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {

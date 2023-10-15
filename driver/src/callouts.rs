@@ -1,6 +1,7 @@
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::FwpsFieldsAleAuthConnectV4;
-use wdk::{dbg, err, interface};
+use wdk::filter_engine::packet::Injector;
+use wdk::{dbg, err, info, interface};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::{
@@ -36,33 +37,48 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
                 _ => {}
             }
         }
-    } else if data.is_reauthorize(FwpsFieldsAleAuthConnectV4::Flags as usize) {
-        // Send request to userspace.
-        let promise = data.pend_classification();
+    } else {
+        // Pend decision of connection.
+        let mut packet_list = None;
+        if packet.protocol == 17 {
+            packet_list = Some(Injector::clone_layer_data(
+                &data,
+                false,
+                packet.remote_ip,
+                packet.interface_index,
+                packet.sub_interface_index,
+            ));
+        }
+        let promise = if data.is_reauthorize(FwpsFieldsAleAuthConnectV4::Flags as usize) {
+            data.pend_filter_rest(packet_list)
+        } else {
+            match data.pend_operation(packet_list) {
+                Ok(cc) => cc,
+                Err(error) => {
+                    err!("failed to postpone decision: {}", error);
+                    return;
+                }
+            }
+        };
 
-        let clone = packet.clone();
+        // Send request to userspace.
         packet.classify_promise = Some(promise);
-        let id = device.packet_cache.push(packet);
-        if let Ok(bytes) = clone.serialize(id) {
+        let serialized = device.packet_cache.push_and_serialize(packet);
+        if let Ok(bytes) = serialized {
             let _ = device.io_queue.push(bytes);
         }
 
         data.block_and_absorb();
-    } else {
-        // Send request to userspace.
-        let promise = match data.pend_operation() {
-            Ok(cc) => cc,
-            Err(error) => {
-                err!("failed to postpone decision: {}", error);
-                data.block();
-                return;
-            }
-        };
-        let clone = packet.clone();
-        packet.classify_promise = Some(promise);
-        let id = device.packet_cache.push(packet);
-        if let Ok(bytes) = clone.serialize(id) {
-            let _ = device.io_queue.push(bytes);
-        }
     }
 }
+
+// pub fn network_layer_outbound(mut data: CalloutData, _device_object: &mut DEVICE_OBJECT) {
+//     // let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+//     // else {
+//     //     return;
+//     // };
+
+//     // let packet = PacketInfo::from_callout_data(&data);
+//     // info!("network layer: {:?}", packet);
+//     data.permit();
+// }

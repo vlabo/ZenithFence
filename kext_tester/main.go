@@ -7,6 +7,8 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"strings"
+
 	// "net"
 	"os"
 
@@ -17,14 +19,13 @@ type Verdict int8
 
 const (
 	// VerdictUndecided is the default status of new connections.
-	VerdictUndecided           Verdict = 0
-	VerdictUndeterminable      Verdict = 1
-	VerdictAccept              Verdict = 2
-	VerdictBlock               Verdict = 3
-	VerdictDrop                Verdict = 4
-	VerdictRerouteToNameserver Verdict = 5
-	VerdictRerouteToTunnel     Verdict = 6
-	VerdictFailed              Verdict = 7
+	VerdictUndecided      Verdict = 0
+	VerdictUndeterminable Verdict = 1
+	VerdictAccept         Verdict = 2
+	VerdictBlock          Verdict = 3
+	VerdictDrop           Verdict = 4
+	VerdictRedirect       Verdict = 5
+	VerdictFailed         Verdict = 7
 )
 
 func main() {
@@ -63,7 +64,11 @@ func main() {
 					case info.Connection != nil:
 						{
 							connection := info.Connection
-							kext_interface.WriteCommand(file, kext_interface.BuildVerdict(*connection.ProcessId, uint8(VerdictAccept)))
+							if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
+								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictBlock)))
+							} else {
+								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictAccept)))
+							}
 
 							// path := *connection.ProcessPath
 

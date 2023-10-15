@@ -15,6 +15,7 @@ const use_json = true
 
 // Driver structs
 type Connection struct {
+	Id          uint64   `json:"id"`
 	ProcessId   *uint64  `json:"process_id"`
 	ProcessPath *string  `json:"process_path"`
 	Direction   byte     `json:"direction"`

@@ -11,6 +11,7 @@ use wdk::{
 };
 
 #[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Verdict {
     // VerdictUndecided is the default status of new connections.
     Undecided = 0,
@@ -18,8 +19,7 @@ pub enum Verdict {
     Accept = 2,
     Block = 3,
     Drop = 4,
-    RerouteToNameserver = 5,
-    RerouteToTunnel = 6,
+    Redirect = 5,
     Failed = 7,
 }
 
@@ -31,14 +31,13 @@ impl Display for Verdict {
             Verdict::Accept => write!(f, "Accept"),
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
-            Verdict::RerouteToNameserver => write!(f, "RerouteToNameserver"),
-            Verdict::RerouteToTunnel => write!(f, "RerouteToTunnel"),
+            Verdict::Redirect => write!(f, "Redirect"),
             Verdict::Failed => write!(f, "Failed"),
         }
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct PacketInfo {
     pub process_id: Option<u64>,
     pub process_path: Option<String>,
@@ -50,6 +49,8 @@ pub struct PacketInfo {
     pub remote_ip: [u8; 4],
     pub local_port: u16,
     pub remote_port: u16,
+    pub interface_index: u32,
+    pub sub_interface_index: u32,
     pub classify_promise: Option<ClassifyPromise>,
 }
 
@@ -67,6 +68,24 @@ impl PacketInfo {
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
                         .to_le_bytes(),
+                    interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
+                    sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
+                    ..Default::default()
+                }
+            }
+            Layer::FwpmLayerOutboundIppacketV4 => {
+                type Field = layer::FwpsFieldsOutboundIppacketV4;
+                Self {
+                    direction: 0,
+                    ip_v6: false,
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_le_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_le_bytes(),
+                    interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
+                    sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
                     ..Default::default()
                 }
             }
@@ -86,6 +105,8 @@ impl PacketInfo {
                         .to_le_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
+                    interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
+                    sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
                     ..Default::default()
                 }
             }
@@ -105,6 +126,8 @@ impl PacketInfo {
                         .to_le_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
+                    interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
+                    sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
                     ..Default::default()
                 }
             }

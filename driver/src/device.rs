@@ -1,10 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use num_traits::FromPrimitive;
 use wdk::{
     consts, dbg,
     driver::Driver,
     err,
-    filter_engine::{callout::Callout, layer::Layer, FilterEngine},
+    filter_engine::{callout::Callout, layer::Layer, packet::Injector, FilterEngine},
     info,
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
@@ -14,9 +15,8 @@ use crate::{
     array_holder::ArrayHolder,
     callouts,
     connection_cache::{ConnectionAction, ConnectionCache},
-    id_cache::IdCache,
+    id_cache::PacketCache,
     protocol::{self, Command},
-    types::PacketInfo,
 };
 
 // Device Context
@@ -24,8 +24,9 @@ pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) io_queue: IOQueue<Vec<u8>>,
-    pub(crate) packet_cache: IdCache<PacketInfo>,
+    pub(crate) packet_cache: PacketCache,
     pub(crate) connection_cache: ConnectionCache,
+    pub(crate) injector: Injector,
 }
 
 impl Device {
@@ -36,6 +37,8 @@ impl Device {
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
         self.connection_cache.init();
+        self.injector = Injector::new();
+
         if let Err(err) = self
             .filter_engine
             .init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0)
@@ -43,14 +46,24 @@ impl Device {
             err!("filter engine error: {}", err);
         }
 
-        let callouts = vec![Callout::new(
-            "AleLayerOutbound",
-            "A Test ALE layer for outbund connections",
-            0x58545073_f893_454c_bbea_a57bc964f46d,
-            Layer::FwpmLayerAleAuthConnectV4,
-            consts::FWP_ACTION_CALLOUT_TERMINATING,
-            callouts::ale_layer_connect,
-        )];
+        let callouts = vec![
+            Callout::new(
+                "AleLayerOutbound",
+                "A ALE layer for outbund connections",
+                0x58545073_f893_454c_bbea_a57bc964f46d,
+                Layer::FwpmLayerAleAuthConnectV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                callouts::ale_layer_connect,
+            ),
+            // Callout::new(
+            //     "IPPacketOutbound",
+            //     "Ip packet network layer callout",
+            //     0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
+            //     Layer::FwpmLayerOutboundIppacketV4,
+            //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+            //     callouts::network_layer_outbound,
+            // ),
+        ];
 
         if let Err(err) = self.filter_engine.commit(callouts) {
             err!("{}", err);
@@ -138,14 +151,29 @@ impl Device {
                     dbg!("Verdict response: {}", verdict);
 
                     // Add verdict in the cache.
-                    let completion_promise = self
-                        .connection_cache
-                        .add_connection(&mut packet, ConnectionAction::Verdict(verdict));
+                    let completion_promise = self.connection_cache.add_connection(
+                        &mut packet,
+                        ConnectionAction::Verdict(FromPrimitive::from_u8(verdict).unwrap()),
+                    );
 
                     // Check if connection was pended. If yes call complete to trigger the callout again.
-                    if let Some(mut promise) = completion_promise {
-                        if let Err(err) = promise.complete(&self.filter_engine) {
-                            err!("error compliting connection decision: {}", err);
+                    if let Some(promise) = completion_promise {
+                        match promise.complete(&self.filter_engine) {
+                            Ok(packet_list) => {
+                                if let Some(packet_list) = packet_list {
+                                    info!("injecting packet_list");
+                                    let result =
+                                        self.injector.inject_packet_list_transport(packet_list);
+                                    if let Err(err) = result {
+                                        err!("failed to inject packet: {}", err);
+                                    } else {
+                                        info!("packet_list injected");
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                err!("error compliting connection decision: {}", err);
+                            }
                         }
                     }
                 } else {

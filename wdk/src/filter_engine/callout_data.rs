@@ -6,6 +6,7 @@ use super::{
     ffi::{self, FwpsPendOperation0},
     layer::{Layer, Value},
     metadata::FwpsIncomingMetadataValues,
+    packet::PacketList,
     FilterEngine,
 };
 use alloc::string::{String, ToString};
@@ -13,24 +14,25 @@ use core::ffi::c_void;
 use windows_sys::Win32::{
     Foundation::HANDLE,
     NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_FLAG_IS_REAUTHORIZE,
+    Networking::WinSock::SCOPE_ID,
 };
 
-#[derive(Clone)]
 pub enum ClassifyPromise {
-    Initial(HANDLE),
-    Reauthorization(usize),
+    Initial(HANDLE, Option<PacketList>),
+    Reauthorization(usize, Option<PacketList>),
 }
 
 impl ClassifyPromise {
-    pub fn complete(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
+    pub fn complete(self, filter_engine: &FilterEngine) -> Result<Option<PacketList>, String> {
         unsafe {
             match self {
-                ClassifyPromise::Initial(context) => {
-                    ffi::FwpsCompleteOperation0(*context, core::ptr::null_mut());
-                    return Ok(());
+                ClassifyPromise::Initial(context, packet_list) => {
+                    ffi::FwpsCompleteOperation0(context, core::ptr::null_mut());
+                    return Ok(packet_list);
                 }
-                ClassifyPromise::Reauthorization(callout_index) => {
-                    return filter_engine.reset_callout_filter(*callout_index);
+                ClassifyPromise::Reauthorization(callout_index, packet_list) => {
+                    filter_engine.reset_callout_filter(callout_index)?;
+                    return Ok(packet_list);
                 }
             }
         }
@@ -45,6 +47,7 @@ pub struct CalloutData<'a> {
     pub(crate) classify_out: *mut ClassifyOut,
     pub(crate) classify_context: *mut c_void,
     pub(crate) filter_id: u64,
+    pub(crate) layer_data: *mut c_void,
 }
 
 impl<'a> CalloutData<'a> {
@@ -76,26 +79,43 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn pend_operation(&mut self) -> Result<ClassifyPromise, String> {
+    pub fn get_transport_endpoint_handle(&self) -> Option<u64> {
+        unsafe {
+            return (*self.metadata).get_transport_endpoint_handle();
+        }
+    }
+
+    pub fn get_remote_scope_id(&self) -> Option<SCOPE_ID> {
+        unsafe {
+            return (*self.metadata).get_remote_scope_id();
+        }
+    }
+
+    pub fn get_control_data(&self) -> Option<&[u8]> {
+        unsafe {
+            return (*self.metadata).get_control_data();
+        }
+    }
+
+    pub fn pend_operation(
+        &mut self,
+        packet_list: Option<PacketList>,
+    ) -> Result<ClassifyPromise, String> {
         unsafe {
             let mut completion_context = 0;
             if let Some(completion_handle) = (*self.metadata).get_completeion_handle() {
                 let status = FwpsPendOperation0(completion_handle, &mut completion_context);
                 check_ntstatus(status)?;
 
-                if let Some(classify_out) = self.classify_out.as_mut() {
-                    classify_out.action_block();
-                    classify_out.set_absorb();
-                }
-                return Ok(ClassifyPromise::Initial(completion_context));
+                return Ok(ClassifyPromise::Initial(completion_context, packet_list));
             }
 
             Err("callout not supported".to_string())
         }
     }
 
-    pub fn pend_classification(&mut self) -> ClassifyPromise {
-        return ClassifyPromise::Reauthorization(self.callout_index);
+    pub fn pend_filter_rest(&mut self, packet_list: Option<PacketList>) -> ClassifyPromise {
+        return ClassifyPromise::Reauthorization(self.callout_index, packet_list);
     }
 
     pub fn permit(&mut self) {

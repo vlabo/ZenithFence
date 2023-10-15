@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use widestring::U16CString;
 use windows_sys::Win32::{
     Foundation::HANDLE,
@@ -8,7 +9,9 @@ use windows_sys::Win32::{
         IpHelper::IP_ADDRESS_PREFIX,
         WindowsFilteringPlatform::{
             FWPS_METADATA_FIELD_COMPLETION_HANDLE, FWPS_METADATA_FIELD_PROCESS_ID,
-            FWPS_METADATA_FIELD_PROCESS_PATH, FWP_BYTE_BLOB, FWP_DIRECTION,
+            FWPS_METADATA_FIELD_PROCESS_PATH, FWPS_METADATA_FIELD_REMOTE_SCOPE_ID,
+            FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA,
+            FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE, FWP_BYTE_BLOB, FWP_DIRECTION,
         },
     },
     Networking::WinSock::SCOPE_ID,
@@ -52,7 +55,7 @@ pub(crate) struct FwpsIncomingMetadataValues {
     /// Remote scope id for use in outbound transport layer injection.
     remote_scope_id: SCOPE_ID,
     /// Socket control data (and length) for use in outbound transport layer injection.
-    control_data: *const c_void,
+    control_data: *const u8,
     control_data_length: u32,
     /// Direction for the current packet. Only specified for ALE re-authorization.
     packet_direction: FWP_DIRECTION,
@@ -115,6 +118,36 @@ impl FwpsIncomingMetadataValues {
         if self.has_field(FWPS_METADATA_FIELD_COMPLETION_HANDLE) {
             return Some(self.completion_handle);
         }
+        None
+    }
+
+    pub(crate) fn get_transport_endpoint_handle(&self) -> Option<u64> {
+        if self.has_field(FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE) {
+            return Some(self.transport_endpoint_handle);
+        }
+
+        None
+    }
+
+    pub(crate) fn get_remote_scope_id(&self) -> Option<SCOPE_ID> {
+        if self.has_field(FWPS_METADATA_FIELD_REMOTE_SCOPE_ID) {
+            return Some(self.remote_scope_id);
+        }
+
+        None
+    }
+
+    pub(crate) unsafe fn get_control_data(&self) -> Option<&[u8]> {
+        if self.has_field(FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA) {
+            if self.control_data.is_null() || self.control_data_length == 0 {
+                return None;
+            }
+
+            let control_data =
+                alloc::slice::from_raw_parts(self.control_data, self.control_data_length as usize);
+            return Some(control_data);
+        }
+
         None
     }
 }
