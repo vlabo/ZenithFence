@@ -24,6 +24,7 @@ pub mod connect_request;
 pub mod ffi;
 pub mod layer;
 pub(crate) mod metadata;
+pub mod net_buffer;
 pub mod packet;
 pub mod transaction;
 

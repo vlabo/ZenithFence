@@ -11,15 +11,15 @@ use windows_sys::Win32::{
     System::Kernel::{COMPARTMENT_ID, UNSPECIFIED_COMPARTMENT_ID},
 };
 
-use crate::{filter_engine::callout_data, utils::check_ntstatus};
+use crate::utils::check_ntstatus;
 
-use super::callout_data::CalloutData;
-
-#[allow(non_camel_case_types)]
-pub type NET_BUFFER_LIST = c_void;
-
-#[allow(non_camel_case_types)]
-type NDIS_HANDLE = *mut c_void;
+use super::{
+    callout_data::CalloutData,
+    net_buffer::{
+        FwpsDereferenceNetBufferList0, FwpsInjectionHandleDestroy0, FwpsReferenceNetBufferList0,
+        NET_BUFFER_LIST,
+    },
+};
 
 #[allow(non_camel_case_types)]
 type FWPS_INJECT_COMPLETE0 = unsafe extern "C" fn(
@@ -41,13 +41,6 @@ struct FWPS_TRANSPORT_SEND_PARAMS1 {
 
 #[allow(dead_code)]
 extern "C" {
-    /// Call the NdisAllocateCloneNetBufferList function to create a new clone NET_BUFFER_LIST structure.
-    fn NdisAllocateCloneNetBufferList(
-        OriginalNetBufferList: *mut NET_BUFFER_LIST,
-        NetBufferListPoolHandle: NDIS_HANDLE,
-        NetBufferPoolHandle: NDIS_HANDLE,
-        AllocateCloneFlag: u32,
-    ) -> *mut NET_BUFFER_LIST;
 
     fn FwpsInjectNetworkSendAsync0(
         injectionHandle: HANDLE,
@@ -97,16 +90,11 @@ extern "C" {
         completionFn: FWPS_INJECT_COMPLETE0,
         completionContext: *mut c_void,
     ) -> NTSTATUS;
-    fn NdisFreeCloneNetBufferList(CloneNetBufferList: *mut NET_BUFFER_LIST, FreeCloneFlags: u32);
     fn FwpsInjectionHandleCreate0(
         addressFamily: ADDRESS_FAMILY,
         flags: u32,
         injectionHandle: &mut HANDLE,
     ) -> NTSTATUS;
-    fn FwpsInjectionHandleDestroy0(injectionHandle: HANDLE) -> NTSTATUS;
-
-    fn FwpsReferenceNetBufferList0(netBufferList: *mut NET_BUFFER_LIST, intendToModify: bool);
-    fn FwpsDereferenceNetBufferList0(netBufferList: *mut NET_BUFFER_LIST, dispatchLevel: bool);
 }
 
 pub struct PacketList {
@@ -152,7 +140,7 @@ impl Injector {
         sub_interface_index: u32,
     ) -> PacketList {
         unsafe {
-            FwpsReferenceNetBufferList0(callout_data.layer_data, true);
+            FwpsReferenceNetBufferList0(callout_data.layer_data as _, true);
         }
         let mut control_data = None;
         if let Some(cd) = callout_data.get_control_data() {
@@ -160,7 +148,7 @@ impl Injector {
         }
 
         PacketList {
-            nbl: callout_data.layer_data,
+            nbl: callout_data.layer_data as _,
             inbound,
             remote_ip,
             compartment_id: UNSPECIFIED_COMPARTMENT_ID,

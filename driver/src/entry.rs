@@ -48,7 +48,6 @@ pub extern "system" fn DriverEntry(
             context.init(&driver);
         }
     }
-    info!("Initialization complete");
 
     STATUS_SUCCESS
 }

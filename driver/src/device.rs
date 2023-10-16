@@ -49,20 +49,20 @@ impl Device {
         let callouts = vec![
             Callout::new(
                 "AleLayerOutbound",
-                "A ALE layer for outbund connections",
+                "ALE layer for outbund connections",
                 0x58545073_f893_454c_bbea_a57bc964f46d,
                 Layer::FwpmLayerAleAuthConnectV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::ale_layer_connect,
             ),
-            // Callout::new(
-            //     "IPPacketOutbound",
-            //     "Ip packet network layer callout",
-            //     0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
-            //     Layer::FwpmLayerOutboundIppacketV4,
-            //     consts::FWP_ACTION_CALLOUT_TERMINATING,
-            //     callouts::network_layer_outbound,
-            // ),
+            Callout::new(
+                "IPPacketOutbound",
+                "IP packet outbound network layer callout",
+                0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
+                Layer::FwpmLayerOutboundIppacketV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                callouts::network_layer_outbound,
+            ),
         ];
 
         if let Err(err) = self.filter_engine.commit(callouts) {
@@ -161,13 +161,10 @@ impl Device {
                         match promise.complete(&self.filter_engine) {
                             Ok(packet_list) => {
                                 if let Some(packet_list) = packet_list {
-                                    info!("injecting packet_list");
                                     let result =
                                         self.injector.inject_packet_list_transport(packet_list);
                                     if let Err(err) = result {
                                         err!("failed to inject packet: {}", err);
-                                    } else {
-                                        info!("packet_list injected");
                                     }
                                 }
                             }

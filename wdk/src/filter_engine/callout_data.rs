@@ -97,6 +97,10 @@ impl<'a> CalloutData<'a> {
         }
     }
 
+    pub fn get_layer_data(&self) -> *mut c_void {
+        return self.layer_data;
+    }
+
     pub fn pend_operation(
         &mut self,
         packet_list: Option<PacketList>,
@@ -118,13 +122,19 @@ impl<'a> CalloutData<'a> {
         return ClassifyPromise::Reauthorization(self.callout_index, packet_list);
     }
 
-    pub fn permit(&mut self) {
+    pub fn action_permit(&mut self) {
         unsafe {
             (*self.classify_out).action_permit();
         }
     }
 
-    pub fn block(&mut self) {
+    pub fn action_continue(&mut self) {
+        unsafe {
+            (*self.classify_out).action_continue();
+        }
+    }
+
+    pub fn action_block(&mut self) {
         unsafe {
             (*self.classify_out).action_block();
             (*self.classify_out).clear_write_flag();
@@ -141,39 +151,5 @@ impl<'a> CalloutData<'a> {
 
     pub fn is_reauthorize(&self, flags_index: usize) -> bool {
         self.get_value_u32(flags_index) & FWP_CONDITION_FLAG_IS_REAUTHORIZE > 0
-    }
-
-    pub fn redirect(&mut self, remote_ip: &[u8], remote_port: u16) -> Result<(), String> {
-        unsafe {
-            let mut classify_handle: u64 = 0;
-            let status =
-                ffi::FwpsAcquireClassifyHandle0(self.classify_context, 0, &mut classify_handle);
-            check_ntstatus(status)?;
-
-            let mut layer_data: *mut FwpsConnectRequest0 = core::ptr::null_mut();
-
-            let status = ffi::FwpsAcquireWritableLayerDataPointer0(
-                classify_handle,
-                self.filter_id,
-                0,
-                core::ptr::addr_of_mut!(layer_data) as _,
-                self.classify_out,
-            );
-
-            if let Err(err) = check_ntstatus(status) {
-                // TODO: use guard for releasing the handle.
-                ffi::FwpsReleaseClassifyHandle0(classify_handle);
-                return Err(err);
-            }
-
-            if let Some(data) = layer_data.as_mut() {
-                data.set_remote(remote_ip, remote_port);
-            }
-
-            ffi::FwpsApplyModifiedLayerData0(classify_handle, layer_data as _, 0);
-            ffi::FwpsReleaseClassifyHandle0(classify_handle);
-
-            return Ok(());
-        }
     }
 }

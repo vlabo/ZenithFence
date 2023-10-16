@@ -1,7 +1,9 @@
+use smoltcp::wire::{Ipv4Packet, TcpPacket, UdpPacket};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::FwpsFieldsAleAuthConnectV4;
+use wdk::filter_engine::net_buffer::read_first_packet;
 use wdk::filter_engine::packet::Injector;
-use wdk::{dbg, err, info, interface};
+use wdk::{dbg, err, interface};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::{
@@ -22,19 +24,12 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // We already have a verdict for it.
         if let ConnectionAction::Verdict(verdict) = action {
             match verdict {
-                Verdict::Accept => {
-                    data.permit();
+                Verdict::Accept => data.action_permit(),
+                Verdict::Block => data.action_block(),
+                Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
+                    data.block_and_absorb()
                 }
-                Verdict::Block => {
-                    data.block();
-                }
-                Verdict::Drop => {
-                    data.block_and_absorb();
-                }
-                Verdict::Failed => {
-                    data.block();
-                }
-                _ => {}
+                Verdict::Redirect => data.action_continue(),
             }
         }
     } else {
@@ -72,13 +67,36 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     }
 }
 
-// pub fn network_layer_outbound(mut data: CalloutData, _device_object: &mut DEVICE_OBJECT) {
-//     // let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-//     // else {
-//     //     return;
-//     // };
+pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    let _ = device_object;
+    // let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    // else {
+    //     return;
+    // };
+    let Ok((full_packet, _buffer)) = read_first_packet(data.get_layer_data() as _) else {
+        err!("faield to get net_buffer data");
+        data.action_permit();
+        return;
+    };
+    if let Ok(ip_packet) = Ipv4Packet::new_checked(full_packet) {
+        match ip_packet.next_header() {
+            smoltcp::wire::IpProtocol::Tcp => {
+                if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
+                    wdk::info!("packet: {} {}", ip_packet, tcp_packet);
+                }
+            }
+            smoltcp::wire::IpProtocol::Udp => {
+                if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
+                    wdk::info!("packet: {} {}", ip_packet, udp_packet);
+                }
+            }
+            _ => {
+                err!("unsupported protocol: {}", ip_packet.next_header());
+            }
+        }
+    } else {
+        err!("failed to parse packet");
+    }
 
-//     // let packet = PacketInfo::from_callout_data(&data);
-//     // info!("network layer: {:?}", packet);
-//     data.permit();
-// }
+    data.action_permit();
+}

@@ -35,7 +35,7 @@ func ParseInfo(data []byte) (*Info, error) {
 	var info Info
 	var err error
 	if use_json {
-		log.Printf("Info: %s\n", string(data))
+		// log.Printf("Info: %s\n", string(data))
 		err = json.Unmarshal(data, &info)
 	} else {
 		err = cbor.Unmarshal(data, &info)
@@ -66,7 +66,7 @@ func WriteCommand(writer io.Writer, command Command) {
 	var err error
 	if use_json {
 		data, err = json.Marshal(&command)
-		log.Printf("Command: %s\n", string(data))
+		// log.Printf("Command: %s\n", string(data))
 	} else {
 		data, err = cbor.Marshal(&command)
 	}

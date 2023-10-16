@@ -65,7 +65,7 @@ func main() {
 						{
 							connection := info.Connection
 							if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
-								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictBlock)))
+								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictDrop)))
 							} else {
 								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictAccept)))
 							}
