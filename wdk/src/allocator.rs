@@ -24,7 +24,7 @@ pub struct WindowsAllocator {}
 
 unsafe impl Sync for WindowsAllocator {}
 
-const POOL_TAG: u32 = u32::from_ne_bytes(*b"PMrs");
+pub(crate) const POOL_TAG: u32 = u32::from_ne_bytes(*b"PMrs");
 
 unsafe impl GlobalAlloc for WindowsAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

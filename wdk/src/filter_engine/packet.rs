@@ -17,9 +17,16 @@ use super::{
     callout_data::CalloutData,
     net_buffer::{
         FwpsDereferenceNetBufferList0, FwpsInjectionHandleDestroy0, FwpsReferenceNetBufferList0,
-        NET_BUFFER_LIST,
+        NetworkAllocator, NET_BUFFER_LIST,
     },
 };
+
+const FWPS_INJECTION_TYPE_STREAM: u32 = 0x00000001;
+const FWPS_INJECTION_TYPE_TRANSPORT: u32 = 0x00000002;
+const FWPS_INJECTION_TYPE_NETWORK: u32 = 0x00000004;
+const FWPS_INJECTION_TYPE_FORWARD: u32 = 0x00000008;
+const FWPS_INJECTION_TYPE_L2: u32 = 0x00000010;
+const FWPS_INJECTION_TYPE_VSWITCH_TRANSPORT: u32 = 0x00000020;
 
 #[allow(non_camel_case_types)]
 type FWPS_INJECT_COMPLETE0 = unsafe extern "C" fn(
@@ -39,9 +46,18 @@ struct FWPS_TRANSPORT_SEND_PARAMS1 {
     header_include_header_length: u32,
 }
 
+#[allow(non_camel_case_types)]
+#[repr(C)]
+enum FWPS_PACKET_INJECTION_STATE {
+    FWPS_PACKET_NOT_INJECTED,
+    FWPS_PACKET_INJECTED_BY_SELF,
+    FWPS_PACKET_INJECTED_BY_OTHER,
+    FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF,
+    FWPS_PACKET_INJECTION_STATE_MAX,
+}
+
 #[allow(dead_code)]
 extern "C" {
-
     fn FwpsInjectNetworkSendAsync0(
         injectionHandle: HANDLE,
         injectionContext: HANDLE,
@@ -90,14 +106,22 @@ extern "C" {
         completionFn: FWPS_INJECT_COMPLETE0,
         completionContext: *mut c_void,
     ) -> NTSTATUS;
+
     fn FwpsInjectionHandleCreate0(
         addressFamily: ADDRESS_FAMILY,
         flags: u32,
         injectionHandle: &mut HANDLE,
     ) -> NTSTATUS;
+
+    fn FwpsQueryPacketInjectionState0(
+        injectionHandle: HANDLE,
+        netBufferList: *const NET_BUFFER_LIST,
+        injectionContext: *mut HANDLE,
+    ) -> FWPS_PACKET_INJECTION_STATE;
 }
 
 pub struct PacketList {
+    ale: bool,
     nbl: *mut NET_BUFFER_LIST,
     inbound: bool,
     remote_ip: [u8; 4],
@@ -112,27 +136,52 @@ pub struct PacketList {
 impl Drop for PacketList {
     fn drop(&mut self) {
         if !self.nbl.is_null() {
-            unsafe {
-                FwpsDereferenceNetBufferList0(self.nbl, false);
+            if self.ale {
+                unsafe {
+                    FwpsDereferenceNetBufferList0(self.nbl, false);
+                }
+            } else {
+                NetworkAllocator::free_net_buffer(self.nbl);
             }
         }
     }
 }
 
 pub struct Injector {
-    inject_handle: HANDLE,
+    transport_inject_handle: HANDLE,
+    network_inject_handle: HANDLE,
 }
 
 impl Injector {
     pub fn new() -> Self {
-        let mut inject_handle: HANDLE = INVALID_HANDLE_VALUE;
+        let mut transport_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
+        let mut network_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
-            FwpsInjectionHandleCreate0(AF_UNSPEC, 0x2, &mut inject_handle);
+            let status = FwpsInjectionHandleCreate0(
+                AF_UNSPEC,
+                FWPS_INJECTION_TYPE_TRANSPORT,
+                &mut transport_inject_handle,
+            );
+            if let Err(err) = check_ntstatus(status) {
+                crate::err!("error allocating transport inject handle: {}", err);
+            }
+            let status = FwpsInjectionHandleCreate0(
+                AF_INET,
+                FWPS_INJECTION_TYPE_NETWORK,
+                &mut network_inject_handle,
+            );
+
+            if let Err(err) = check_ntstatus(status) {
+                crate::err!("error allocating network inject handle: {}", err);
+            }
         }
-        Self { inject_handle }
+        Self {
+            transport_inject_handle,
+            network_inject_handle,
+        }
     }
 
-    pub fn clone_layer_data(
+    pub fn from_ale_callout(
         callout_data: &CalloutData,
         inbound: bool,
         remote_ip: [u8; 4],
@@ -148,6 +197,7 @@ impl Injector {
         }
 
         PacketList {
+            ale: true,
             nbl: callout_data.layer_data as _,
             inbound,
             remote_ip,
@@ -162,8 +212,28 @@ impl Injector {
         }
     }
 
+    pub fn from_ip_callout(
+        nbl: *mut NET_BUFFER_LIST,
+        inbound: bool,
+        interface_index: u32,
+        sub_interface_index: u32,
+    ) -> PacketList {
+        PacketList {
+            ale: false,
+            nbl,
+            inbound,
+            remote_ip: [0; 4],
+            compartment_id: UNSPECIFIED_COMPARTMENT_ID,
+            interface_index,
+            sub_interface_index,
+            endpoint_handle: 0,
+            remote_scope_id: unsafe { MaybeUninit::zeroed().assume_init() },
+            control_data: None,
+        }
+    }
+
     pub fn inject_packet_list_transport(&self, packet_list: PacketList) -> Result<(), String> {
-        if self.inject_handle == INVALID_HANDLE_VALUE {
+        if self.transport_inject_handle == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
         unsafe {
@@ -188,7 +258,7 @@ impl Injector {
             };
 
             let status = FwpsInjectTransportSendAsync1(
-                self.inject_handle,
+                self.transport_inject_handle,
                 0,
                 packet_list.endpoint_handle,
                 0,
@@ -196,7 +266,7 @@ impl Injector {
                 AF_INET,
                 packet_list.compartment_id,
                 packet_list.nbl,
-                free_nbl,
+                free_packet,
                 (packet_list as *mut PacketList) as _,
             );
             if let Err(err) = check_ntstatus(status) {
@@ -208,55 +278,93 @@ impl Injector {
         return Ok(());
     }
 
-    // pub fn inject_packet_list_network(&self, mut packet_list: PacketList) -> Result<(), String> {
-    //     if self.inject_handle == INVALID_HANDLE_VALUE {
-    //         return Err("failed to inject packet: invalid handle value".to_string());
-    //     }
+    pub fn inject_packet_list_network(&self, packet_list: PacketList) -> Result<(), String> {
+        if self.network_inject_handle == INVALID_HANDLE_VALUE {
+            return Err("failed to inject packet: invalid handle value".to_string());
+        }
 
-    //     unsafe {
-    //         if packet_list.inbound {
-    //             let status = FwpsInjectNetworkReceiveAsync0(
-    //                 self.inject_handle,
-    //                 0,
-    //                 0,
-    //                 packet_list.compartment_id,
-    //                 packet_list.interface_index,
-    //                 packet_list.sub_interface_index,
-    //                 packet_list.nbl,
-    //                 free_nbl,
-    //                 core::ptr::null_mut(),
-    //             );
-    //             check_ntstatus(status)?;
-    //             packet_list.nbl = core::ptr::null_mut();
-    //         } else {
-    //             let status = FwpsInjectNetworkSendAsync0(
-    //                 self.inject_handle,
-    //                 0,
-    //                 0,
-    //                 packet_list.compartment_id,
-    //                 packet_list.nbl,
-    //                 free_nbl,
-    //                 core::ptr::null_mut(),
-    //             );
-    //             check_ntstatus(status)?;
-    //             packet_list.nbl = core::ptr::null_mut();
-    //         }
+        unsafe {
+            if packet_list.inbound {
+                let packet_list_boxed = Box::new(packet_list);
+                let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
+                let status = FwpsInjectNetworkReceiveAsync0(
+                    self.network_inject_handle,
+                    0,
+                    0,
+                    packet_list.compartment_id,
+                    packet_list.interface_index,
+                    packet_list.sub_interface_index,
+                    packet_list.nbl,
+                    free_packet,
+                    (packet_list as *mut PacketList) as _,
+                );
+                if let Err(err) = check_ntstatus(status) {
+                    _ = Box::from_raw(packet_list);
+                    return Err(err);
+                }
+            } else {
+                let packet_list_boxed = Box::new(packet_list);
+                let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
+                let status = FwpsInjectNetworkSendAsync0(
+                    self.network_inject_handle,
+                    0,
+                    0,
+                    packet_list.compartment_id,
+                    packet_list.nbl,
+                    free_packet,
+                    (packet_list as *mut PacketList) as _,
+                );
+                if let Err(err) = check_ntstatus(status) {
+                    _ = Box::from_raw(packet_list);
+                    return Err(err);
+                }
+            }
+        }
+        return Ok(());
+    }
 
-    //     }
-    //     return Ok(());
-    // }
+    pub fn was_netwrok_packet_injected_by_self(&self, nbl: *const NET_BUFFER_LIST) -> bool {
+        if self.network_inject_handle == INVALID_HANDLE_VALUE || self.network_inject_handle == 0 {
+            return false;
+        }
+
+        unsafe {
+            let state = FwpsQueryPacketInjectionState0(
+                self.network_inject_handle,
+                nbl,
+                core::ptr::null_mut(),
+            );
+
+            match state {
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_NOT_INJECTED => false,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_OTHER => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTION_STATE_MAX => true,
+            }
+        }
+    }
 }
 
 impl Drop for Injector {
     fn drop(&mut self) {
         unsafe {
-            FwpsInjectionHandleDestroy0(self.inject_handle);
-            self.inject_handle = INVALID_HANDLE_VALUE;
+            if self.transport_inject_handle != INVALID_HANDLE_VALUE
+                && self.transport_inject_handle != 0
+            {
+                FwpsInjectionHandleDestroy0(self.transport_inject_handle);
+                self.transport_inject_handle = INVALID_HANDLE_VALUE;
+            }
+            if self.network_inject_handle != INVALID_HANDLE_VALUE && self.network_inject_handle != 0
+            {
+                FwpsInjectionHandleDestroy0(self.network_inject_handle);
+                self.network_inject_handle = INVALID_HANDLE_VALUE;
+            }
         }
     }
 }
 
-unsafe extern "C" fn free_nbl(
+unsafe extern "C" fn free_packet(
     context: *mut c_void,
     _net_buffer_list: *mut NET_BUFFER_LIST,
     _dispatch_level: bool,

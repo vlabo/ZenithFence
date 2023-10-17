@@ -1,7 +1,8 @@
+use alloc::vec::Vec;
 use smoltcp::wire::{Ipv4Packet, TcpPacket, UdpPacket};
 use wdk::filter_engine::callout_data::CalloutData;
-use wdk::filter_engine::layer::FwpsFieldsAleAuthConnectV4;
-use wdk::filter_engine::net_buffer::read_first_packet;
+use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
+use wdk::filter_engine::net_buffer::{read_first_packet, NBLIterator};
 use wdk::filter_engine::packet::Injector;
 use wdk::{dbg, err, interface};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
@@ -36,7 +37,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // Pend decision of connection.
         let mut packet_list = None;
         if packet.protocol == 17 {
-            packet_list = Some(Injector::clone_layer_data(
+            packet_list = Some(Injector::from_ale_callout(
                 &data,
                 false,
                 packet.remote_ip,
@@ -67,35 +68,79 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     }
 }
 
+pub fn redirect_packet(
+    device: &mut Device,
+    packet: Vec<u8>,
+    if_index: u32,
+    sub_inf_index: u32,
+) -> Result<(), ()> {
+    if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&packet) {
+        let packet = Injector::from_ip_callout(nbl, false, if_index, sub_inf_index);
+        if let Err(err) = device.injector.inject_packet_list_network(packet) {
+            err!("failed to inject packet: {}", err);
+        } else {
+            return Ok(());
+        }
+    }
+    return Err(());
+}
+
 pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let _ = device_object;
-    // let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    // else {
-    //     return;
-    // };
-    let Ok((full_packet, _buffer)) = read_first_packet(data.get_layer_data() as _) else {
-        err!("faield to get net_buffer data");
-        data.action_permit();
+    type Fields = layer::FwpsFieldsOutboundIppacketV4;
+
+    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    else {
         return;
     };
-    if let Ok(ip_packet) = Ipv4Packet::new_checked(full_packet) {
-        match ip_packet.next_header() {
-            smoltcp::wire::IpProtocol::Tcp => {
-                if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                    wdk::info!("packet: {} {}", ip_packet, tcp_packet);
+    if device
+        .injector
+        .was_netwrok_packet_injected_by_self(data.get_layer_data() as _)
+    {
+        dbg!("injected packet");
+        data.action_permit();
+        return;
+    }
+
+    for (i, nbl) in NBLIterator::new(data.get_layer_data() as _)
+        .into_iter()
+        .enumerate()
+    {
+        let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
+            err!("failed to get net_buffer data");
+            data.action_permit();
+            return;
+        };
+        if let Ok(ip_packet) = Ipv4Packet::new_checked(full_packet) {
+            match ip_packet.next_header() {
+                smoltcp::wire::IpProtocol::Tcp => {
+                    if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
+                        wdk::info!("packet {}: {} {}", i, ip_packet, tcp_packet);
+                    }
+                }
+                smoltcp::wire::IpProtocol::Udp => {
+                    if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
+                        wdk::info!("packet {}: {} {}", i, ip_packet, udp_packet);
+                    }
+                    let buffer = buffer.unwrap_or(full_packet.to_vec());
+                    if redirect_packet(
+                        device,
+                        buffer,
+                        data.get_value_u32(Fields::InterfaceIndex as usize),
+                        data.get_value_u32(Fields::SubInterfaceIndex as usize),
+                    )
+                    .is_ok()
+                    {
+                        data.block_and_absorb();
+                        return;
+                    }
+                }
+                _ => {
+                    err!("unsupported protocol {}: {}", i, ip_packet.next_header());
                 }
             }
-            smoltcp::wire::IpProtocol::Udp => {
-                if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                    wdk::info!("packet: {} {}", ip_packet, udp_packet);
-                }
-            }
-            _ => {
-                err!("unsupported protocol: {}", ip_packet.next_header());
-            }
+        } else {
+            err!("failed to parse packet");
         }
-    } else {
-        err!("failed to parse packet");
     }
 
     data.action_permit();

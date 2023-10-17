@@ -5,7 +5,10 @@ use wdk::{
     consts, dbg,
     driver::Driver,
     err,
-    filter_engine::{callout::Callout, layer::Layer, packet::Injector, FilterEngine},
+    filter_engine::{
+        callout::Callout, layer::Layer, net_buffer::NetworkAllocator, packet::Injector,
+        FilterEngine,
+    },
     info,
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
@@ -27,6 +30,7 @@ pub struct Device {
     pub(crate) packet_cache: PacketCache,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
+    pub(crate) network_allocator: NetworkAllocator,
 }
 
 impl Device {
@@ -38,6 +42,7 @@ impl Device {
         self.packet_cache.init();
         self.connection_cache.init();
         self.injector = Injector::new();
+        self.network_allocator = NetworkAllocator::new();
 
         if let Err(err) = self
             .filter_engine
