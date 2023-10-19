@@ -57,33 +57,21 @@ impl ClassifyOut {
 
     /// Set block action. Write flag should be cleared, after this.
     pub fn action_block(&mut self) {
-        if !self.can_set_action() {
-            return;
-        }
         self.action_type = FWP_ACTION_BLOCK;
     }
 
     /// Set permit action.
     pub fn action_permit(&mut self) {
-        if !self.can_set_action() {
-            return;
-        }
         self.action_type = FWP_ACTION_PERMIT;
     }
 
     // Set continue action.
     pub fn action_continue(&mut self) {
-        if !self.can_set_action() {
-            return;
-        }
         self.action_type = FWP_ACTION_CONTINUE;
     }
 
     // Set none action.
     pub fn set_none(&mut self) {
-        if !self.can_set_action() {
-            return;
-        }
         self.action_type = FWP_ACTION_NONE;
     }
 

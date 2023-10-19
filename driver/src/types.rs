@@ -19,7 +19,6 @@ pub enum Verdict {
     Accept = 2,
     Block = 3,
     Drop = 4,
-    Redirect = 5,
     Failed = 7,
 }
 
@@ -31,7 +30,8 @@ impl Display for Verdict {
             Verdict::Accept => write!(f, "Accept"),
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
-            Verdict::Redirect => write!(f, "Redirect"),
+            // Verdict::RerouteToNameserver => write!(f, "RerouteToNameserver"),
+            // Verdict::RerouteToTunnel => write!(f, "RerouteToTunnel"),
             Verdict::Failed => write!(f, "Failed"),
         }
     }

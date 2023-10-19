@@ -1,6 +1,6 @@
 use crate::types::{PacketInfo, Verdict};
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::filter_engine::callout_data::ClassifyPromise;
 use wdk::rw_spin_lock::RwSpinLock;
 
@@ -8,17 +8,23 @@ use wdk::rw_spin_lock::RwSpinLock;
 #[allow(dead_code)]
 pub enum ConnectionAction {
     Verdict(Verdict),
-    RedirectIPv4(Vec<u8>, u16),
-    RedirectIPv6(Vec<u8>, u16),
+    RedirectIP {
+        local_address: Ipv4Address,
+        original_remote_address: Ipv4Address,
+        original_remote_port: u16,
+        remote_address: Ipv4Address,
+        remote_port: u16,
+    },
 }
 
-struct Connection {
-    // info: PacketInfo,
-    action: ConnectionAction,
+#[derive(PartialEq, PartialOrd, Eq, Ord)]
+struct Key {
+    port: u16,
+    protocol: IpProtocol,
 }
 
 pub struct ConnectionCache {
-    connections: BTreeMap<u16, Connection>,
+    connections: BTreeMap<Key, ConnectionAction>,
     lock: RwSpinLock,
 }
 
@@ -31,26 +37,31 @@ impl ConnectionCache {
     pub fn add_connection(
         &mut self,
         packet: &mut PacketInfo,
-        verdict: ConnectionAction,
+        action: ConnectionAction,
     ) -> Option<ClassifyPromise> {
         let promise = packet.classify_promise.take();
         let _quard = self.lock.write_lock();
+
         self.connections.insert(
-            packet.local_port,
-            Connection {
-                // info: packet,
-                action: verdict,
+            Key {
+                port: packet.local_port,
+                protocol: IpProtocol::from(packet.protocol),
             },
+            action,
         );
 
         promise
     }
 
-    pub fn get_connection_action(&self, packet: &PacketInfo) -> Option<ConnectionAction> {
+    pub fn get_connection_action(
+        &self,
+        port: u16,
+        protocol: IpProtocol,
+    ) -> Option<ConnectionAction> {
         let _quard = self.lock.read_lock();
 
-        if let Some(connection) = self.connections.get(&packet.local_port) {
-            return Some(connection.action.clone());
+        if let Some(action) = self.connections.get(&Key { port, protocol }) {
+            return Some(action.clone());
         }
 
         None

@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use num_traits::FromPrimitive;
+use smoltcp::wire::Ipv4Address;
 use wdk::{
     consts, dbg,
     driver::Driver,
@@ -20,6 +21,7 @@ use crate::{
     connection_cache::{ConnectionAction, ConnectionCache},
     id_cache::PacketCache,
     protocol::{self, Command},
+    types::Verdict,
 };
 
 // Device Context
@@ -46,7 +48,7 @@ impl Device {
 
         if let Err(err) = self
             .filter_engine
-            .init(driver, 0xa87fb472_fc68_4805_8559_c6ae774773e0)
+            .init(driver, 0x7dab1057_8e2b_40c4_9b85_693e381d7896)
         {
             err!("filter engine error: {}", err);
         }
@@ -67,6 +69,14 @@ impl Device {
                 Layer::FwpmLayerOutboundIppacketV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::network_layer_outbound,
+            ),
+            Callout::new(
+                "IPPacketInbound",
+                "IP packet inbound network layer callout",
+                0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
+                Layer::FwpmLayerInboundIppacketV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                callouts::network_layer_inbound,
             ),
         ];
 
@@ -142,6 +152,8 @@ impl Device {
             }
         };
 
+        let mut completion_promise = None;
+
         match command {
             Command::Shutdown() => {
                 info!("Shutdown command");
@@ -150,37 +162,64 @@ impl Device {
             }
             Command::Verdict { id, verdict } => {
                 // Receved verdict decission for a specific connection.
-
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
                     dbg!("Packet: {:?}", packet);
                     dbg!("Verdict response: {}", verdict);
 
                     // Add verdict in the cache.
-                    let completion_promise = self.connection_cache.add_connection(
-                        &mut packet,
-                        ConnectionAction::Verdict(FromPrimitive::from_u8(verdict).unwrap()),
-                    );
-
-                    // Check if connection was pended. If yes call complete to trigger the callout again.
-                    if let Some(promise) = completion_promise {
-                        match promise.complete(&self.filter_engine) {
-                            Ok(packet_list) => {
-                                if let Some(packet_list) = packet_list {
-                                    let result =
-                                        self.injector.inject_packet_list_transport(packet_list);
-                                    if let Err(err) = result {
-                                        err!("failed to inject packet: {}", err);
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                err!("error compliting connection decision: {}", err);
-                            }
-                        }
-                    }
+                    completion_promise = match FromPrimitive::from_u8(verdict) {
+                        Some(verdict) => self
+                            .connection_cache
+                            .add_connection(&mut packet, ConnectionAction::Verdict(verdict)),
+                        None => None,
+                    };
                 } else {
                     // Id was not in the packet cache.
                     err!("Invalid id: {}", id);
+                }
+            }
+            Command::Redirect {
+                id,
+                remote_address,
+                remote_port,
+            } => {
+                if let Some(mut packet) = self.packet_cache.pop_id(id) {
+                    packet.local_ip.reverse();
+                    let local_address = Ipv4Address(packet.local_ip);
+                    let original_remote_address = Ipv4Address(packet.remote_ip);
+                    let original_remote_port = packet.remote_port;
+                    let remote_address = Ipv4Address(remote_address);
+
+                    completion_promise = self.connection_cache.add_connection(
+                        &mut packet,
+                        ConnectionAction::RedirectIP {
+                            local_address,
+                            original_remote_address,
+                            original_remote_port,
+                            remote_address,
+                            remote_port,
+                        },
+                    );
+                } else {
+                    // Id was not in the packet cache.
+                    err!("Invalid id: {}", id);
+                }
+            }
+        }
+
+        // Check if connection was pended. If yes call complete to trigger the callout again.
+        if let Some(promise) = completion_promise {
+            match promise.complete(&self.filter_engine) {
+                Ok(packet_list) => {
+                    if let Some(packet_list) = packet_list {
+                        let result = self.injector.inject_packet_list_transport(packet_list);
+                        if let Err(err) = result {
+                            err!("failed to inject packet: {}", err);
+                        }
+                    }
+                }
+                Err(err) => {
+                    err!("error compliting connection decision: {}", err);
                 }
             }
         }

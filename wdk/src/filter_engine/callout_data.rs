@@ -137,7 +137,6 @@ impl<'a> CalloutData<'a> {
     pub fn action_block(&mut self) {
         unsafe {
             (*self.classify_out).action_block();
-            (*self.classify_out).clear_write_flag();
         }
     }
 
@@ -145,11 +144,22 @@ impl<'a> CalloutData<'a> {
         unsafe {
             (*self.classify_out).action_block();
             (*self.classify_out).set_absorb();
+        }
+    }
+    pub fn clear_write_flag(&mut self) {
+        unsafe {
             (*self.classify_out).clear_write_flag();
         }
     }
 
     pub fn is_reauthorize(&self, flags_index: usize) -> bool {
         self.get_value_u32(flags_index) & FWP_CONDITION_FLAG_IS_REAUTHORIZE > 0
+    }
+
+    pub fn parmit_and_absorb(&mut self) {
+        unsafe {
+            (*self.classify_out).action_permit();
+            (*self.classify_out).set_absorb();
+        }
     }
 }

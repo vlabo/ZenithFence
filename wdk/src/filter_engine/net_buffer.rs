@@ -36,7 +36,7 @@ pub struct NET_BUFFER_LIST {
     NblFlags: u32,
     ChildRefCount: i32,
     Flags: u32,
-    Status: NDIS_STATUS,
+    pub(crate) Status: NDIS_STATUS,
     NetBufferListInfo: [*mut c_void; 20], // Extra data at the end of the struct. The size of the array is not fixed.
 }
 
@@ -137,6 +137,20 @@ extern "C" {
     ) -> NDIS_HANDLE;
 
     fn NdisFreeNetBufferListPool(PoolHandle: NDIS_HANDLE);
+
+    fn NdisRetreatNetBufferDataStart(
+        NetBuffer: *mut NET_BUFFER,
+        DataOffsetDelta: u32,
+        DataBackFill: u32,
+        AllocateMdlHandler: *mut c_void,
+    ) -> NDIS_STATUS;
+
+    fn NdisAdvanceNetBufferDataStart(
+        NetBuffer: *mut NET_BUFFER,
+        DataOffsetDelta: u32,
+        FreeMdl: bool,
+        FreeMdlHandler: *mut c_void,
+    );
 }
 
 pub struct NBLIterator(*mut NET_BUFFER_LIST);
@@ -258,6 +272,25 @@ impl NetworkAllocator {
                 FwpsFreeNetBufferList0(nbl);
             }
         });
+    }
+
+    pub fn retreat_net_buffer(nbl: *mut NET_BUFFER_LIST, size: u32) {
+        unsafe {
+            if let Some(nbl) = nbl.as_mut() {
+                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
+                    NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+                }
+            }
+        }
+    }
+    pub fn advance_net_buffer(nbl: *mut NET_BUFFER_LIST, size: u32) {
+        unsafe {
+            if let Some(nbl) = nbl.as_mut() {
+                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
+                    NdisAdvanceNetBufferDataStart(nb as _, size, false, core::ptr::null_mut());
+                }
+            }
+        }
     }
 }
 

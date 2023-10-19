@@ -90,7 +90,7 @@ struct FWPS_CALLOUT3 {
 extern "C" {
     fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
 
-    fn FwpsCalloutRegister1(
+    fn FwpsCalloutRegister3(
         deviceObject: *mut c_void,
         callout: *const FWPS_CALLOUT3,
         calloutId: *mut u32,
@@ -222,7 +222,7 @@ pub(crate) fn register_callout(
 
     unsafe {
         let mut callout_id: u32 = 0;
-        let status = FwpsCalloutRegister1(device_object as _, &s_callout, &mut callout_id);
+        let status = FwpsCalloutRegister3(device_object as _, &s_callout, &mut callout_id);
 
         check_ntstatus(status)?;
 

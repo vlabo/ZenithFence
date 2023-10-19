@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 
 	// "net"
@@ -19,13 +20,14 @@ type Verdict int8
 
 const (
 	// VerdictUndecided is the default status of new connections.
-	VerdictUndecided      Verdict = 0
-	VerdictUndeterminable Verdict = 1
-	VerdictAccept         Verdict = 2
-	VerdictBlock          Verdict = 3
-	VerdictDrop           Verdict = 4
-	VerdictRedirect       Verdict = 5
-	VerdictFailed         Verdict = 7
+	VerdictUndecided           Verdict = 0
+	VerdictUndeterminable      Verdict = 1
+	VerdictAccept              Verdict = 2
+	VerdictBlock               Verdict = 3
+	VerdictDrop                Verdict = 4
+	VerdictRerouteToNameserver Verdict = 5
+	VerdictRerouteToTunnel     Verdict = 6
+	VerdictFailed              Verdict = 7
 )
 
 func main() {
@@ -64,29 +66,15 @@ func main() {
 					case info.Connection != nil:
 						{
 							connection := info.Connection
-							if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
-								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictDrop)))
+							if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{1, 1, 1, 1})) {
+								kext_interface.WriteCommand(file, kext_interface.BuildRedirect(connection.Id, []uint16{9, 9, 9, 9}, 53))
+							} else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
+								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictBlock)))
 							} else {
 								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictAccept)))
 							}
 
-							// path := *connection.ProcessPath
-
-							// log.Printf("connection from: %d", *connection.ProcessId)
-							// if packet.RemotePort() == 53 {
-							// 	log.Println("Redirect dns")
-							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept))) //.GetRedirectResponse(packet.Id(), net.IPv4(9, 9, 9, 9), 53))
-							// } else {
-							// 	log.Println("Allow connection")
-							// 	file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
-							// }
-							// file.Write(kext_interface.GetVerdirctResponse(packet.Id(), int8(VerdictAccept)))
 						}
-						// case Protocol.InfoUnionLogLine:
-						// 	{
-						// 		logLine := kext_interface.ReadLogLine(info)
-						// 		fmt.Println(string(logLine.Line()))
-						// 	}
 					}
 
 				}

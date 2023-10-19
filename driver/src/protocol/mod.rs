@@ -99,7 +99,15 @@ impl PacketInfo {
 #[derive(Serialize, Deserialize)]
 pub enum Command {
     Shutdown(),
-    Verdict { id: u64, verdict: u8 },
+    Verdict {
+        id: u64,
+        verdict: u8,
+    },
+    Redirect {
+        id: u64,
+        remote_address: [u8; 4],
+        remote_port: u16,
+    },
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {

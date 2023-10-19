@@ -15,16 +15,16 @@ const use_json = true
 
 // Driver structs
 type Connection struct {
-	Id          uint64   `json:"id"`
-	ProcessId   *uint64  `json:"process_id"`
-	ProcessPath *string  `json:"process_path"`
-	Direction   byte     `json:"direction"`
-	IpV6        bool     `json:"ip_v6"`
-	Protocol    byte     `json:"protocol"`
-	LocalIp     []uint32 `json:"local_ip"`
-	RemoteIp    []uint32 `json:"remote_ip"`
-	LocalPort   uint16   `json:"local_port"`
-	RemotePort  uint16   `json:"remote_port"`
+	Id          uint64  `json:"id"`
+	ProcessId   *uint64 `json:"process_id"`
+	ProcessPath *string `json:"process_path"`
+	Direction   byte    `json:"direction"`
+	IpV6        bool    `json:"ip_v6"`
+	Protocol    byte    `json:"protocol"`
+	LocalIp     []uint8 `json:"local_ip"`
+	RemoteIp    []uint8 `json:"remote_ip"`
+	LocalPort   uint16  `json:"local_port"`
+	RemotePort  uint16  `json:"remote_port"`
 }
 
 type Info struct {
@@ -35,7 +35,7 @@ func ParseInfo(data []byte) (*Info, error) {
 	var info Info
 	var err error
 	if use_json {
-		// log.Printf("Info: %s\n", string(data))
+		log.Printf("Info: %s\n", string(data))
 		err = json.Unmarshal(data, &info)
 	} else {
 		err = cbor.Unmarshal(data, &info)
@@ -48,9 +48,16 @@ type Verdict struct {
 	Verdict uint8  `json:"verdict"`
 }
 
+type Redirect struct {
+	Id            uint64   `json:"id"`
+	RemoteAddress []uint16 `json:"remote_address"`
+	RemotePort    uint16   `json:"remote_port"`
+}
+
 type Command struct {
 	Shutdown *[]struct{} `json:"Shutdown,omitempty"`
 	Verdict  *Verdict    `json:"Verdict,omitempty"`
+	Redirect *Redirect   `json:"Redirect,omitempty"`
 }
 
 func BuildShutdown() Command {
@@ -61,12 +68,16 @@ func BuildVerdict(id uint64, verdict uint8) Command {
 	return Command{Verdict: &Verdict{Id: id, Verdict: verdict}}
 }
 
+func BuildRedirect(id uint64, remoteAddress []uint16, remotePort uint16) Command {
+	return Command{Redirect: &Redirect{Id: id, RemoteAddress: remoteAddress, RemotePort: remotePort}}
+}
+
 func WriteCommand(writer io.Writer, command Command) {
 	var data []byte
 	var err error
 	if use_json {
 		data, err = json.Marshal(&command)
-		// log.Printf("Command: %s\n", string(data))
+		log.Printf("Command: %s\n", string(data))
 	} else {
 		data, err = cbor.Marshal(&command)
 	}

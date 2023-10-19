@@ -17,7 +17,7 @@ pub struct PacketCache {
 
 impl PacketCache {
     pub fn init(&mut self) {
-        self.values = VecDeque::new();
+        self.values = VecDeque::with_capacity(1000);
         self.lock.init();
         self.next_id = 0;
     }

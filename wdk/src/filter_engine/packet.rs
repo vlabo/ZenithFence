@@ -124,8 +124,8 @@ pub struct PacketList {
     ale: bool,
     nbl: *mut NET_BUFFER_LIST,
     inbound: bool,
+    loopback: bool,
     remote_ip: [u8; 4],
-    compartment_id: COMPARTMENT_ID,
     interface_index: u32,
     sub_interface_index: u32,
     endpoint_handle: u64,
@@ -158,7 +158,7 @@ impl Injector {
         let mut network_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
             let status = FwpsInjectionHandleCreate0(
-                AF_UNSPEC,
+                AF_INET,
                 FWPS_INJECTION_TYPE_TRANSPORT,
                 &mut transport_inject_handle,
             );
@@ -200,8 +200,8 @@ impl Injector {
             ale: true,
             nbl: callout_data.layer_data as _,
             inbound,
+            loopback: false,
             remote_ip,
-            compartment_id: UNSPECIFIED_COMPARTMENT_ID,
             interface_index,
             sub_interface_index,
             endpoint_handle: callout_data.get_transport_endpoint_handle().unwrap_or(0),
@@ -215,6 +215,7 @@ impl Injector {
     pub fn from_ip_callout(
         nbl: *mut NET_BUFFER_LIST,
         inbound: bool,
+        loopback: bool,
         interface_index: u32,
         sub_interface_index: u32,
     ) -> PacketList {
@@ -222,8 +223,8 @@ impl Injector {
             ale: false,
             nbl,
             inbound,
+            loopback,
             remote_ip: [0; 4],
-            compartment_id: UNSPECIFIED_COMPARTMENT_ID,
             interface_index,
             sub_interface_index,
             endpoint_handle: 0,
@@ -264,7 +265,7 @@ impl Injector {
                 0,
                 &mut send_params,
                 AF_INET,
-                packet_list.compartment_id,
+                UNSPECIFIED_COMPARTMENT_ID,
                 packet_list.nbl,
                 free_packet,
                 (packet_list as *mut PacketList) as _,
@@ -284,14 +285,15 @@ impl Injector {
         }
 
         unsafe {
-            if packet_list.inbound {
+            if packet_list.inbound && !packet_list.loopback {
+                crate::dbg!("inject recv");
                 let packet_list_boxed = Box::new(packet_list);
                 let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
                 let status = FwpsInjectNetworkReceiveAsync0(
                     self.network_inject_handle,
                     0,
                     0,
-                    packet_list.compartment_id,
+                    UNSPECIFIED_COMPARTMENT_ID,
                     packet_list.interface_index,
                     packet_list.sub_interface_index,
                     packet_list.nbl,
@@ -309,7 +311,7 @@ impl Injector {
                     self.network_inject_handle,
                     0,
                     0,
-                    packet_list.compartment_id,
+                    UNSPECIFIED_COMPARTMENT_ID,
                     packet_list.nbl,
                     free_packet,
                     (packet_list as *mut PacketList) as _,
@@ -338,9 +340,9 @@ impl Injector {
             match state {
                 FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_NOT_INJECTED => false,
                 FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_SELF => true,
-                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_OTHER => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_OTHER => false,
                 FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF => true,
-                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTION_STATE_MAX => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTION_STATE_MAX => false,
             }
         }
     }
@@ -366,8 +368,15 @@ impl Drop for Injector {
 
 unsafe extern "C" fn free_packet(
     context: *mut c_void,
-    _net_buffer_list: *mut NET_BUFFER_LIST,
+    net_buffer_list: *mut NET_BUFFER_LIST,
     _dispatch_level: bool,
 ) {
+    if let Some(nbl) = net_buffer_list.as_ref() {
+        if let Err(err) = check_ntstatus(nbl.Status) {
+            crate::err!("inject status: {}", err);
+        } else {
+            crate::dbg!("packet injected succesfully");
+        }
+    }
     _ = Box::from_raw(context as *mut PacketList);
 }
