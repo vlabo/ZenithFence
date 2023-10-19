@@ -1,2 +1,2 @@
 # portmaster_windows_rust_kext
-Implementation of the pormtaster windows kernel extenion in rust
+Implementation of Safings Portmaster Windows kernel extension in Rust
