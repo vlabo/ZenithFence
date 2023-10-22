@@ -1,7 +1,9 @@
 use crate::alloc::borrow::ToOwned;
+use crate::ffi::FwpsCalloutClassifyFn;
+use crate::ffi::{FwpsCalloutRegister3, FwpsCalloutUnregisterById0, FWPS_CALLOUT3, FWPS_FILTER2};
 use crate::utils::check_ntstatus;
 use alloc::string::String;
-use core::ffi::c_void;
+
 use core::mem::MaybeUninit;
 use core::ptr;
 use widestring::U16CString;
@@ -12,9 +14,8 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FwpmCalloutAdd0, FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteById0,
     FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0, FwpmTransactionAbort0, FwpmTransactionBegin0,
     FwpmTransactionCommit0, FWPM_CALLOUT0, FWPM_CALLOUT_FLAG_USES_PROVIDER_CONTEXT,
-    FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_PROVIDER_CONTEXT2,
-    FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_CONDITION_VALUE0, FWP_MATCH_TYPE,
-    FWP_UINT8, FWP_VALUE0,
+    FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_SESSION0,
+    FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_UINT8,
 };
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 use windows_sys::{
@@ -22,121 +23,7 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE},
 };
 
-use super::classify::ClassifyOut;
-use super::layer::{FwpsIncomingValues, Layer};
-use super::metadata::FwpsIncomingMetadataValues;
-
-pub(crate) type FwpsCalloutClassifyFn = unsafe extern "C" fn(
-    inFixedValues: *const FwpsIncomingValues,
-    inMetaValues: *const FwpsIncomingMetadataValues,
-    layerData: *mut c_void,
-    classifyContext: *mut c_void,
-    filter: *const FWPS_FILTER2,
-    flowContext: u64,
-    classifyOut: *mut ClassifyOut,
-);
-
-type FwpsCalloutNotifyFn = unsafe extern "C" fn(
-    notifyType: u32,
-    filterKey: *const GUID,
-    filter: *mut FWPS_FILTER2,
-) -> NTSTATUS;
-
-type FwpsCalloutFlowDeleteNotifyFn =
-    unsafe extern "C" fn(layerId: u16, calloutId: u32, flowContext: u64);
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-pub(crate) struct FWPS_ACTION0 {
-    r#type: u32,
-    calloutId: u32,
-}
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-pub(crate) struct FWPS_FILTER_CONDITION0 {
-    fieldId: u16,
-    reserved: u16,
-    matchType: FWP_MATCH_TYPE,
-    conditionValue: FWP_CONDITION_VALUE0,
-}
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-pub(crate) struct FWPS_FILTER2 {
-    pub(crate) filterId: u64,
-    pub(crate) weight: FWP_VALUE0,
-    pub(crate) subLayerWeight: u16,
-    pub(crate) flags: u16,
-    pub(crate) numFilterConditions: u32,
-    pub(crate) filterCondition: *mut FWPS_FILTER_CONDITION0,
-    pub(crate) action: FWPS_ACTION0,
-    pub(crate) context: u64,
-    pub(crate) providerContext: *mut FWPM_PROVIDER_CONTEXT2,
-}
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-struct FWPS_CALLOUT3 {
-    calloutKey: GUID,
-    flags: u32,
-    classifyFn: Option<FwpsCalloutClassifyFn>,
-    notifyFn: Option<FwpsCalloutNotifyFn>,
-    flowDeleteFn: Option<FwpsCalloutFlowDeleteNotifyFn>,
-}
-
-#[link(name = "Fwpkclnt", kind = "static")]
-#[link(name = "Fwpuclnt", kind = "static")]
-extern "C" {
-    fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
-
-    fn FwpsCalloutRegister3(
-        deviceObject: *mut c_void,
-        callout: *const FWPS_CALLOUT3,
-        calloutId: *mut u32,
-    ) -> NTSTATUS;
-
-    pub(crate) fn FwpsPendOperation0(
-        completionHandle: HANDLE,
-        completionContext: *mut HANDLE,
-    ) -> NTSTATUS;
-
-    pub(crate) fn FwpsCompleteOperation0(completionContext: HANDLE, netBufferList: *mut c_void);
-
-    pub(crate) fn FwpsAcquireClassifyHandle0(
-        classify_context: *mut c_void,
-        reserved: u32, // Must be zero.
-        classify_handle: *mut u64,
-    ) -> NTSTATUS;
-
-    pub(crate) fn FwpsReleaseClassifyHandle0(classify_handle: u64);
-
-    pub(crate) fn FwpsPendClassify0(
-        classify_handle: u64,
-        filterId: u64,
-        flags: u32, // Must be zero.
-        classifyOut: *const ClassifyOut,
-    ) -> NTSTATUS;
-
-    pub(crate) fn FwpsCompleteClassify0(
-        classify_handle: u64,
-        flags: u32, // Must be zero.
-        classifyOut: *const ClassifyOut,
-    );
-    pub(crate) fn FwpsAcquireWritableLayerDataPointer0(
-        classify_handle: u64,
-        filter_id: u64,
-        flags: u32,
-        writable_layer_data: *mut c_void,
-        classify_out: *mut ClassifyOut,
-    ) -> NTSTATUS;
-
-    pub(crate) fn FwpsApplyModifiedLayerData0(
-        classifyHandle: u64,
-        modifiedLayerData: *mut *mut c_void,
-        flags: u32,
-    );
-}
+use super::layer::Layer;
 
 pub(crate) fn create_filter_engine() -> Result<HANDLE, String> {
     unsafe {

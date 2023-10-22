@@ -1,8 +1,10 @@
-use crate::utils::check_ntstatus;
+use crate::{
+    ffi::{FwpsCompleteOperation0, FwpsPendOperation0},
+    utils::check_ntstatus,
+};
 
 use super::{
     classify::ClassifyOut,
-    ffi::{self, FwpsPendOperation0},
     layer::{Layer, Value},
     metadata::FwpsIncomingMetadataValues,
     packet::TransportPacketList,
@@ -29,7 +31,7 @@ impl ClassifyPromise {
         unsafe {
             match self {
                 ClassifyPromise::Initial(context, packet_list) => {
-                    ffi::FwpsCompleteOperation0(context, core::ptr::null_mut());
+                    FwpsCompleteOperation0(context, core::ptr::null_mut());
                     return Ok(packet_list);
                 }
                 ClassifyPromise::Reauthorization(callout_index, packet_list) => {

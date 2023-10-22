@@ -1,157 +1,21 @@
-use core::{ffi::c_void, mem::MaybeUninit};
+use core::mem::MaybeUninit;
 
 use alloc::string::{String, ToString};
-use windows_sys::{
-    Wdk::{
-        Foundation::MDL,
-        System::SystemServices::{IoAllocateMdl, IoFreeMdl, MmBuildMdlForNonPagedPool},
-    },
-    Win32::Foundation::{HANDLE, NTSTATUS},
+use windows_sys::Wdk::System::SystemServices::{
+    IoAllocateMdl, IoFreeMdl, MmBuildMdlForNonPagedPool,
 };
 
-use crate::{allocator::POOL_TAG, utils::check_ntstatus};
-
-const NDIS_OBJECT_TYPE_DEFAULT: u8 = 0x80; // used when object type is implicit in the API call
-const NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1: u8 = 1;
-
-#[repr(C)]
-struct NBListHeader {
-    next: *mut NET_BUFFER_LIST,
-    first_net_buffer: *mut NET_BUFFER,
-}
-
-/// This is internal struct should never be allocated from the driver. Use provieded functions by microsoft.
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-pub struct NET_BUFFER_LIST {
-    Header: NBListHeader,
-    Context: *mut c_void,
-    ParentNetBufferList: *mut NET_BUFFER_LIST,
-    NdisPoolHandle: NDIS_HANDLE,
-    NdisReserved: [*mut c_void; 2],
-    ProtocolReserved: [*mut c_void; 4],
-    MiniportReserved: [*mut c_void; 2],
-    Scratch: *mut c_void,
-    SourceHandle: NDIS_HANDLE,
-    NblFlags: u32,
-    ChildRefCount: i32,
-    Flags: u32,
-    pub(crate) Status: NDIS_STATUS,
-    NetBufferListInfo: [*mut c_void; 20], // Extra data at the end of the struct. The size of the array is not fixed.
-}
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-pub struct NET_BUFFER {
-    Next: *mut NET_BUFFER,
-    CurrentMdl: *mut MDL,
-    CurrentMdlOffset: u32,
-    stDataLength: u64, // Use as u32 value. Check the original struct. TODO: Handle this in a better way.
-    MdlChain: *mut MDL,
-    DataOffset: u32,
-    ChecksumBias: u16,
-    Reserved: u16,
-    NdisPoolHandle: NDIS_HANDLE,
-    NdisReserved: [*mut c_void; 2],
-    ProtocolReserved: [*mut c_void; 6],
-    MiniportReserved: [*mut c_void; 4],
-    DataPhysicalAddress: u64,
-    SharedMemoryInfo: *mut c_void,
-}
-
-#[allow(non_camel_case_types)]
-pub type NDIS_HANDLE = *mut c_void;
-
-#[allow(non_camel_case_types)]
-pub type NDIS_STATUS = i32;
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-struct NDIS_OBJECT_HEADER {
-    Type: u8,
-    Revision: u8,
-    Size: u16,
-}
-
-#[allow(non_camel_case_types, non_snake_case)]
-#[repr(C)]
-struct NET_BUFFER_LIST_POOL_PARAMETERS {
-    Header: NDIS_OBJECT_HEADER,
-    ProtocolId: u8,
-    fAllocateNetBuffer: bool,
-    ContextSize: u16,
-    PoolTag: u32,
-    DataSize: u32,
-    Flags: u32,
-}
-
-#[allow(dead_code)]
-extern "C" {
-    pub(super) fn FwpsInjectionHandleDestroy0(injectionHandle: HANDLE) -> NTSTATUS;
-
-    pub(super) fn FwpsReferenceNetBufferList0(
-        netBufferList: *mut NET_BUFFER_LIST,
-        intendToModify: bool,
-    );
-    pub(super) fn FwpsDereferenceNetBufferList0(
-        netBufferList: *mut NET_BUFFER_LIST,
-        dispatchLevel: bool,
-    );
-
-    pub(super) fn NdisGetDataBuffer(
-        NetBuffer: *const NET_BUFFER,
-        BytesNeeded: u32,
-        Storage: *mut u8,
-        AlignMultiple: u32,
-        AlignOffset: u32,
-    ) -> *mut u8;
-
-    /// Call the NdisAllocateCloneNetBufferList function to create a new clone NET_BUFFER_LIST structure.
-    pub(super) fn NdisAllocateCloneNetBufferList(
-        OriginalNetBufferList: *mut NET_BUFFER_LIST,
-        NetBufferListPoolHandle: NDIS_HANDLE,
-        NetBufferPoolHandle: NDIS_HANDLE,
-        AllocateCloneFlag: u32,
-    ) -> *mut NET_BUFFER_LIST;
-
-    pub(super) fn NdisFreeCloneNetBufferList(
-        CloneNetBufferList: *mut NET_BUFFER_LIST,
-        FreeCloneFlags: u32,
-    );
-
-    fn FwpsAllocateNetBufferAndNetBufferList0(
-        poolHandle: NDIS_HANDLE,
-        contextSize: u16,
-        contextBackFill: u16,
-        mdlChain: *mut MDL,
-        dataOffset: u32,
-        dataLength: u64,
-        netBufferList: *mut *mut NET_BUFFER_LIST,
-    ) -> NTSTATUS;
-
-    fn FwpsFreeNetBufferList0(netBufferList: *mut NET_BUFFER_LIST);
-
-    fn NdisAllocateNetBufferListPool(
-        NdisHandle: NDIS_HANDLE,
-        Parameters: *const NET_BUFFER_LIST_POOL_PARAMETERS,
-    ) -> NDIS_HANDLE;
-
-    fn NdisFreeNetBufferListPool(PoolHandle: NDIS_HANDLE);
-
-    fn NdisRetreatNetBufferDataStart(
-        NetBuffer: *mut NET_BUFFER,
-        DataOffsetDelta: u32,
-        DataBackFill: u32,
-        AllocateMdlHandler: *mut c_void,
-    ) -> NDIS_STATUS;
-
-    fn NdisAdvanceNetBufferDataStart(
-        NetBuffer: *mut NET_BUFFER,
-        DataOffsetDelta: u32,
-        FreeMdl: bool,
-        FreeMdlHandler: *mut c_void,
-    );
-}
+use crate::{
+    allocator::POOL_TAG,
+    ffi::{
+        FwpsAllocateNetBufferAndNetBufferList0, FwpsFreeNetBufferList0,
+        NdisAdvanceNetBufferDataStart, NdisAllocateNetBufferListPool, NdisFreeNetBufferListPool,
+        NdisGetDataBuffer, NdisRetreatNetBufferDataStart, NDIS_HANDLE, NDIS_OBJECT_TYPE_DEFAULT,
+        NET_BUFFER_LIST, NET_BUFFER_LIST_POOL_PARAMETERS,
+        NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1,
+    },
+    utils::check_ntstatus,
+};
 
 pub struct NBLIterator(*mut NET_BUFFER_LIST);
 

@@ -17,6 +17,9 @@ pub mod rw_spin_lock;
 pub mod spin_lock;
 pub mod utils;
 
+#[allow(dead_code)]
+pub mod ffi;
+
 // Needed by the linker for legacy reasons. Not important for rust.
 #[cfg(not(test))]
 #[export_name = "_fltused"]

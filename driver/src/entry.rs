@@ -1,7 +1,7 @@
 use crate::device;
 use alloc::boxed::Box;
 use wdk::allocator::NullAllocator;
-use wdk::interface::{WdfObjectAttributes, WdfObjectContextTypeInfo};
+use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::irp_helpers::{ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};

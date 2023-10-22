@@ -1,5 +1,5 @@
 use super::{callout_data::CalloutData, ffi, layer::Layer};
-use crate::filter_engine::FilterEngine;
+use crate::{ffi::FwpsCalloutClassifyFn, filter_engine::FilterEngine};
 use alloc::{borrow::ToOwned, format, string::String};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
@@ -66,7 +66,7 @@ impl Callout {
     pub(crate) fn register_callout(
         &mut self,
         filter_engine: &FilterEngine,
-        callout_fn: ffi::FwpsCalloutClassifyFn,
+        callout_fn: FwpsCalloutClassifyFn,
     ) -> Result<(), String> {
         self.device_object = filter_engine.device_object;
         match ffi::register_callout(

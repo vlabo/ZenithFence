@@ -2,6 +2,7 @@ use core::ffi::c_void;
 
 use crate::alloc::borrow::ToOwned;
 use crate::driver::Driver;
+use crate::ffi::FWPS_FILTER2;
 use crate::filter_engine::transaction::Transaction;
 use crate::{dbg, info};
 use alloc::string::String;
@@ -12,7 +13,6 @@ use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use self::callout::Callout;
 use self::callout_data::CalloutData;
 use self::classify::ClassifyOut;
-use self::ffi::FWPS_FILTER2;
 use self::layer::FwpsIncomingValues;
 use self::metadata::FwpsIncomingMetadataValues;
 

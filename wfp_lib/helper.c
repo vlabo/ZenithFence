@@ -73,7 +73,7 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 }
 
 void* pm_WdfObjectGetTypedContextWorker(WDFOBJECT wdfObject, PCWDF_OBJECT_CONTEXT_TYPE_INFO typeInfo) {
-    return WdfObjectGetTypedContextWorker(wdfObject, typeInfo);
+    return WdfObjectGetTypedContextWorker(wdfObject, typeInfo->UniqueType);
 }
 
 DEVICE_OBJECT* pm_GetDeviceObject(WDFDEVICE device) {

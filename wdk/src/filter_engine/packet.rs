@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use alloc::{
     boxed::Box,
     string::{String, ToString},
@@ -7,120 +5,24 @@ use alloc::{
 };
 use core::{ffi::c_void, mem::MaybeUninit};
 use windows_sys::Win32::{
-    Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS},
-    Networking::WinSock::ADDRESS_FAMILY,
+    Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Networking::WinSock::{AF_INET, AF_UNSPEC, SCOPE_ID},
-    System::Kernel::{COMPARTMENT_ID, UNSPECIFIED_COMPARTMENT_ID},
+    System::Kernel::UNSPECIFIED_COMPARTMENT_ID,
 };
 
-use crate::utils::check_ntstatus;
-
-use super::{
-    callout_data::CalloutData,
-    net_buffer::{
-        FwpsDereferenceNetBufferList0, FwpsInjectionHandleDestroy0, FwpsReferenceNetBufferList0,
-        NetworkAllocator, NET_BUFFER_LIST,
+use crate::{
+    ffi::{
+        FwpsDereferenceNetBufferList0, FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0,
+        FwpsInjectTransportSendAsync1, FwpsInjectionHandleCreate0, FwpsInjectionHandleDestroy0,
+        FwpsQueryPacketInjectionState0, FwpsReferenceNetBufferList0, FWPS_INJECTION_TYPE_NETWORK,
+        FWPS_INJECTION_TYPE_TRANSPORT, FWPS_PACKET_INJECTION_STATE, FWPS_TRANSPORT_SEND_PARAMS1,
+        NET_BUFFER_LIST,
     },
+    utils::check_ntstatus,
 };
 
-const FWPS_INJECTION_TYPE_STREAM: u32 = 0x00000001;
-const FWPS_INJECTION_TYPE_TRANSPORT: u32 = 0x00000002;
-const FWPS_INJECTION_TYPE_NETWORK: u32 = 0x00000004;
-const FWPS_INJECTION_TYPE_FORWARD: u32 = 0x00000008;
-const FWPS_INJECTION_TYPE_L2: u32 = 0x00000010;
-const FWPS_INJECTION_TYPE_VSWITCH_TRANSPORT: u32 = 0x00000020;
+use super::{callout_data::CalloutData, net_buffer::NetworkAllocator};
 
-#[allow(non_camel_case_types)]
-type FWPS_INJECT_COMPLETE0 = unsafe extern "C" fn(
-    context: *mut c_void,
-    net_buffer_list: *mut NET_BUFFER_LIST,
-    dispatch_level: bool,
-);
-
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct FWPS_TRANSPORT_SEND_PARAMS1 {
-    remote_address: *const u8,
-    remote_scope_id: SCOPE_ID,
-    control_data: *mut c_void, //WSACMSGHDR,
-    control_data_length: u32,
-    header_include_header: *mut u8,
-    header_include_header_length: u32,
-}
-
-#[allow(non_camel_case_types)]
-#[repr(C)]
-enum FWPS_PACKET_INJECTION_STATE {
-    FWPS_PACKET_NOT_INJECTED,
-    FWPS_PACKET_INJECTED_BY_SELF,
-    FWPS_PACKET_INJECTED_BY_OTHER,
-    FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF,
-    FWPS_PACKET_INJECTION_STATE_MAX,
-}
-
-#[allow(dead_code)]
-extern "C" {
-    fn FwpsInjectNetworkSendAsync0(
-        injectionHandle: HANDLE,
-        injectionContext: HANDLE,
-        flags: u32,
-        compartmentId: COMPARTMENT_ID,
-        netBufferList: *mut NET_BUFFER_LIST,
-        completionFn: FWPS_INJECT_COMPLETE0,
-        completionContext: *mut c_void,
-    ) -> NTSTATUS;
-
-    fn FwpsInjectNetworkReceiveAsync0(
-        injectionHandle: HANDLE,
-        injectionContext: HANDLE,
-        flags: u32,
-        compartmentId: COMPARTMENT_ID,
-        interfaceIndex: u32,
-        subInterfaceIndex: u32,
-        netBufferList: *mut NET_BUFFER_LIST,
-        completionFn: FWPS_INJECT_COMPLETE0,
-        completionContext: *mut c_void,
-    ) -> NTSTATUS;
-
-    fn FwpsInjectTransportSendAsync1(
-        injectionHandle: HANDLE,
-        injectionContext: HANDLE,
-        endpointHandle: u64,
-        flags: u32,
-        sendArgs: *mut FWPS_TRANSPORT_SEND_PARAMS1,
-        addressFamily: ADDRESS_FAMILY,
-        compartmentId: COMPARTMENT_ID,
-        netBufferList: *mut NET_BUFFER_LIST,
-        completionFn: FWPS_INJECT_COMPLETE0,
-        completionContext: *mut c_void,
-    ) -> NTSTATUS;
-
-    fn FwpsInjectTransportReceiveAsync0(
-        injectionHandle: HANDLE,
-        injectionContext: HANDLE,
-        reserved: *const c_void,
-        flags: u32,
-        addressFamily: ADDRESS_FAMILY,
-        compartmentId: COMPARTMENT_ID,
-        interfaceIndex: u32,
-        subInterfaceIndex: u32,
-        netBufferList: *mut NET_BUFFER_LIST,
-        completionFn: FWPS_INJECT_COMPLETE0,
-        completionContext: *mut c_void,
-    ) -> NTSTATUS;
-
-    fn FwpsInjectionHandleCreate0(
-        addressFamily: ADDRESS_FAMILY,
-        flags: u32,
-        injectionHandle: &mut HANDLE,
-    ) -> NTSTATUS;
-
-    fn FwpsQueryPacketInjectionState0(
-        injectionHandle: HANDLE,
-        netBufferList: *const NET_BUFFER_LIST,
-        injectionContext: *mut HANDLE,
-    ) -> FWPS_PACKET_INJECTION_STATE;
-}
 pub struct TransportPacketList {
     nbl: *mut NET_BUFFER_LIST,
     remote_ip: [u8; 4],
