@@ -77,7 +77,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "ciborium"
 version = "0.2.1"
-source = "git+https://github.com/vlabo/ciborium#5a2498c10de294a0cb64b5f3234a8971e8f4999a"
+source = "git+https://github.com/enarx/ciborium?rev=09134e6#09134e6f19ca1f7445dba7664535b0b954575598"
 dependencies = [
  "ciborium-io",
  "ciborium-ll",
@@ -87,12 +87,12 @@ dependencies = [
 [[package]]
 name = "ciborium-io"
 version = "0.2.1"
-source = "git+https://github.com/vlabo/ciborium#5a2498c10de294a0cb64b5f3234a8971e8f4999a"
+source = "git+https://github.com/enarx/ciborium?rev=09134e6#09134e6f19ca1f7445dba7664535b0b954575598"
 
 [[package]]
 name = "ciborium-ll"
 version = "0.2.1"
-source = "git+https://github.com/vlabo/ciborium#5a2498c10de294a0cb64b5f3234a8971e8f4999a"
+source = "git+https://github.com/enarx/ciborium?rev=09134e6#09134e6f19ca1f7445dba7664535b0b954575598"
 dependencies = [
  "ciborium-io",
  "half",
@@ -213,9 +213,9 @@ checksum = "a08173bc88b7955d1b3145aa561539096c421ac8debde8cbc3612ec635fee29b"
 
 [[package]]
 name = "lock_api"
-version = "0.4.10"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1cc9717a20b1bb222f333e6a92fd32f7d8a18ddc5a3191a11af45dcbf4dcd16"
+checksum = "3c168f8615b12bc01f9c17e2eb0cc07dcae1940121185446edc3744920e8ef45"
 dependencies = [
  "autocfg",
  "scopeguard",
@@ -241,12 +241,6 @@ checksum = "e7810e0be55b428ada41041c41f32c9f1a42817901b4ccf45fa3d4b6561e74c7"
 dependencies = [
  "adler",
 ]
-
-[[package]]
-name = "myn"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f950af707b8005ae33bb0f0b20cb32b09750e7375085606dc45b2f2078a34e52"
 
 [[package]]
 name = "ntstatus"
@@ -358,15 +352,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "onlyerror"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a66685f46cfd9f79c981531f6c2af1737e08deb27637561eaeee792332e2fc3"
-dependencies = [
- "myn",
 ]
 
 [[package]]
@@ -531,7 +516,6 @@ version = "0.1.0"
 dependencies = [
  "failure",
  "ntstatus",
- "onlyerror",
  "widestring",
  "windows-sys",
  "winreg",
@@ -568,7 +552,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 [[package]]
 name = "windows-sys"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 dependencies = [
  "windows-targets",
 ]
@@ -576,7 +560,7 @@ dependencies = [
 [[package]]
 name = "windows-targets"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 dependencies = [
  "windows_aarch64_gnullvm",
  "windows_aarch64_msvc",
@@ -590,37 +574,37 @@ dependencies = [
 [[package]]
 name = "windows_aarch64_gnullvm"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_aarch64_msvc"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_i686_gnu"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_i686_msvc"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_x86_64_gnu"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "windows_x86_64_msvc"
 version = "0.52.0"
-source = "git+https://github.com/microsoft/windows-rs#41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+source = "git+https://github.com/microsoft/windows-rs#22de1c9640032c31cd7b82c7376d60122d17f776"
 
 [[package]]
 name = "winreg"

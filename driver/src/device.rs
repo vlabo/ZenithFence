@@ -21,7 +21,6 @@ use crate::{
     connection_cache::{ConnectionAction, ConnectionCache},
     id_cache::PacketCache,
     protocol::{self, Command},
-    types::Verdict,
 };
 
 // Device Context
@@ -188,7 +187,9 @@ impl Device {
                     let local_address = Ipv4Address(packet.local_ip);
                     let original_remote_address = Ipv4Address(packet.remote_ip);
                     let original_remote_port = packet.remote_port;
-                    let remote_address = Ipv4Address(remote_address);
+                    let mut tmp: [u8; 4] = [0; 4];
+                    tmp.copy_from_slice(&remote_address);
+                    let remote_address = Ipv4Address(tmp);
 
                     completion_promise = self.connection_cache.add_connection(
                         &mut packet,

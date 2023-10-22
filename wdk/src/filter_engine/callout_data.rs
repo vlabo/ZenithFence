@@ -2,11 +2,10 @@ use crate::utils::check_ntstatus;
 
 use super::{
     classify::ClassifyOut,
-    connect_request::FwpsConnectRequest0,
     ffi::{self, FwpsPendOperation0},
     layer::{Layer, Value},
     metadata::FwpsIncomingMetadataValues,
-    packet::PacketList,
+    packet::TransportPacketList,
     FilterEngine,
 };
 use alloc::string::{String, ToString};
@@ -18,12 +17,15 @@ use windows_sys::Win32::{
 };
 
 pub enum ClassifyPromise {
-    Initial(HANDLE, Option<PacketList>),
-    Reauthorization(usize, Option<PacketList>),
+    Initial(HANDLE, Option<TransportPacketList>),
+    Reauthorization(usize, Option<TransportPacketList>),
 }
 
 impl ClassifyPromise {
-    pub fn complete(self, filter_engine: &FilterEngine) -> Result<Option<PacketList>, String> {
+    pub fn complete(
+        self,
+        filter_engine: &FilterEngine,
+    ) -> Result<Option<TransportPacketList>, String> {
         unsafe {
             match self {
                 ClassifyPromise::Initial(context, packet_list) => {
@@ -103,7 +105,7 @@ impl<'a> CalloutData<'a> {
 
     pub fn pend_operation(
         &mut self,
-        packet_list: Option<PacketList>,
+        packet_list: Option<TransportPacketList>,
     ) -> Result<ClassifyPromise, String> {
         unsafe {
             let mut completion_context = 0;
@@ -118,7 +120,10 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn pend_filter_rest(&mut self, packet_list: Option<PacketList>) -> ClassifyPromise {
+    pub fn pend_filter_rest(
+        &mut self,
+        packet_list: Option<TransportPacketList>,
+    ) -> ClassifyPromise {
         return ClassifyPromise::Reauthorization(self.callout_index, packet_list);
     }
 

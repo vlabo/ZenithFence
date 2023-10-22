@@ -42,6 +42,7 @@ extern "C" {
         win_driver_path: PCWSTR,
         dos_driver_path: PCWSTR,
         object_attributes: *mut WdfObjectAttributes,
+        wdf_driver_unload: extern "C" fn(HANDLE),
     ) -> NTSTATUS;
 
     fn pm_WdfObjectGetTypedContextWorker(
@@ -173,6 +174,7 @@ pub fn init_driver_object(
             win_driver.as_ptr(),
             dos_driver.as_ptr(),
             &mut object_attributes,
+            empty_wdf_driver_unload,
         );
 
         check_ntstatus(status)?;
@@ -211,3 +213,6 @@ pub fn get_device_context_from_device_object<'a, T>(
 
     return Err(());
 }
+
+/// Empty unload event
+extern "C" fn empty_wdf_driver_unload(_driver: HANDLE) {}

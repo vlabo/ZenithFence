@@ -28,7 +28,7 @@
 
 EVT_WDF_DRIVER_UNLOAD emptyEventUnload;
 
-NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name, WDF_OBJECT_ATTRIBUTES * objectAttributes) {
+NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * registryPath, WDFDRIVER * driver, WDFDEVICE * device, wchar_t *win_device_name, wchar_t *dos_device_name, WDF_OBJECT_ATTRIBUTES * objectAttributes, void (*wdfEventUnload)(WDFDRIVER)) {
 	UNICODE_STRING deviceName = { 0 };
 	RtlInitUnicodeString(&deviceName, win_device_name);
 
@@ -39,7 +39,7 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 	WDF_DRIVER_CONFIG config = { 0 };
 	WDF_DRIVER_CONFIG_INIT(&config, WDF_NO_EVENT_CALLBACK);
 	config.DriverInitFlags = WdfDriverInitNonPnpDriver;
-	config.EvtDriverUnload = emptyEventUnload; // <-- Necessary for this driver to unload correctly
+	config.EvtDriverUnload = wdfEventUnload; // <-- Necessary for this driver to unload correctly
 	NTSTATUS status = WdfDriverCreate(driverObject, registryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, driver);
 	if (!NT_SUCCESS(status)) {
       return status;
@@ -70,11 +70,6 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 
 	WdfControlFinishInitializing(*device);
 	return STATUS_SUCCESS;
-}
-
-// TODO: Move to rust.
-void emptyEventUnload(WDFDRIVER Driver) {
-  UNREFERENCED_PARAMETER(Driver);
 }
 
 void* pm_WdfObjectGetTypedContextWorker(WDFOBJECT wdfObject, PCWDF_OBJECT_CONTEXT_TYPE_INFO typeInfo) {

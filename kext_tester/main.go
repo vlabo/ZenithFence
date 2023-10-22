@@ -67,7 +67,7 @@ func main() {
 						{
 							connection := info.Connection
 							if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{1, 1, 1, 1})) {
-								kext_interface.WriteCommand(file, kext_interface.BuildRedirect(connection.Id, []uint16{9, 9, 9, 9}, 53))
+								kext_interface.WriteCommand(file, kext_interface.BuildRedirect(connection.Id, []uint8{9, 9, 9, 9}, 53))
 							} else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
 								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(connection.Id, uint8(VerdictBlock)))
 							} else {

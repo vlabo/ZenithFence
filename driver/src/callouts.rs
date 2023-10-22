@@ -45,11 +45,11 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
                 }
             },
             ConnectionAction::RedirectIP {
-                local_address,
-                original_remote_address,
-                original_remote_port,
-                remote_address,
-                remote_port,
+                local_address: _,
+                original_remote_address: _,
+                original_remote_port: _,
+                remote_address: _,
+                remote_port: _,
             } => {
                 data.action_permit();
             }
@@ -58,13 +58,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // Pend decision of connection.
         let mut packet_list = None;
         if packet.protocol == 17 {
-            packet_list = Some(Injector::from_ale_callout(
-                &data,
-                false,
-                packet.remote_ip,
-                packet.interface_index,
-                packet.sub_interface_index,
-            ));
+            packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
         }
         let promise = if data.is_reauthorize(FwpsFieldsAleAuthConnectV4::Flags as usize) {
             data.pend_filter_rest(packet_list)
@@ -90,19 +84,19 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 }
 
 fn inject_packet(
-    device: &mut Device,
+    device: &Device,
     packet: &[u8],
     inbound: bool,
     loopback: bool,
     if_index: u32,
     sub_inf_index: u32,
 ) -> Result<(), ()> {
-    if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&packet) {
+    if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(packet) {
         let packet = Injector::from_ip_callout(nbl, inbound, loopback, if_index, sub_inf_index);
         _ = device.injector.inject_packet_list_network(packet);
         return Ok(());
     }
-    return Err(());
+    Err(())
 }
 
 fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
@@ -151,6 +145,21 @@ fn redirect_inbound_packet(
             if let Ok(mut tcp_packet) = TcpPacket::new_checked(ip_packet.payload_mut()) {
                 tcp_packet.set_src_port(original_remote_port);
                 tcp_packet.fill_checksum(&IpAddress::Ipv4(src_addr), &IpAddress::Ipv4(dst_addr));
+            }
+        }
+    }
+}
+
+fn print_packet(packet: &[u8]) {
+    if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
+        if ip_packet.next_header() == IpProtocol::Udp {
+            if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
+                dbg!("injecting packet {} {}", ip_packet, udp_packet);
+            }
+        }
+        if ip_packet.next_header() == IpProtocol::Tcp {
+            if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
+                dbg!("injecting packet {} {}", ip_packet, tcp_packet);
             }
         }
     }
@@ -211,34 +220,32 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         };
 
         // Get action.
-        match device
+        if let Some(ConnectionAction::RedirectIP {
+            local_address: _,
+            original_remote_address: _,
+            original_remote_port: _,
+            remote_address,
+            remote_port,
+        }) = device
             .connection_cache
             .get_connection_action(port, protocol)
         {
-            Some(ConnectionAction::RedirectIP {
-                local_address: _,
-                original_remote_address: _,
-                original_remote_port: _,
-                remote_address,
-                remote_port,
-            }) => {
-                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
-                redirect_outbound_packet(&mut buffer, remote_address, remote_port);
-                if inject_packet(
-                    device,
-                    &buffer,
-                    false,
-                    remote_address.is_loopback(),
-                    data.get_value_u32(Fields::InterfaceIndex as usize),
-                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                )
-                .is_ok()
-                {
-                    data.block_and_absorb();
-                    return;
-                }
+            let mut buffer = buffer.unwrap_or(full_packet.to_vec());
+            redirect_outbound_packet(&mut buffer, remote_address, remote_port);
+            print_packet(&buffer);
+            if inject_packet(
+                device,
+                &buffer,
+                false,
+                remote_address.is_loopback(),
+                data.get_value_u32(Fields::InterfaceIndex as usize),
+                data.get_value_u32(Fields::SubInterfaceIndex as usize),
+            )
+            .is_ok()
+            {
+                data.block_and_absorb();
+                return;
             }
-            _ => {}
         }
     }
 
@@ -297,39 +304,37 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         };
 
         // Get action.
-        match device
+        if let Some(ConnectionAction::RedirectIP {
+            local_address,
+            original_remote_address,
+            original_remote_port,
+            remote_address,
+            remote_port: _,
+        }) = device
             .connection_cache
             .get_connection_action(port, protocol)
         {
-            Some(ConnectionAction::RedirectIP {
+            let mut buffer = buffer.unwrap_or(full_packet.to_vec());
+            redirect_inbound_packet(
+                &mut buffer,
                 local_address,
                 original_remote_address,
                 original_remote_port,
-                remote_address,
-                remote_port: _,
-            }) => {
-                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
-                redirect_inbound_packet(
-                    &mut buffer,
-                    local_address,
-                    original_remote_address,
-                    original_remote_port,
-                );
-                if inject_packet(
-                    device,
-                    &buffer,
-                    false,
-                    remote_address.is_loopback(),
-                    data.get_value_u32(Fields::InterfaceIndex as usize),
-                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                )
-                .is_ok()
-                {
-                    data.block_and_absorb();
-                    return;
-                }
+            );
+            print_packet(&buffer);
+            if inject_packet(
+                device,
+                &buffer,
+                false,
+                remote_address.is_loopback(),
+                data.get_value_u32(Fields::InterfaceIndex as usize),
+                data.get_value_u32(Fields::SubInterfaceIndex as usize),
+            )
+            .is_ok()
+            {
+                data.block_and_absorb();
+                return;
             }
-            _ => {}
         }
     }
 

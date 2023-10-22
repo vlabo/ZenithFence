@@ -11,16 +11,16 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-wdk = {path = "../wdk"}
-flatbuffers = {version = "23.5", default-features = false}
-num = {version = "0.4", default-features = false}
-num-derive = { version = "0.4", default-features = false}
-num-traits = { version = "0.2", default-features = false}
-serde = {version = "1.0", default-features = false }
-ciborium = {git = "https://github.com/vlabo/ciborium", default-features = false }
-ciborium-io = {git = "https://github.com/vlabo/ciborium", default-features = false }
-serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
-smoltcp = { version = "0.10", default-features = false, features = ["proto-ipv4", "proto-ipv6"]}
+wdk = { path = "../wdk" }
+flatbuffers = { version = "23.5", default-features = false }
+num = { version = "0.4", default-features = false }
+num-derive = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+serde = { version = "1.0", default-features = false }
+ciborium = { git = "https://github.com/enarx/ciborium", rev = "09134e6", default-features = false }
+ciborium-io = { git = "https://github.com/enarx/ciborium", rev = "09134e6", default-features = false }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+smoltcp = { version = "0.10", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
 
 [dependencies.windows-sys]
 # version = "0.48.5"

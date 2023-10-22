@@ -97,12 +97,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "myn"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f950af707b8005ae33bb0f0b20cb32b09750e7375085606dc45b2f2078a34e52"
-
-[[package]]
 name = "ntstatus"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -138,15 +132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "onlyerror"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a66685f46cfd9f79c981531f6c2af1737e08deb27637561eaeee792332e2fc3"
-dependencies = [
- "myn",
 ]
 
 [[package]]
@@ -225,7 +210,6 @@ version = "0.1.0"
 dependencies = [
  "failure",
  "ntstatus",
- "onlyerror",
  "widestring",
  "windows-sys",
  "winreg",

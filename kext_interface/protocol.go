@@ -5,13 +5,11 @@ package kext_interface
 
 import (
 	"encoding/binary"
-	"encoding/json"
-	"github.com/fxamacker/cbor/v2"
 	"io"
 	"log"
-)
 
-const use_json = true
+	"github.com/fxamacker/cbor/v2"
+)
 
 // Driver structs
 type Connection struct {
@@ -33,13 +31,7 @@ type Info struct {
 
 func ParseInfo(data []byte) (*Info, error) {
 	var info Info
-	var err error
-	if use_json {
-		log.Printf("Info: %s\n", string(data))
-		err = json.Unmarshal(data, &info)
-	} else {
-		err = cbor.Unmarshal(data, &info)
-	}
+	err := cbor.Unmarshal(data, &info)
 	return &info, err
 }
 
@@ -49,9 +41,9 @@ type Verdict struct {
 }
 
 type Redirect struct {
-	Id            uint64   `json:"id"`
-	RemoteAddress []uint16 `json:"remote_address"`
-	RemotePort    uint16   `json:"remote_port"`
+	Id            uint64  `json:"id"`
+	RemoteAddress []uint8 `json:"remote_address"`
+	RemotePort    uint16  `json:"remote_port"`
 }
 
 type Command struct {
@@ -68,19 +60,12 @@ func BuildVerdict(id uint64, verdict uint8) Command {
 	return Command{Verdict: &Verdict{Id: id, Verdict: verdict}}
 }
 
-func BuildRedirect(id uint64, remoteAddress []uint16, remotePort uint16) Command {
+func BuildRedirect(id uint64, remoteAddress []uint8, remotePort uint16) Command {
 	return Command{Redirect: &Redirect{Id: id, RemoteAddress: remoteAddress, RemotePort: remotePort}}
 }
 
 func WriteCommand(writer io.Writer, command Command) {
-	var data []byte
-	var err error
-	if use_json {
-		data, err = json.Marshal(&command)
-		log.Printf("Command: %s\n", string(data))
-	} else {
-		data, err = cbor.Marshal(&command)
-	}
+	data, err := cbor.Marshal(&command)
 	if err != nil {
 		log.Printf("failed to marshal command: %s\n", err)
 		return

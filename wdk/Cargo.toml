@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 ntstatus = { version = "0.1.2", default-features = false }
-onlyerror = { version = "0.1", default-features = false }
 
 [dependencies.widestring]
 version = "1.0.2"

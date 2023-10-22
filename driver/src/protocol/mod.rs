@@ -1,8 +1,6 @@
-use crate::types::{PacketInfo, Verdict};
+use crate::types::PacketInfo;
 use alloc::{format, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
-
-static USE_JSON: bool = true;
 
 struct ByteWriter(Vec<u8>);
 
@@ -62,16 +60,9 @@ pub enum Info {
 
 impl Info {
     pub fn serialize(self) -> Result<Vec<u8>, ()> {
-        if USE_JSON {
-            if let Ok(vec) = serde_json::to_vec(&self) {
-                return Ok(vec);
-            }
-            Err(())
-        } else {
-            let mut buffer = ByteWriter(Vec::new());
-            _ = ciborium::into_writer(&self, &mut buffer);
-            Ok(buffer.get())
-        }
+        let mut buffer = ByteWriter(Vec::new());
+        _ = ciborium::into_writer(&self, &mut buffer);
+        Ok(buffer.get())
     }
 }
 
@@ -105,22 +96,15 @@ pub enum Command {
     },
     Redirect {
         id: u64,
-        remote_address: [u8; 4],
+        remote_address: Vec<u8>,
         remote_port: u16,
     },
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {
-    if USE_JSON {
-        match serde_json::from_slice(data) {
-            Ok(command) => Ok(command),
-            Err(err) => Err(format!("{}", err)),
-        }
-    } else {
-        let byte_reader = ByteReader(data);
-        match ciborium::from_reader::<Command, ByteReader>(byte_reader) {
-            Ok(command) => Ok(command),
-            Err(err) => Err(format!("{}", err)),
-        }
+    let byte_reader = ByteReader(data);
+    match ciborium::from_reader::<Command, ByteReader>(byte_reader) {
+        Ok(command) => Ok(command),
+        Err(err) => Err(format!("{}", err)),
     }
 }

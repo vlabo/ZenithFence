@@ -1,6 +1,7 @@
 use core::{
     cell::UnsafeCell,
     ffi::c_void,
+    fmt::Display,
     marker::PhantomData,
     mem::MaybeUninit,
     sync::atomic::{AtomicBool, Ordering},
@@ -11,16 +12,23 @@ use alloc::boxed::Box;
 use ntstatus::ntstatus::NtStatus;
 use windows_sys::{Wdk::Foundation::KQUEUE, Win32::System::Kernel::LIST_ENTRY};
 
-#[derive(Debug, onlyerror::Error)]
+#[derive(Debug)]
 pub enum Status {
-    #[error("unitialized")]
     Uninitialized,
-    #[error("timeout")]
     Timeout,
-    #[error("user apc")]
     UserAPC,
-    #[error("abandened")]
     Abandened,
+}
+
+impl Display for Status {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Status::Uninitialized => write!(f, "Uninitialized"),
+            Status::Timeout => write!(f, "Timeout"),
+            Status::UserAPC => write!(f, "UserAPC"),
+            Status::Abandened => write!(f, "Abandened"),
+        }
+    }
 }
 
 #[repr(i8)]
