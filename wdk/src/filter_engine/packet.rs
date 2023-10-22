@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::{
     boxed::Box,
     string::{String, ToString},
@@ -7,7 +9,7 @@ use core::{ffi::c_void, mem::MaybeUninit};
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS},
     Networking::WinSock::ADDRESS_FAMILY,
-    Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SCOPE_ID},
+    Networking::WinSock::{AF_INET, AF_UNSPEC, SCOPE_ID},
     System::Kernel::{COMPARTMENT_ID, UNSPECIFIED_COMPARTMENT_ID},
 };
 
@@ -164,7 +166,7 @@ impl Injector {
         let mut network_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
             let status = FwpsInjectionHandleCreate0(
-                AF_INET,
+                AF_UNSPEC,
                 FWPS_INJECTION_TYPE_TRANSPORT,
                 &mut transport_inject_handle,
             );

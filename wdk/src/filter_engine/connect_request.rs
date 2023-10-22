@@ -6,6 +6,7 @@ use windows_sys::Win32::{
 };
 
 use crate::info;
+
 #[repr(C)]
 pub(crate) struct FwpsConnectRequest0 {
     pub(crate) local_address_and_port: [u8; 128],

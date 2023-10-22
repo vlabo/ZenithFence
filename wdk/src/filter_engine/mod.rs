@@ -19,7 +19,6 @@ use self::metadata::FwpsIncomingMetadataValues;
 pub mod callout;
 pub mod callout_data;
 pub(crate) mod classify;
-pub mod connect_request;
 #[allow(dead_code)]
 pub mod ffi;
 pub mod layer;
@@ -27,6 +26,9 @@ pub(crate) mod metadata;
 pub mod net_buffer;
 pub mod packet;
 pub mod transaction;
+
+// Helper functions for ALE Readirect layers. Not needed for the current implementation.
+// pub mod connect_request;
 
 pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
@@ -194,6 +196,8 @@ unsafe extern "C" fn catch_all_callout(
     _flow_context: u64,
     classify_out: *mut ClassifyOut,
 ) {
+    let _ = context; // Unused
+
     let filter = &(*filter);
     if let Some(callouts) = CALLOUTS.as_ref() {
         if let Some(callout) = callouts.get(filter.context as usize) {
@@ -207,8 +211,6 @@ unsafe extern "C" fn catch_all_callout(
                 values: array,
                 metadata: meta_values,
                 classify_out,
-                classify_context: context,
-                filter_id: callout.filter_id,
                 layer_data,
             };
             if let Some(device_object) = callout.device_object.as_mut() {

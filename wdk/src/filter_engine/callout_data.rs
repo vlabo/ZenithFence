@@ -47,8 +47,6 @@ pub struct CalloutData<'a> {
     pub(crate) values: &'a [Value],
     pub(crate) metadata: *const FwpsIncomingMetadataValues,
     pub(crate) classify_out: *mut ClassifyOut,
-    pub(crate) classify_context: *mut c_void,
-    pub(crate) filter_id: u64,
     pub(crate) layer_data: *mut c_void,
 }
 

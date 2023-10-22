@@ -1,7 +1,6 @@
 use core::ffi::c_void;
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use widestring::U16CString;
 use windows_sys::Win32::{
     Foundation::HANDLE,
