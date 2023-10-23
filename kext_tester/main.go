@@ -51,6 +51,13 @@ func main() {
 	}
 	defer file.Close()
 
+	version, err := kext_interface.ReadVersion(file)
+	if err == nil {
+		log.Printf("Kext version: %d.%d.%d.%d\n", version[0], version[1], version[2], version[3])
+	} else {
+		log.Printf("Error reading version: %s\n", err)
+	}
+
 	infoChan := make(chan *kext_interface.Info)
 	endChan := make(chan struct{})
 	go func() {

@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod array_holder;
 mod callouts;
+mod common;
 mod connection_cache;
 mod device;
 mod entry;

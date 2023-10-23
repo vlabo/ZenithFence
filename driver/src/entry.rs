@@ -2,10 +2,12 @@ use crate::device;
 use alloc::boxed::Box;
 use wdk::allocator::NullAllocator;
 use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
-use wdk::irp_helpers::{ReadRequest, WriteRequest};
+use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
+
+static VERSION: [u8; 4] = include!("../../version.rs");
 
 static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
     WdfObjectContextTypeInfo::default("DriverContext\0");
@@ -39,6 +41,7 @@ pub extern "system" fn DriverEntry(
     driver.set_driver_unload(driver_unload);
     driver.set_read_fn(driver_read);
     driver.set_write_fn(driver_write);
+    driver.set_device_control_fn(device_control);
 
     // Initialize device.
     if let Some(device_object) = driver.get_device_object_ref() {
@@ -108,38 +111,17 @@ unsafe extern "system" fn driver_write(
     write_request.get_status()
 }
 
-// fn driver_device_control(_driver_object: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
-//     unsafe {
-//         let buf = (*irp).AssociatedIrp.SystemBuffer;
-//         let stack_location: *mut IO_STACK_LOCATION = (*irp)
-//             .Tail
-//             .Overlay
-//             .Anonymous2
-//             .Anonymous
-//             .CurrentStackLocation;
+unsafe extern "system" fn device_control(
+    _driver_object: &mut DEVICE_OBJECT,
+    irp: &mut IRP,
+) -> NTSTATUS {
+    let mut control_request = DeviceControlRequest::new(irp);
 
-//         let io_control_code = (*stack_location).Parameters.DeviceIoControl.IoControlCode;
-//         if let Ok(code) = io_control_code.try_into() {
-//             match code {
-//                 IOCTL::Version => {
-//                     let version_array = core::slice::from_raw_parts_mut(buf as *mut u8, 4);
-//                     version_array[0] = 1;
-//                     version_array[1] = 1;
-//                     version_array[2] = 1;
-//                     version_array[3] = 1;
-//                     (*irp).IoStatus.Anonymous.Status = STATUS_SUCCESS;
-//                     (*irp).IoStatus.Information = 4;
-//                     return STATUS_SUCCESS;
-//                 }
-//                 IOCTL::ShutdownRequest => todo!(),
-//                 IOCTL::RecvVerdictReq => todo!(),
-//                 IOCTL::SetVerdict => todo!(),
-//                 IOCTL::GetPayload => todo!(),
-//                 IOCTL::ClearCache => todo!(),
-//                 IOCTL::UpdateVerdict => todo!(),
-//                 IOCTL::GetConnectionsStat => todo!(),
-//             }
-//         }
-//     }
-//     return STATUS_SUCCESS;
-// }
+    // Reading the control code does not work.
+    // if control_request.get_control_code() == crate::common::IOCTL_VERSION {
+    info!("Reading version");
+    control_request.write(&VERSION);
+    // }
+    control_request.complete();
+    control_request.get_status()
+}
