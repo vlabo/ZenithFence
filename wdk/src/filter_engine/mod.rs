@@ -133,6 +133,40 @@ impl FilterEngine {
         return Ok(());
     }
 
+    pub fn reset_all_filters(&self) -> Result<(), String> {
+        // Begin write trasacction. This is also a lock guard.
+        let mut transaction = match Transaction::begin_write(self) {
+            Ok(transaction) => transaction,
+            Err(err) => {
+                return Err(err);
+            }
+        };
+        unsafe {
+            if let Some(callouts) = CALLOUTS.as_mut() {
+                for callout in callouts {
+                    if callout.filter_id != 0 {
+                        // Remove old filter.
+                        if let Err(err) =
+                            ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
+                        {
+                            return Err(format!("filter_engine: {}", err));
+                        }
+                        callout.filter_id = 0;
+                    }
+                    // Create new filter.
+                    if let Err(err) = callout.register_filter(self) {
+                        return Err(format!("filter_engine: {}", err));
+                    }
+                }
+            }
+        }
+        // Commit transaction.
+        if let Err(err) = transaction.commit() {
+            return Err(err);
+        }
+        return Ok(());
+    }
+
     fn register_sublayer(&self) -> Result<(), String> {
         let result = ffi::register_sublayer(
             self.filter_engine_handle,

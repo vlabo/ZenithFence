@@ -99,6 +99,13 @@ pub enum Command {
         remote_address: Vec<u8>,
         remote_port: u16,
     },
+    Update {
+        protocol: u8,
+        port: u16,
+        verdict: u8,
+        remote_address: Vec<u8>,
+        remote_port: u16,
+    },
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {

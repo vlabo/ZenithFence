@@ -31,25 +31,22 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
     let mut packet = PacketInfo::from_callout_data(&data);
     dbg!("Connect callout: {:?}", packet);
-    if let Some(action) = device
+    if let Some(connection) = device
         .connection_cache
         .get_connection_action(packet.local_port, IpProtocol::from(packet.protocol))
     {
         // We already have a verdict for it.
-        match action {
+        match connection.action {
             ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept => data.action_permit(),
+                Verdict::Accept | Verdict::Redirect => data.action_permit(),
                 Verdict::Block => data.action_block(),
                 Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
                     data.block_and_absorb()
                 }
             },
             ConnectionAction::RedirectIP {
-                local_address: _,
-                original_remote_address: _,
-                original_remote_port: _,
-                remote_address: _,
-                remote_port: _,
+                redirect_address: _,
+                redirect_port: _,
             } => {
                 data.action_permit();
             }
@@ -220,31 +217,31 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         };
 
         // Get action.
-        if let Some(ConnectionAction::RedirectIP {
-            local_address: _,
-            original_remote_address: _,
-            original_remote_port: _,
-            remote_address,
-            remote_port,
-        }) = device
+        if let Some(connection) = device
             .connection_cache
             .get_connection_action(port, protocol)
         {
-            let mut buffer = buffer.unwrap_or(full_packet.to_vec());
-            redirect_outbound_packet(&mut buffer, remote_address, remote_port);
-            print_packet(&buffer);
-            if inject_packet(
-                device,
-                &buffer,
-                false,
-                remote_address.is_loopback(),
-                data.get_value_u32(Fields::InterfaceIndex as usize),
-                data.get_value_u32(Fields::SubInterfaceIndex as usize),
-            )
-            .is_ok()
+            if let ConnectionAction::RedirectIP {
+                redirect_address,
+                redirect_port,
+            } = connection.action
             {
-                data.block_and_absorb();
-                return;
+                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
+                redirect_outbound_packet(&mut buffer, redirect_address, redirect_port);
+                print_packet(&buffer);
+                if inject_packet(
+                    device,
+                    &buffer,
+                    false,
+                    redirect_address.is_loopback(),
+                    data.get_value_u32(Fields::InterfaceIndex as usize),
+                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
+                )
+                .is_ok()
+                {
+                    data.block_and_absorb();
+                    return;
+                }
             }
         }
     }
@@ -304,36 +301,36 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         };
 
         // Get action.
-        if let Some(ConnectionAction::RedirectIP {
-            local_address,
-            original_remote_address,
-            original_remote_port,
-            remote_address,
-            remote_port: _,
-        }) = device
+        if let Some(connection) = device
             .connection_cache
             .get_connection_action(port, protocol)
         {
-            let mut buffer = buffer.unwrap_or(full_packet.to_vec());
-            redirect_inbound_packet(
-                &mut buffer,
-                local_address,
-                original_remote_address,
-                original_remote_port,
-            );
-            print_packet(&buffer);
-            if inject_packet(
-                device,
-                &buffer,
-                false,
-                remote_address.is_loopback(),
-                data.get_value_u32(Fields::InterfaceIndex as usize),
-                data.get_value_u32(Fields::SubInterfaceIndex as usize),
-            )
-            .is_ok()
+            if let ConnectionAction::RedirectIP {
+                redirect_address,
+                redirect_port: _,
+            } = connection.action
             {
-                data.block_and_absorb();
-                return;
+                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
+                redirect_inbound_packet(
+                    &mut buffer,
+                    connection.local_address,
+                    connection.remote_address,
+                    connection.remote_port,
+                );
+                print_packet(&buffer);
+                if inject_packet(
+                    device,
+                    &buffer,
+                    false,
+                    redirect_address.is_loopback(),
+                    data.get_value_u32(Fields::InterfaceIndex as usize),
+                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
+                )
+                .is_ok()
+                {
+                    data.block_and_absorb();
+                    return;
+                }
             }
         }
     }

@@ -1,20 +1,25 @@
-use crate::types::{PacketInfo, Verdict};
+use crate::types::Verdict;
 use alloc::collections::BTreeMap;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
-use wdk::filter_engine::callout_data::ClassifyPromise;
 use wdk::rw_spin_lock::RwSpinLock;
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub enum ConnectionAction {
     Verdict(Verdict),
     RedirectIP {
-        local_address: Ipv4Address,
-        original_remote_address: Ipv4Address,
-        original_remote_port: u16,
-        remote_address: Ipv4Address,
-        remote_port: u16,
+        redirect_address: Ipv4Address,
+        redirect_port: u16,
     },
+}
+
+#[derive(Clone)]
+pub struct Connection {
+    pub(crate) protocol: IpProtocol,
+    pub(crate) local_address: Ipv4Address,
+    pub(crate) local_port: u16,
+    pub(crate) remote_address: Ipv4Address,
+    pub(crate) remote_port: u16,
+    pub(crate) action: ConnectionAction,
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
@@ -24,7 +29,7 @@ struct Key {
 }
 
 pub struct ConnectionCache {
-    connections: BTreeMap<Key, ConnectionAction>,
+    connections: BTreeMap<Key, Connection>,
     lock: RwSpinLock,
 }
 
@@ -34,34 +39,33 @@ impl ConnectionCache {
         self.lock = RwSpinLock::default();
     }
 
-    pub fn add_connection(
-        &mut self,
-        packet: &mut PacketInfo,
-        action: ConnectionAction,
-    ) -> Option<ClassifyPromise> {
-        let promise = packet.classify_promise.take();
+    pub fn add_connection(&mut self, connection: Connection) {
+        // let promise = packet.classify_promise.take();
         let _quard = self.lock.write_lock();
 
         self.connections.insert(
             Key {
-                port: packet.local_port,
-                protocol: IpProtocol::from(packet.protocol),
+                port: connection.local_port,
+                protocol: connection.protocol,
             },
-            action,
+            connection,
         );
 
-        promise
+        // promise
     }
 
-    pub fn get_connection_action(
-        &self,
-        port: u16,
-        protocol: IpProtocol,
-    ) -> Option<ConnectionAction> {
-        let _quard = self.lock.read_lock();
+    pub fn update_connection(&mut self, protocol: IpProtocol, port: u16, action: ConnectionAction) {
+        let _guard = self.lock.write_lock();
+        if let Some(connection) = self.connections.get_mut(&Key { port, protocol }) {
+            connection.action = action;
+        }
+    }
 
-        if let Some(action) = self.connections.get(&Key { port, protocol }) {
-            return Some(action.clone());
+    pub fn get_connection_action(&self, port: u16, protocol: IpProtocol) -> Option<Connection> {
+        let _guard = self.lock.read_lock();
+
+        if let Some(connection) = self.connections.get(&Key { port, protocol }) {
+            return Some(connection.clone());
         }
 
         None

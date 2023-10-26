@@ -64,23 +64,35 @@ type Redirect struct {
 	RemoteAddress []uint8 `json:"remote_address"`
 	RemotePort    uint16  `json:"remote_port"`
 }
+type Update struct {
+	Protocol      uint8   `json:"protocol"`
+	Port          uint16  `json:"port"`
+	Verdict       uint8   `json:"verdict"`
+	RemoteAddress []uint8 `json:"remote_address"`
+	RemotePort    uint16  `json:"remote_port"`
+}
 
 type Command struct {
 	Shutdown *[]struct{} `json:"Shutdown,omitempty"`
 	Verdict  *Verdict    `json:"Verdict,omitempty"`
 	Redirect *Redirect   `json:"Redirect,omitempty"`
+	Update   *Update     `json:"Update,omitempty"`
 }
 
 func BuildShutdown() Command {
 	return Command{Shutdown: &[]struct{}{}}
 }
 
-func BuildVerdict(id uint64, verdict uint8) Command {
-	return Command{Verdict: &Verdict{Id: id, Verdict: verdict}}
+func BuildVerdict(verdict Verdict) Command {
+	return Command{Verdict: &verdict}
 }
 
-func BuildRedirect(id uint64, remoteAddress []uint8, remotePort uint16) Command {
-	return Command{Redirect: &Redirect{Id: id, RemoteAddress: remoteAddress, RemotePort: remotePort}}
+func BuildRedirect(redirect Redirect) Command {
+	return Command{Redirect: &redirect}
+}
+
+func BuildUpdate(update Update) Command {
+	return Command{Update: &update}
 }
 
 func WriteCommand(writer io.Writer, command Command) {

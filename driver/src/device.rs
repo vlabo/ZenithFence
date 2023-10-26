@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use num_traits::FromPrimitive;
-use smoltcp::wire::Ipv4Address;
+use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     consts, dbg,
     driver::Driver,
@@ -21,6 +21,7 @@ use crate::{
     connection_cache::{ConnectionAction, ConnectionCache},
     id_cache::PacketCache,
     protocol::{self, Command},
+    types::Verdict,
 };
 
 // Device Context
@@ -36,7 +37,7 @@ pub struct Device {
 
 impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
-    /// Make sure everything is initialized here. Do not assume the that values will be zeroed.
+    /// Make sure everything is initialized here.
     pub fn init(&mut self, driver: &Driver) {
         self.io_queue.init();
         self.read_leftover = ArrayHolder::default();
@@ -166,12 +167,12 @@ impl Device {
                     dbg!("Verdict response: {}", verdict);
 
                     // Add verdict in the cache.
-                    completion_promise = match FromPrimitive::from_u8(verdict) {
-                        Some(verdict) => self
-                            .connection_cache
-                            .add_connection(&mut packet, ConnectionAction::Verdict(verdict)),
-                        None => None,
+                    if let Some(verdict) = FromPrimitive::from_u8(verdict) {
+                        self.connection_cache.add_connection(
+                            packet.as_connection(ConnectionAction::Verdict(verdict)),
+                        );
                     };
+                    completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
                     err!("Invalid id: {}", id);
@@ -183,27 +184,37 @@ impl Device {
                 remote_port,
             } => {
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
-                    packet.local_ip.reverse();
-                    let local_address = Ipv4Address(packet.local_ip);
-                    let original_remote_address = Ipv4Address(packet.remote_ip);
-                    let original_remote_port = packet.remote_port;
-                    let mut tmp: [u8; 4] = [0; 4];
-                    tmp.copy_from_slice(&remote_address);
-                    let remote_address = Ipv4Address(tmp);
+                    let connection = packet.as_connection(ConnectionAction::RedirectIP {
+                        redirect_address: Ipv4Address::from_bytes(&remote_address),
+                        redirect_port: remote_port,
+                    });
+                    self.connection_cache.add_connection(connection);
 
-                    completion_promise = self.connection_cache.add_connection(
-                        &mut packet,
-                        ConnectionAction::RedirectIP {
-                            local_address,
-                            original_remote_address,
-                            original_remote_port,
-                            remote_address,
-                            remote_port,
-                        },
-                    );
+                    completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
                     err!("Invalid id: {}", id);
+                }
+            }
+            Command::Update {
+                protocol,
+                port,
+                verdict,
+                remote_address,
+                remote_port,
+            } => {
+                let action = match FromPrimitive::from_u8(verdict).unwrap() {
+                    Verdict::Redirect => ConnectionAction::RedirectIP {
+                        redirect_address: Ipv4Address::from_bytes(&remote_address),
+                        redirect_port: remote_port,
+                    },
+                    verdict => ConnectionAction::Verdict(verdict),
+                };
+                self.connection_cache
+                    .update_connection(IpProtocol::from(protocol), port, action);
+                // This will triger re-evaluation of all connections.
+                if let Err(err) = self.filter_engine.reset_all_filters() {
+                    err!("failed to reset filters: {}", err);
                 }
             }
         }

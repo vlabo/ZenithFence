@@ -4,8 +4,6 @@
 package kext_interface
 
 import (
-	"log"
-
 	"golang.org/x/sys/windows"
 )
 

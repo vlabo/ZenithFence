@@ -2,6 +2,7 @@ use alloc::{format, string::String};
 use core::fmt::{Debug, Display};
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
+use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     err,
     filter_engine::{
@@ -9,6 +10,8 @@ use wdk::{
         layer::{self, Layer},
     },
 };
+
+use crate::connection_cache::{Connection, ConnectionAction};
 
 #[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
 #[repr(u8)]
@@ -19,6 +22,7 @@ pub enum Verdict {
     Accept = 2,
     Block = 3,
     Drop = 4,
+    Redirect = 5,
     Failed = 7,
 }
 
@@ -30,7 +34,7 @@ impl Display for Verdict {
             Verdict::Accept => write!(f, "Accept"),
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
-            // Verdict::RerouteToNameserver => write!(f, "RerouteToNameserver"),
+            Verdict::Redirect => write!(f, "Redirect"),
             // Verdict::RerouteToTunnel => write!(f, "RerouteToTunnel"),
             Verdict::Failed => write!(f, "Failed"),
         }
@@ -55,6 +59,17 @@ pub struct PacketInfo {
 }
 
 impl PacketInfo {
+    pub fn as_connection(&self, action: ConnectionAction) -> Connection {
+        Connection {
+            protocol: IpProtocol::from(self.protocol),
+            local_address: Ipv4Address::from_bytes(&self.local_ip),
+            local_port: self.local_port,
+            remote_address: Ipv4Address::from_bytes(&self.remote_ip),
+            remote_port: self.remote_port,
+            action,
+        }
+    }
+
     pub fn from_callout_data(data: &CalloutData) -> Self {
         match data.layer {
             Layer::FwpmLayerInboundIppacketV4 => {
@@ -64,10 +79,10 @@ impl PacketInfo {
                     ip_v6: false,
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
                     sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
                     ..Default::default()
@@ -80,10 +95,10 @@ impl PacketInfo {
                     ip_v6: false,
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
                     sub_interface_index: data.get_value_u32(Field::SubInterfaceIndex as usize),
                     ..Default::default()
@@ -99,10 +114,10 @@ impl PacketInfo {
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
@@ -120,10 +135,10 @@ impl PacketInfo {
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     interface_index: data.get_value_u32(Field::InterfaceIndex as usize),
@@ -139,10 +154,10 @@ impl PacketInfo {
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     remote_ip: data
                         .get_value_u32(Field::IpRemoteAddress as usize)
-                        .to_le_bytes(),
+                        .to_be_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
                     ..Default::default()
