@@ -73,10 +73,11 @@ type Update struct {
 }
 
 type Command struct {
-	Shutdown *[]struct{} `json:"Shutdown,omitempty"`
-	Verdict  *Verdict    `json:"Verdict,omitempty"`
-	Redirect *Redirect   `json:"Redirect,omitempty"`
-	Update   *Update     `json:"Update,omitempty"`
+	Shutdown   *[]struct{} `json:"Shutdown,omitempty"`
+	Verdict    *Verdict    `json:"Verdict,omitempty"`
+	Redirect   *Redirect   `json:"Redirect,omitempty"`
+	Update     *Update     `json:"Update,omitempty"`
+	ClearCache *[]struct{} `json:"ClearCache,omitempty"`
 }
 
 func BuildShutdown() Command {
@@ -93,6 +94,10 @@ func BuildRedirect(redirect Redirect) Command {
 
 func BuildUpdate(update Update) Command {
 	return Command{Update: &update}
+}
+
+func BuildClearCache() Command {
+	return Command{ClearCache: &[]struct{}{}}
 }
 
 func WriteCommand(writer io.Writer, command Command) {

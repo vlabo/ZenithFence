@@ -163,11 +163,11 @@ impl Device {
             Command::Verdict { id, verdict } => {
                 // Receved verdict decission for a specific connection.
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
-                    dbg!("Packet: {:?}", packet);
-                    dbg!("Verdict response: {}", verdict);
-
-                    // Add verdict in the cache.
                     if let Some(verdict) = FromPrimitive::from_u8(verdict) {
+                        dbg!("Packet: {:?}", packet);
+                        dbg!("Verdict response: {}", verdict);
+
+                        // Add verdict in the cache.
                         self.connection_cache.add_connection(
                             packet.as_connection(ConnectionAction::Verdict(verdict)),
                         );
@@ -184,6 +184,8 @@ impl Device {
                 remote_port,
             } => {
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
+                    dbg!("packet: {:?}", packet);
+                    dbg!("redirect: {:?} {}", remote_address, remote_port);
                     let connection = packet.as_connection(ConnectionAction::RedirectIP {
                         redirect_address: Ipv4Address::from_bytes(&remote_address),
                         redirect_port: remote_port,
@@ -216,6 +218,9 @@ impl Device {
                 if let Err(err) = self.filter_engine.reset_all_filters() {
                     err!("failed to reset filters: {}", err);
                 }
+            }
+            Command::ClearCache() => {
+                self.connection_cache.clear();
             }
         }
 

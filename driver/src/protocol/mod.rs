@@ -106,6 +106,7 @@ pub enum Command {
         remote_address: Vec<u8>,
         remote_port: u16,
     },
+    ClearCache(),
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {

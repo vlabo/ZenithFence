@@ -70,4 +70,8 @@ impl ConnectionCache {
 
         None
     }
+
+    pub fn clear(&mut self) {
+        self.connections.clear();
+    }
 }
