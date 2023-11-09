@@ -45,7 +45,7 @@ type Connection struct {
 }
 
 type Info struct {
-	Connection *Connection
+	Connection *Connection `json:"Connection,omitempty"`
 }
 
 func ParseInfo(data []byte) (*Info, error) {
@@ -130,7 +130,7 @@ func ReadInfo(reader io.Reader, dataChan chan *Info) {
 				return
 			}
 
-			// log.Printf("recived %d bytes", count)
+			// log.Printf("received %d bytes", count)
 
 			// Slice only with the actual data
 			buffer = readBuffer[0:count]
@@ -139,7 +139,7 @@ func ReadInfo(reader io.Reader, dataChan chan *Info) {
 		// Extract data
 		if structBuf == nil {
 			// Beginig of a struct
-			// The first 4 bytes conain the size of the struct (it may be bigger then the read buffer).
+			// The first 4 bytes contain the size of the struct (it may be bigger then the read buffer).
 			structSize = binary.LittleEndian.Uint32(buffer[0:4])
 			buffer = buffer[4:]
 			structBuf = make([]byte, structSize)

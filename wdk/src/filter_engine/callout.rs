@@ -11,7 +11,7 @@ pub struct Callout {
     pub(crate) guid: u128,
     pub(crate) layer: Layer,
     pub(crate) action: u32,
-    pub(crate) registerd: bool,
+    pub(crate) registered: bool,
     pub(crate) filter_id: u64,
     pub(crate) device_object: *mut DEVICE_OBJECT,
     pub(crate) callout_fn: fn(CalloutData, &mut DEVICE_OBJECT),
@@ -34,7 +34,7 @@ impl Callout {
             guid,
             layer,
             action,
-            registerd: false,
+            registered: false,
             filter_id: 0,
             device_object: core::ptr::null_mut(),
             callout_fn,
@@ -56,7 +56,7 @@ impl Callout {
                 self.filter_id = id;
             }
             Err(error) => {
-                return Err(format!("faield to register filter: {}", error));
+                return Err(format!("failed to register filter: {}", error));
             }
         };
 
@@ -79,11 +79,11 @@ impl Callout {
             callout_fn,
         ) {
             Ok(id) => {
-                self.registerd = true;
+                self.registered = true;
                 self.id = id;
             }
             Err(code) => {
-                return Err(format!("faield to register callout: {}", code));
+                return Err(format!("failed to register callout: {}", code));
             }
         };
         return Ok(());

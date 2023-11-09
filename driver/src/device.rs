@@ -104,16 +104,16 @@ impl Device {
         }
     }
 
-    /// Called when handle.Read is called from userspace.
+    /// Called when handle. Read is called from userspace.
     pub fn read(&mut self, read_request: &mut ReadRequest) {
         if let Some(data) = self.read_leftover.load() {
-            // There are leftovers from previos request.
+            // There are leftovers from previous request.
             self.write_buffer(read_request, &data, false);
         } else {
             // Noting left from before. Wait for next commands.
             match self.io_queue.wait_and_pop() {
                 Ok(info) => {
-                    // Recived new serialied boject write it to the buffer.
+                    // Received new serialized object write it to the buffer.
                     self.write_buffer(read_request, &info, true);
                 }
                 Err(ioqueue::Status::Timeout) => {
@@ -122,7 +122,7 @@ impl Device {
                     return;
                 }
                 Err(err) => {
-                    // Queue failed. Send EOF, to notify userspace. Usualy happens on rundown.
+                    // Queue failed. Send EOF, to notify userspace. Usually happens on rundown.
                     err!("failed to pop value: {}", err);
                     read_request.end_of_file();
                     return;
@@ -147,7 +147,7 @@ impl Device {
         let command = match protocol::parse_command(write_request.get_buffer()) {
             Ok(command) => command,
             Err(err) => {
-                err!("Faield to parse command: {}", err);
+                err!("Failed to parse command: {}", err);
                 return;
             }
         };
@@ -161,7 +161,7 @@ impl Device {
                 self.io_queue.rundown();
             }
             Command::Verdict { id, verdict } => {
-                // Receved verdict decission for a specific connection.
+                // Received verdict decision for a specific connection.
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict) {
                         dbg!("Packet: {:?}", packet);
@@ -214,7 +214,7 @@ impl Device {
                 };
                 self.connection_cache
                     .update_connection(IpProtocol::from(protocol), port, action);
-                // This will triger re-evaluation of all connections.
+                // This will trigger re-evaluation of all connections.
                 if let Err(err) = self.filter_engine.reset_all_filters() {
                     err!("failed to reset filters: {}", err);
                 }
@@ -236,7 +236,7 @@ impl Device {
                     }
                 }
                 Err(err) => {
-                    err!("error compliting connection decision: {}", err);
+                    err!("error completing connection decision: {}", err);
                 }
             }
         }

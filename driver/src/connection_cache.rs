@@ -20,6 +20,8 @@ pub struct Connection {
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
+    pub(crate) interface_index: u32,
+    pub(crate) sub_interface_index: u32,
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
@@ -40,8 +42,7 @@ impl ConnectionCache {
     }
 
     pub fn add_connection(&mut self, connection: Connection) {
-        // let promise = packet.classify_promise.take();
-        let _quard = self.lock.write_lock();
+        let _guard = self.lock.write_lock();
 
         self.connections.insert(
             Key {
@@ -50,8 +51,6 @@ impl ConnectionCache {
             },
             connection,
         );
-
-        // promise
     }
 
     pub fn update_connection(&mut self, protocol: IpProtocol, port: u16, action: ConnectionAction) {

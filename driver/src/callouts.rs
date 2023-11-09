@@ -22,7 +22,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
     if device
         .injector
-        .was_netwrok_packet_injected_by_self(data.get_layer_data() as _)
+        .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
         dbg!("injected packet");
         data.action_permit();
@@ -172,7 +172,7 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
 
     if device
         .injector
-        .was_netwrok_packet_injected_by_self(data.get_layer_data() as _)
+        .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
         dbg!("injected packet");
         data.action_permit();
@@ -193,13 +193,13 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
             match ip_packet.next_header() {
                 smoltcp::wire::IpProtocol::Tcp => {
                     if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        wdk::info!("packet out {}: {} {}", i, ip_packet, tcp_packet);
+                        // wdk::info!("packet out {}: {} {}", i, ip_packet, tcp_packet);
                         key = Some((tcp_packet.src_port(), IpProtocol::Tcp))
                     }
                 }
                 smoltcp::wire::IpProtocol::Udp => {
                     if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        wdk::info!("packet out {}: {} {}", i, ip_packet, udp_packet);
+                        // wdk::info!("packet out {}: {} {}", i, ip_packet, udp_packet);
                         key = Some((udp_packet.src_port(), IpProtocol::Udp))
                     }
                 }
@@ -258,7 +258,7 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
     };
     if device
         .injector
-        .was_netwrok_packet_injected_by_self(data.get_layer_data() as _)
+        .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
         dbg!("injected packet");
         data.action_permit();
@@ -277,13 +277,13 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
             match ip_packet.next_header() {
                 smoltcp::wire::IpProtocol::Tcp => {
                     if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        wdk::info!("packet in {}: {} {}", i, ip_packet, tcp_packet);
+                        // wdk::info!("packet in {}: {} {}", i, ip_packet, tcp_packet);
                         key = Some((tcp_packet.dst_port(), IpProtocol::Tcp))
                     }
                 }
                 smoltcp::wire::IpProtocol::Udp => {
                     if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        wdk::info!("packet in {}: {} {}", i, ip_packet, udp_packet);
+                        // wdk::info!("packet in {}: {} {}", i, ip_packet, udp_packet);
                         key = Some((udp_packet.dst_port(), IpProtocol::Udp))
                     }
                 }

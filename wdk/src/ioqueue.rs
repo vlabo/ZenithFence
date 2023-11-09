@@ -69,7 +69,7 @@ extern "C" {
     fn KeRundownQueue(queue: *mut KQUEUE) -> *mut LIST_ENTRY;
 }
 
-// TODO: replace with original struct when it becomes avaliable.
+// TODO: replace with original struct when it becomes available.
 // #[repr(C)]
 // struct KQueue {
 //     data: [u8; 64],    // Size of C KQueue struct.
@@ -85,7 +85,7 @@ struct Entry<T> {
 pub struct IOQueue<T> {
     kernel_queue: UnsafeCell<KQUEUE>,
     initialized: AtomicBool,
-    _type: PhantomData<T>, // 0 size variable. Requierd for the generic to work properly. Compiler limitation.
+    _type: PhantomData<T>, // 0 size variable. Required for the generic to work properly. Compiler limitation.
 }
 
 unsafe impl<T> Sync for IOQueue<T> {}
@@ -161,9 +161,9 @@ impl<T> IOQueue<T> {
         Err(Status::Uninitialized)
     }
 
-    /// Returns element or a status. Waits until element is pushed or the queue is interupted.
+    /// Returns element or a status. Waits until element is pushed or the queue is interrupted.
     pub fn wait_and_pop(&self) -> Result<T, Status> {
-        // No timout.
+        // No timeout.
         self.pop_internal(core::ptr::null())
     }
 

@@ -7,6 +7,6 @@ use quote::quote;
 #[proc_macro_attribute]
 // _metadata is argument provided to macro call and _input is code to which attribute like macro attaches
 pub fn my_custom_attribute(_metadata: TokenStream, _input: TokenStream) -> TokenStream {
-    // returing a simple TokenStream for Struct
+    // returning a simple TokenStream for Struct
     TokenStream::from(quote! {struct H{}})
 }

@@ -113,7 +113,7 @@ impl FwpsIncomingMetadataValues {
         return None;
     }
 
-    pub(crate) fn get_completeion_handle(&self) -> Option<HANDLE> {
+    pub(crate) fn get_completion_handle(&self) -> Option<HANDLE> {
         if self.has_field(FWPS_METADATA_FIELD_COMPLETION_HANDLE) {
             return Some(self.completion_handle);
         }

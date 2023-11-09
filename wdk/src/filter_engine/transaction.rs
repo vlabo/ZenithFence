@@ -2,10 +2,10 @@ use super::{ffi, FilterEngine};
 use alloc::{format, string::String};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_TXN_READ_ONLY;
 
-/// Transaction guard for Filter Engine. Internaly useses a lock. DO NOT USE WITH OTHER LOCKS.
+/// Transaction guard for Filter Engine. Internally useses a lock. DO NOT USE WITH OTHER LOCKS.
 pub(super) struct Transaction<'a> {
     filter_engine: &'a FilterEngine,
-    commited: bool,
+    committed: bool,
 }
 
 impl<'a> Transaction<'a> {
@@ -21,7 +21,7 @@ impl<'a> Transaction<'a> {
 
         Ok(Self {
             filter_engine,
-            commited: false,
+            committed: false,
         })
     }
 
@@ -36,7 +36,7 @@ impl<'a> Transaction<'a> {
         return Self::begin(filter_engine, 0);
     }
 
-    /// Appling all the changes and releases the lock.
+    /// Applying all the changes and releases the lock.
     pub(super) fn commit(&mut self) -> Result<(), String> {
         if let Err(code) =
             ffi::filter_engine_transaction_commit(self.filter_engine.filter_engine_handle)
@@ -46,16 +46,16 @@ impl<'a> Transaction<'a> {
                 code
             ));
         }
-        self.commited = true;
+        self.committed = true;
 
         Ok(())
     }
 }
 
 impl<'a> Drop for Transaction<'a> {
-    /// Releases the lock of transaction was not commited.
+    /// Releases the lock of transaction was not committed.
     fn drop(&mut self) {
-        if !self.commited {
+        if !self.committed {
             _ = ffi::filter_engine_transaction_abort(self.filter_engine.filter_engine_handle);
         }
     }

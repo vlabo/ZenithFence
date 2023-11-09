@@ -109,7 +109,7 @@ impl<'a> CalloutData<'a> {
     ) -> Result<ClassifyPromise, String> {
         unsafe {
             let mut completion_context = 0;
-            if let Some(completion_handle) = (*self.metadata).get_completeion_handle() {
+            if let Some(completion_handle) = (*self.metadata).get_completion_handle() {
                 let status = FwpsPendOperation0(completion_handle, &mut completion_context);
                 check_ntstatus(status)?;
 

@@ -183,7 +183,6 @@ impl Injector {
 
         unsafe {
             if packet_list.inbound && !packet_list.loopback {
-                crate::dbg!("inject recv");
                 let packet_list_boxed = Box::new(packet_list);
                 let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
                 let status = FwpsInjectNetworkReceiveAsync0(
@@ -222,7 +221,7 @@ impl Injector {
         return Ok(());
     }
 
-    pub fn was_netwrok_packet_injected_by_self(&self, nbl: *const NET_BUFFER_LIST) -> bool {
+    pub fn was_network_packet_injected_by_self(&self, nbl: *const NET_BUFFER_LIST) -> bool {
         if self.network_inject_handle == INVALID_HANDLE_VALUE || self.network_inject_handle == 0 {
             return false;
         }
@@ -272,7 +271,7 @@ unsafe extern "C" fn free_packet_transport(
         if let Err(err) = check_ntstatus(nbl.Status) {
             crate::err!("inject status: {}", err);
         } else {
-            crate::dbg!("packet injected succesfully");
+            crate::dbg!("packet injected successfully");
         }
     }
     _ = Box::from_raw(context as *mut TransportPacketList);
@@ -287,7 +286,7 @@ unsafe extern "C" fn free_packet_network(
         if let Err(err) = check_ntstatus(nbl.Status) {
             crate::err!("inject status: {}", err);
         } else {
-            crate::dbg!("packet injected succesfully");
+            crate::dbg!("packet injected successfully");
         }
     }
     _ = Box::from_raw(context as *mut NetworkPacketList);

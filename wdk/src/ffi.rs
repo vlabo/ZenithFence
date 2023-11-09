@@ -150,7 +150,7 @@ pub(crate) struct NBListHeader {
 }
 
 /// The NET_BUFFER_LIST structure specifies a linked list of NET_BUFFER structures.
-/// This is internal struct should never be allocated from the driver. Use provieded functions by microsoft.
+/// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
 pub struct NET_BUFFER_LIST {
@@ -170,7 +170,7 @@ pub struct NET_BUFFER_LIST {
     pub(crate) NetBufferListInfo: [*mut c_void; 20], // Extra data at the end of the struct. The size of the array is not fixed.
 }
 
-/// This is internal struct should never be allocated from the driver. Use provieded functions by microsoft.
+/// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 /// The NET_BUFFER structure specifies data that is transmitted or received over the network.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
@@ -242,7 +242,7 @@ impl WdfObjectContextTypeInfo {
     }
 }
 
-/// WdfObjectAttributes contains attributes for the device contex.
+/// WdfObjectAttributes contains attributes for the device context.
 #[repr(C)]
 pub struct WdfObjectAttributes {
     size: u32,

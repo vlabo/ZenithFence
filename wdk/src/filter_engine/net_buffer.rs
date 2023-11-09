@@ -54,7 +54,7 @@ pub fn read_first_packet<'a>(
                 return Err(());
             }
 
-            // Try to return referenc to the data.
+            // Try to return reference to the data.
             let ptr = NdisGetDataBuffer(nb, data_length, core::ptr::null_mut(), 1, 0);
             if !ptr.is_null() {
                 let slice = alloc::slice::from_raw_parts(ptr, data_length as usize);

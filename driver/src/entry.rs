@@ -64,9 +64,9 @@ extern "C" fn device_cleanup(device: HANDLE) {
     unsafe {
         // Call drop without freeing memory. Memory is manged by the kernel.
         if !device_context.is_null() {
-            let mut owned_device_contex = Box::from_raw_in(device_context, NullAllocator {});
-            owned_device_contex.cleanup();
-            drop(owned_device_contex);
+            let mut owned_device_context = Box::from_raw_in(device_context, NullAllocator {});
+            owned_device_context.cleanup();
+            drop(owned_device_context);
         }
     }
 }

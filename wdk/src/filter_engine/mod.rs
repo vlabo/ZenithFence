@@ -34,7 +34,7 @@ pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
     filter_engine_handle: HANDLE,
     sublayer_guid: u128,
-    commited: bool,
+    committed: bool,
 }
 
 impl FilterEngine {
@@ -78,7 +78,7 @@ impl FilterEngine {
                     return Err(err);
                 }
                 if let Err(err) = callout.register_filter(self) {
-                    // This will destory the callout structs.
+                    // This will destroy the callout structs.
                     return Err(err);
                 }
                 dbg!(
@@ -93,8 +93,8 @@ impl FilterEngine {
                 return Err(err);
             }
         }
-        self.commited = true;
-        info!("transaction commited");
+        self.committed = true;
+        info!("transaction committed");
 
         return Ok(());
     }
@@ -188,9 +188,9 @@ impl Drop for FilterEngine {
         unsafe {
             if let Some(callouts) = CALLOUTS.take() {
                 for ele in callouts {
-                    if ele.registerd {
+                    if ele.registered {
                         if let Err(code) = ffi::unregister_callout(ele.id) {
-                            dbg!("faild to unregister callout: {}", code);
+                            dbg!("failed to unregister callout: {}", code);
                         }
                         if ele.filter_id != 0 {
                             if let Err(code) =
@@ -204,7 +204,7 @@ impl Drop for FilterEngine {
             }
         }
 
-        if self.commited {
+        if self.committed {
             if let Err(code) =
                 ffi::unregister_sublayer(self.filter_engine_handle, self.sublayer_guid)
             {

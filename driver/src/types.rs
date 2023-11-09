@@ -67,6 +67,8 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
+            interface_index: self.interface_index,
+            sub_interface_index: self.sub_interface_index,
         }
     }
 
@@ -176,21 +178,23 @@ impl Debug for PacketInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let local = format!(
             "{}.{}.{}.{}:{}",
-            self.local_ip[3], self.local_ip[2], self.local_ip[1], self.local_ip[0], self.local_port
+            self.local_ip[0], self.local_ip[1], self.local_ip[2], self.local_ip[3], self.local_port
         );
         let remote = format!(
             "{}.{}.{}.{}:{}",
-            self.remote_ip[3],
-            self.remote_ip[2],
-            self.remote_ip[1],
             self.remote_ip[0],
+            self.remote_ip[1],
+            self.remote_ip[2],
+            self.remote_ip[3],
             self.remote_port
         );
-        f.debug_struct("Key")
+
+        f.debug_struct("Packet")
             .field("local", &local)
             .field("remote", &remote)
             .field("protocol", &self.protocol)
             .field("direction", &self.direction)
+            .field("app", &self.process_path)
             .finish()
     }
 }
