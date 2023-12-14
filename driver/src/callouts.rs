@@ -24,7 +24,6 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
-        dbg!("injected packet");
         data.action_permit();
         return;
     }
@@ -53,6 +52,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         }
     } else {
         // Pend decision of connection.
+        dbg!("Pend decision");
         let mut packet_list = None;
         if packet.protocol == 17 {
             packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
@@ -147,6 +147,7 @@ fn redirect_inbound_packet(
     }
 }
 
+#[allow(dead_code)]
 fn print_packet(packet: &[u8]) {
     if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
         if ip_packet.next_header() == IpProtocol::Udp {
@@ -174,7 +175,6 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
-        dbg!("injected packet");
         data.action_permit();
         return;
     }
@@ -193,13 +193,11 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
             match ip_packet.next_header() {
                 smoltcp::wire::IpProtocol::Tcp => {
                     if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        // wdk::info!("packet out {}: {} {}", i, ip_packet, tcp_packet);
                         key = Some((tcp_packet.src_port(), IpProtocol::Tcp))
                     }
                 }
                 smoltcp::wire::IpProtocol::Udp => {
                     if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        // wdk::info!("packet out {}: {} {}", i, ip_packet, udp_packet);
                         key = Some((udp_packet.src_port(), IpProtocol::Udp))
                     }
                 }
@@ -228,7 +226,7 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
             {
                 let mut buffer = buffer.unwrap_or(full_packet.to_vec());
                 redirect_outbound_packet(&mut buffer, redirect_address, redirect_port);
-                print_packet(&buffer);
+                // print_packet(&buffer);
                 if inject_packet(
                     device,
                     &buffer,
@@ -260,14 +258,13 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _)
     {
-        dbg!("injected packet");
         data.action_permit();
         return;
     }
 
     for (i, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
         let mut key: Option<(u16, IpProtocol)> = None;
-        NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32); // No idea why this works.
+        NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32); // No idea why this works. Only the header is retreated but we get access to the whole packet.
         let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
             err!("failed to get net_buffer data");
             data.action_permit();
@@ -277,13 +274,11 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
             match ip_packet.next_header() {
                 smoltcp::wire::IpProtocol::Tcp => {
                     if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        // wdk::info!("packet in {}: {} {}", i, ip_packet, tcp_packet);
                         key = Some((tcp_packet.dst_port(), IpProtocol::Tcp))
                     }
                 }
                 smoltcp::wire::IpProtocol::Udp => {
                     if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        // wdk::info!("packet in {}: {} {}", i, ip_packet, udp_packet);
                         key = Some((udp_packet.dst_port(), IpProtocol::Udp))
                     }
                 }
@@ -294,6 +289,8 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         } else {
             err!("failed to parse packet");
         }
+
+        // Reverse the retreat
         NetworkAllocator::advance_net_buffer(nbl, IPV4_HEADER_LEN as u32);
         let Some((port, protocol)) = key else {
             data.action_permit();
@@ -317,7 +314,7 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
                     connection.remote_address,
                     connection.remote_port,
                 );
-                print_packet(&buffer);
+                // print_packet(&buffer);
                 if inject_packet(
                     device,
                     &buffer,

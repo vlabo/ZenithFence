@@ -138,7 +138,7 @@ func ReadInfo(reader io.Reader, dataChan chan *Info) {
 
 		// Extract data
 		if structBuf == nil {
-			// Beginig of a struct
+			// Begging of a struct
 			// The first 4 bytes contain the size of the struct (it may be bigger then the read buffer).
 			structSize = binary.LittleEndian.Uint32(buffer[0:4])
 			buffer = buffer[4:]

@@ -12,6 +12,8 @@ static VERSION: [u8; 4] = include!("../../version.rs");
 static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
     WdfObjectContextTypeInfo::default("DriverContext\0");
 
+// DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
+// Name should not be changed
 #[no_mangle]
 pub extern "system" fn DriverEntry(
     driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
@@ -19,6 +21,7 @@ pub extern "system" fn DriverEntry(
 ) -> windows_sys::Win32::Foundation::NTSTATUS {
     info!("Starting initialization...");
 
+    // Setup object attribute.
     let mut object_attributes = WdfObjectAttributes::new();
     object_attributes.add_context::<device::Device>(unsafe { &mut DRIVER_CONFIG });
     object_attributes.set_cleanup_fn(device_cleanup);
@@ -55,7 +58,8 @@ pub extern "system" fn DriverEntry(
     STATUS_SUCCESS
 }
 
-extern "C" fn device_cleanup(device: HANDLE) {
+// device_cleanup cleanup function is called when the current device object will be removed.
+extern "system" fn device_cleanup(device: HANDLE) {
     let device_context =
         interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
             &DRIVER_CONFIG
@@ -71,10 +75,12 @@ extern "C" fn device_cleanup(device: HANDLE) {
     }
 }
 
+// driver_unload function is called when service delete is called from user-space.
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
 }
 
+// driver_read event triggered from user-space on file.Read.
 unsafe extern "system" fn driver_read(
     device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
@@ -92,6 +98,7 @@ unsafe extern "system" fn driver_read(
     read_request.get_status()
 }
 
+/// driver_write event triggered from user-space on file.Write.
 unsafe extern "system" fn driver_write(
     device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
@@ -111,13 +118,14 @@ unsafe extern "system" fn driver_write(
     write_request.get_status()
 }
 
+/// device_control event triggered from user-space on file.deviceIOControl.
 unsafe extern "system" fn device_control(
     _driver_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
 
-    // Reading the control code does not work.
+    // TODO: Reading the control code does not work.
     // if control_request.get_control_code() == crate::common::IOCTL_VERSION {
     info!("Reading version");
     control_request.write(&VERSION);

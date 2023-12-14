@@ -4,7 +4,6 @@ go 1.20
 
 require (
 	github.com/fxamacker/cbor/v2 v2.5.0
-	github.com/google/flatbuffers v23.5.26+incompatible
 	golang.org/x/sys v0.12.0
 )
 

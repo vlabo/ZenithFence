@@ -246,8 +246,8 @@ impl WdfObjectContextTypeInfo {
 #[repr(C)]
 pub struct WdfObjectAttributes {
     size: u32,
-    evt_cleanup_callback: Option<extern "C" fn(wdf_object: HANDLE)>,
-    evt_destroy_callback: Option<extern "C" fn(wdf_object: HANDLE)>,
+    evt_cleanup_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
+    evt_destroy_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
     execution_level: WdfExecutionLevel,
     synchronization_scope: WdfSynchronizationScope,
     parent_object: HANDLE,
@@ -276,11 +276,11 @@ impl WdfObjectAttributes {
         self.context_type_info = context_info.unique_type;
     }
 
-    pub fn set_cleanup_fn(&mut self, callback: extern "C" fn(wdf_object: HANDLE)) {
+    pub fn set_cleanup_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE)) {
         self.evt_cleanup_callback = Some(callback);
     }
 
-    pub fn set_destroy_fn(&mut self, callback: extern "C" fn(wdf_object: HANDLE)) {
+    pub fn set_destroy_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE)) {
         self.evt_destroy_callback = Some(callback);
     }
 }

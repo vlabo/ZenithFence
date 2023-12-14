@@ -122,7 +122,7 @@ impl Device {
                     return;
                 }
                 Err(err) => {
-                    // Queue failed. Send EOF, to notify userspace. Usually happens on rundown.
+                    // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
                     err!("failed to pop value: {}", err);
                     read_request.end_of_file();
                     return;
@@ -221,6 +221,9 @@ impl Device {
             }
             Command::ClearCache() => {
                 self.connection_cache.clear();
+                if let Err(err) = self.filter_engine.reset_all_filters() {
+                    err!("failed to reset filters: {}", err);
+                }
             }
         }
 

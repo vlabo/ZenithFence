@@ -1,6 +1,7 @@
 use crate::types::Verdict;
 use alloc::collections::BTreeMap;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
+use wdk::dbg;
 use wdk::rw_spin_lock::RwSpinLock;
 
 #[derive(Clone)]
@@ -20,8 +21,8 @@ pub struct Connection {
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
-    pub(crate) interface_index: u32,
-    pub(crate) sub_interface_index: u32,
+    // pub(crate) interface_index: u32,
+    // pub(crate) sub_interface_index: u32,
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
@@ -54,6 +55,7 @@ impl ConnectionCache {
     }
 
     pub fn update_connection(&mut self, protocol: IpProtocol, port: u16, action: ConnectionAction) {
+        dbg!("updating connection: {} {}", protocol, port);
         let _guard = self.lock.write_lock();
         if let Some(connection) = self.connections.get_mut(&Key { port, protocol }) {
             connection.action = action;
@@ -71,6 +73,7 @@ impl ConnectionCache {
     }
 
     pub fn clear(&mut self) {
+        let _guard = self.lock.write_lock();
         self.connections.clear();
     }
 }

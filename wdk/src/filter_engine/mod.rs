@@ -134,7 +134,7 @@ impl FilterEngine {
     }
 
     pub fn reset_all_filters(&self) -> Result<(), String> {
-        // Begin write trasacction. This is also a lock guard.
+        // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         let mut transaction = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,
             Err(err) => {

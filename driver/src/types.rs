@@ -67,8 +67,8 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
-            interface_index: self.interface_index,
-            sub_interface_index: self.sub_interface_index,
+            // interface_index: self.interface_index,
+            // sub_interface_index: self.sub_interface_index,
         }
     }
 
@@ -110,7 +110,7 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleAuthConnectV4;
                 Self {
                     process_id: data.get_process_id(),
-                    process_path: data.get_process_path(),
+                    // process_path: data.get_process_path(),
                     direction: 0,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
@@ -131,7 +131,7 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleAuthRecvAcceptV4;
                 Self {
                     process_id: data.get_process_id(),
-                    process_path: data.get_process_path(),
+                    // process_path: data.get_process_path(),
                     direction: 1,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),

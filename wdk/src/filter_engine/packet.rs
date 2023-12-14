@@ -270,8 +270,6 @@ unsafe extern "C" fn free_packet_transport(
     if let Some(nbl) = net_buffer_list.as_ref() {
         if let Err(err) = check_ntstatus(nbl.Status) {
             crate::err!("inject status: {}", err);
-        } else {
-            crate::dbg!("packet injected successfully");
         }
     }
     _ = Box::from_raw(context as *mut TransportPacketList);
@@ -285,8 +283,6 @@ unsafe extern "C" fn free_packet_network(
     if let Some(nbl) = net_buffer_list.as_ref() {
         if let Err(err) = check_ntstatus(nbl.Status) {
             crate::err!("inject status: {}", err);
-        } else {
-            crate::dbg!("packet injected successfully");
         }
     }
     _ = Box::from_raw(context as *mut NetworkPacketList);
