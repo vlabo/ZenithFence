@@ -11,6 +11,7 @@ mod connection_cache;
 mod device;
 mod entry;
 mod id_cache;
+pub mod logger;
 mod protocol;
 mod types;
 

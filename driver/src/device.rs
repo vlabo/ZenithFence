@@ -3,14 +3,12 @@ use alloc::vec::Vec;
 use num_traits::FromPrimitive;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
-    consts, dbg,
+    consts,
     driver::Driver,
-    err,
     filter_engine::{
         callout::Callout, layer::Layer, net_buffer::NetworkAllocator, packet::Injector,
         FilterEngine,
     },
-    info,
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
 };
@@ -19,7 +17,10 @@ use crate::{
     array_holder::ArrayHolder,
     callouts,
     connection_cache::{ConnectionAction, ConnectionCache},
+    dbg, err,
     id_cache::PacketCache,
+    info,
+    logger::Logger,
     protocol::{self, Command},
     types::Verdict,
 };
@@ -33,12 +34,14 @@ pub struct Device {
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
+    pub(crate) logger: Logger,
 }
 
 impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
     /// Make sure everything is initialized here.
     pub fn init(&mut self, driver: &Driver) {
+        self.logger.init();
         self.io_queue.init();
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
@@ -50,7 +53,7 @@ impl Device {
             .filter_engine
             .init(driver, 0x7dab1057_8e2b_40c4_9b85_693e381d7896)
         {
-            err!("filter engine error: {}", err);
+            err!(self.logger, "filter engine error: {}", err);
         }
 
         let callouts = vec![
@@ -81,7 +84,7 @@ impl Device {
         ];
 
         if let Err(err) = self.filter_engine.commit(callouts) {
-            err!("{}", err);
+            err!(self.logger, "{}", err);
         }
     }
 
@@ -123,7 +126,7 @@ impl Device {
                 }
                 Err(err) => {
                     // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
-                    err!("failed to pop value: {}", err);
+                    err!(self.logger, "failed to pop value: {}", err);
                     read_request.end_of_file();
                     return;
                 }
@@ -141,13 +144,13 @@ impl Device {
         read_request.complete();
     }
 
-    // Called when handle.Write is called from userspace.
+    // Called when handle.Write is called from user-space.
     pub fn write(&mut self, write_request: &mut WriteRequest) {
         // Try parsing the command.
         let command = match protocol::parse_command(write_request.get_buffer()) {
             Ok(command) => command,
             Err(err) => {
-                err!("Failed to parse command: {}", err);
+                wdk::err!("Failed to parse command: {}", err);
                 return;
             }
         };
@@ -156,16 +159,17 @@ impl Device {
 
         match command {
             Command::Shutdown() => {
-                info!("Shutdown command");
+                wdk::dbg!("Shutdown command");
                 // End blocking operations from the queue. This will end pending read requests.
                 self.io_queue.rundown();
             }
             Command::Verdict { id, verdict } => {
+                wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict) {
-                        dbg!("Packet: {:?}", packet);
-                        dbg!("Verdict response: {}", verdict);
+                        dbg!(self.logger, "Packet: {:?}", packet);
+                        dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
                         self.connection_cache.add_connection(
@@ -175,7 +179,7 @@ impl Device {
                     completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
-                    err!("Invalid id: {}", id);
+                    err!(self.logger, "Invalid id: {}", id);
                 }
             }
             Command::Redirect {
@@ -184,8 +188,13 @@ impl Device {
                 remote_port,
             } => {
                 if let Some(mut packet) = self.packet_cache.pop_id(id) {
-                    dbg!("packet: {:?}", packet);
-                    dbg!("redirect: {:?} {}", remote_address, remote_port);
+                    dbg!(self.logger, "packet: {:?}", packet);
+                    dbg!(
+                        self.logger,
+                        "redirect: {:?} {}",
+                        remote_address,
+                        remote_port
+                    );
                     let connection = packet.as_connection(ConnectionAction::RedirectIP {
                         redirect_address: Ipv4Address::from_bytes(&remote_address),
                         redirect_port: remote_port,
@@ -195,7 +204,7 @@ impl Device {
                     completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
-                    err!("Invalid id: {}", id);
+                    err!(self.logger, "Invalid id: {}", id);
                 }
             }
             Command::Update {
@@ -216,13 +225,23 @@ impl Device {
                     .update_connection(IpProtocol::from(protocol), port, action);
                 // This will trigger re-evaluation of all connections.
                 if let Err(err) = self.filter_engine.reset_all_filters() {
-                    err!("failed to reset filters: {}", err);
+                    err!(self.logger, "failed to reset filters: {}", err);
                 }
             }
             Command::ClearCache() => {
+                wdk::dbg!("ClearCache command");
                 self.connection_cache.clear();
                 if let Err(err) = self.filter_engine.reset_all_filters() {
-                    err!("failed to reset filters: {}", err);
+                    err!(self.logger, "failed to reset filters: {}", err);
+                }
+            }
+            Command::GetLogs() => {
+                wdk::dbg!("GetLogs command");
+                let lines = protocol::Info::LogLines(self.logger.flush());
+                if let Ok(bytes) = lines.serialize() {
+                    let _ = self.io_queue.push(bytes);
+                } else {
+                    wdk::err!("Failed parse logs");
                 }
             }
         }
@@ -234,12 +253,12 @@ impl Device {
                     if let Some(packet_list) = packet_list {
                         let result = self.injector.inject_packet_list_transport(packet_list);
                         if let Err(err) = result {
-                            err!("failed to inject packet: {}", err);
+                            err!(self.logger, "failed to inject packet: {}", err);
                         }
                     }
                 }
                 Err(err) => {
-                    err!("error completing connection decision: {}", err);
+                    err!(self.logger, "error completing connection decision: {}", err);
                 }
             }
         }

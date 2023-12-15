@@ -44,8 +44,14 @@ type Connection struct {
 	RemotePort  uint16  `json:"remote_port"`
 }
 
+type LogLine struct {
+	Severity string `json:"severity"`
+	Line     string `json:"line"`
+}
+
 type Info struct {
 	Connection *Connection `json:"Connection,omitempty"`
+	LogLines   *[]LogLine  `json:"LogLines,omitempty"`
 }
 
 func ParseInfo(data []byte) (*Info, error) {
@@ -64,6 +70,7 @@ type Redirect struct {
 	RemoteAddress []uint8 `json:"remote_address"`
 	RemotePort    uint16  `json:"remote_port"`
 }
+
 type Update struct {
 	Protocol      uint8   `json:"protocol"`
 	Port          uint16  `json:"port"`
@@ -78,6 +85,7 @@ type Command struct {
 	Redirect   *Redirect   `json:"Redirect,omitempty"`
 	Update     *Update     `json:"Update,omitempty"`
 	ClearCache *[]struct{} `json:"ClearCache,omitempty"`
+	GetLogs    *[]struct{} `json:"GetLogs,omitempty"`
 }
 
 func BuildShutdown() Command {
@@ -98,6 +106,10 @@ func BuildUpdate(update Update) Command {
 
 func BuildClearCache() Command {
 	return Command{ClearCache: &[]struct{}{}}
+}
+
+func BuildGetLogs() Command {
+	return Command{GetLogs: &[]struct{}{}}
 }
 
 func WriteCommand(writer io.Writer, command Command) {

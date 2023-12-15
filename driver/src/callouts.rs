@@ -5,12 +5,14 @@ use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
 use wdk::filter_engine::net_buffer::{read_first_packet, NBLIterator, NetworkAllocator};
 use wdk::filter_engine::packet::Injector;
-use wdk::{dbg, err, interface};
+use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::{
     connection_cache::ConnectionAction,
+    dbg,
     device::Device,
+    err,
     types::{PacketInfo, Verdict},
 };
 
@@ -29,7 +31,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     }
 
     let mut packet = PacketInfo::from_callout_data(&data);
-    dbg!("Connect callout: {:?}", packet);
+    dbg!(device.logger, "Connect callout: {:?}", packet);
     if let Some(connection) = device
         .connection_cache
         .get_connection_action(packet.local_port, IpProtocol::from(packet.protocol))
@@ -52,7 +54,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         }
     } else {
         // Pend decision of connection.
-        dbg!("Pend decision");
+        dbg!(device.logger, "Pend decision");
         let mut packet_list = None;
         if packet.protocol == 17 {
             packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
@@ -63,13 +65,13 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
             match data.pend_operation(packet_list) {
                 Ok(cc) => cc,
                 Err(error) => {
-                    err!("failed to postpone decision: {}", error);
+                    err!(device.logger, "failed to postpone decision: {}", error);
                     return;
                 }
             }
         };
 
-        // Send request to userspace.
+        // Send request to user-space.
         packet.classify_promise = Some(promise);
         let serialized = device.packet_cache.push_and_serialize(packet);
         if let Ok(bytes) = serialized {
@@ -148,16 +150,26 @@ fn redirect_inbound_packet(
 }
 
 #[allow(dead_code)]
-fn print_packet(packet: &[u8]) {
+fn print_packet(device: &mut Device, packet: &[u8]) {
     if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
         if ip_packet.next_header() == IpProtocol::Udp {
             if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                dbg!("injecting packet {} {}", ip_packet, udp_packet);
+                dbg!(
+                    device.logger,
+                    "injecting packet {} {}",
+                    ip_packet,
+                    udp_packet
+                );
             }
         }
         if ip_packet.next_header() == IpProtocol::Tcp {
             if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                dbg!("injecting packet {} {}", ip_packet, tcp_packet);
+                dbg!(
+                    device.logger,
+                    "injecting packet {} {}",
+                    ip_packet,
+                    tcp_packet
+                );
             }
         }
     }
@@ -182,7 +194,7 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
     for (i, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
         // Get packet data.
         let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
-            err!("failed to get net_buffer data");
+            err!(device.logger, "failed to get net_buffer data");
             data.action_permit();
             return;
         };
@@ -202,11 +214,16 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
                     }
                 }
                 _ => {
-                    err!("unsupported protocol {}: {}", i, ip_packet.next_header());
+                    err!(
+                        device.logger,
+                        "unsupported protocol {}: {}",
+                        i,
+                        ip_packet.next_header()
+                    );
                 }
             }
         } else {
-            err!("failed to parse packet");
+            err!(device.logger, "failed to parse packet");
         };
 
         let Some((port, protocol)) = key else {
@@ -266,7 +283,7 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         let mut key: Option<(u16, IpProtocol)> = None;
         NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32); // No idea why this works. Only the header is retreated but we get access to the whole packet.
         let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
-            err!("failed to get net_buffer data");
+            err!(device.logger, "failed to get net_buffer data");
             data.action_permit();
             return;
         };
@@ -283,11 +300,16 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
                     }
                 }
                 _ => {
-                    err!("unsupported protocol {}: {}", i, ip_packet.next_header());
+                    err!(
+                        device.logger,
+                        "unsupported protocol {}: {}",
+                        i,
+                        ip_packet.next_header()
+                    );
                 }
             }
         } else {
-            err!("failed to parse packet");
+            err!(device.logger, "failed to parse packet");
         }
 
         // Reverse the retreat

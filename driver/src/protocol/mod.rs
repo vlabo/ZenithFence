@@ -1,5 +1,5 @@
-use crate::types::PacketInfo;
-use alloc::{format, string::String, vec::Vec};
+use crate::{logger::LogLine, types::PacketInfo};
+use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 struct ByteWriter(Vec<u8>);
@@ -56,6 +56,7 @@ pub enum Info {
         local_port: u16,
         remote_port: u16,
     },
+    LogLines(VecDeque<LogLine>),
 }
 
 impl Info {
@@ -107,6 +108,7 @@ pub enum Command {
         remote_port: u16,
     },
     ClearCache(),
+    GetLogs(),
 }
 
 pub fn parse_command(data: &[u8]) -> Result<Command, String> {
