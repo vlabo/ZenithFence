@@ -67,8 +67,8 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
-            // interface_index: self.interface_index,
-            // sub_interface_index: self.sub_interface_index,
+            packet_buffer: alloc::vec::Vec::new(),
+            in_packet_buffer: alloc::vec::Vec::new(),
         }
     }
 

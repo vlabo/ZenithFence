@@ -3,11 +3,15 @@ use smoltcp::wire::{
 };
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
-use wdk::filter_engine::net_buffer::{read_first_packet, NBLIterator, NetworkAllocator};
+use wdk::filter_engine::net_buffer::{
+    read_packet, read_packet_partial, NBLIterator, NetworkAllocator,
+};
 use wdk::filter_engine::packet::Injector;
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
+use crate::info;
+use crate::logger::Logger;
 use crate::{
     connection_cache::ConnectionAction,
     dbg,
@@ -31,7 +35,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     }
 
     let mut packet = PacketInfo::from_callout_data(&data);
-    dbg!(device.logger, "Connect callout: {:?}", packet);
+    info!(device.logger, "Connect callout: {:?}", packet);
     if let Some(connection) = device
         .connection_cache
         .get_connection_action(packet.local_port, IpProtocol::from(packet.protocol))
@@ -80,22 +84,6 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
         data.block_and_absorb();
     }
-}
-
-fn inject_packet(
-    device: &Device,
-    packet: &[u8],
-    inbound: bool,
-    loopback: bool,
-    if_index: u32,
-    sub_inf_index: u32,
-) -> Result<(), ()> {
-    if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(packet) {
-        let packet = Injector::from_ip_callout(nbl, inbound, loopback, if_index, sub_inf_index);
-        _ = device.injector.inject_packet_list_network(packet);
-        return Ok(());
-    }
-    Err(())
 }
 
 fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
@@ -150,26 +138,16 @@ fn redirect_inbound_packet(
 }
 
 #[allow(dead_code)]
-fn print_packet(device: &mut Device, packet: &[u8]) {
+fn print_packet(logger: &mut Logger, packet: &[u8]) {
     if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
         if ip_packet.next_header() == IpProtocol::Udp {
             if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                dbg!(
-                    device.logger,
-                    "injecting packet {} {}",
-                    ip_packet,
-                    udp_packet
-                );
+                dbg!(logger, "injecting packet {} {}", ip_packet, udp_packet);
             }
         }
         if ip_packet.next_header() == IpProtocol::Tcp {
             if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                dbg!(
-                    device.logger,
-                    "injecting packet {} {}",
-                    ip_packet,
-                    tcp_packet
-                );
+                dbg!(logger, "injecting packet {} {}", ip_packet, tcp_packet);
             }
         }
     }
@@ -191,9 +169,10 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         return;
     }
 
-    for (i, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
-        // Get packet data.
-        let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
+    for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
+        // Read the headers of the packet. IP and TCP/UDP. Stack allocation should be faster.
+        let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
+        let Ok(()) = read_packet_partial(nbl, &mut headers) else {
             err!(device.logger, "failed to get net_buffer data");
             data.action_permit();
             return;
@@ -201,30 +180,20 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
 
         // Parse packet.
         let mut key: Option<(u16, IpProtocol)> = None;
-        if let Ok(ip_packet) = Ipv4Packet::new_checked(full_packet) {
-            match ip_packet.next_header() {
-                smoltcp::wire::IpProtocol::Tcp => {
-                    if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        key = Some((tcp_packet.src_port(), IpProtocol::Tcp))
-                    }
-                }
-                smoltcp::wire::IpProtocol::Udp => {
-                    if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        key = Some((udp_packet.src_port(), IpProtocol::Udp))
-                    }
-                }
-                _ => {
-                    err!(
-                        device.logger,
-                        "unsupported protocol {}: {}",
-                        i,
-                        ip_packet.next_header()
-                    );
-                }
+        let ip_packet = Ipv4Packet::new_unchecked(&headers);
+        match ip_packet.next_header() {
+            smoltcp::wire::IpProtocol::Tcp => {
+                let tcp_packet =
+                    TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+                key = Some((tcp_packet.src_port(), IpProtocol::Tcp));
             }
-        } else {
-            err!(device.logger, "failed to parse packet");
-        };
+            smoltcp::wire::IpProtocol::Udp => {
+                let udp_packet =
+                    UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+                key = Some((udp_packet.src_port(), IpProtocol::Udp));
+            }
+            _ => {}
+        }
 
         let Some((port, protocol)) = key else {
             data.action_permit();
@@ -241,19 +210,30 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
                 redirect_port,
             } = connection.action
             {
-                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
-                redirect_outbound_packet(&mut buffer, redirect_address, redirect_port);
-                // print_packet(&buffer);
-                if inject_packet(
-                    device,
-                    &buffer,
-                    false,
-                    redirect_address.is_loopback(),
-                    data.get_value_u32(Fields::InterfaceIndex as usize),
-                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                )
-                .is_ok()
+                // let mut buffer = Vec::new();
+                let Ok(()) = read_packet(nbl, &mut connection.packet_buffer) else {
+                    err!(device.logger, "failed to get net_buffer data");
+                    data.action_permit();
+                    return;
+                };
+                redirect_outbound_packet(
+                    &mut connection.packet_buffer,
+                    redirect_address,
+                    redirect_port,
+                );
+                print_packet(&mut device.logger, &connection.in_packet_buffer);
+                if let Ok(nbl) = device
+                    .network_allocator
+                    .wrap_packet_in_nbl(&connection.packet_buffer)
                 {
+                    let packet = Injector::from_ip_callout(
+                        nbl,
+                        false,
+                        redirect_address.is_loopback(),
+                        data.get_value_u32(Fields::InterfaceIndex as usize),
+                        data.get_value_u32(Fields::SubInterfaceIndex as usize),
+                    );
+                    _ = device.injector.inject_packet_list_network(packet);
                     data.block_and_absorb();
                     return;
                 }
@@ -279,41 +259,36 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         return;
     }
 
-    for (i, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
+    for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
         let mut key: Option<(u16, IpProtocol)> = None;
-        NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32); // No idea why this works. Only the header is retreated but we get access to the whole packet.
-        let Ok((full_packet, buffer)) = read_first_packet(nbl) else {
+        let _advance_guard =
+            NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32, true); // No idea why this works. Only the header is retreated but we get access to the whole packet.
+
+        // Read the headers of the packet. IP and TCP/UDP. Stack allocation should be faster.
+        let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
+        let Ok(()) = read_packet_partial(nbl, &mut headers) else {
             err!(device.logger, "failed to get net_buffer data");
             data.action_permit();
             return;
         };
-        if let Ok(ip_packet) = Ipv4Packet::new_checked(full_packet) {
-            match ip_packet.next_header() {
-                smoltcp::wire::IpProtocol::Tcp => {
-                    if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                        key = Some((tcp_packet.dst_port(), IpProtocol::Tcp))
-                    }
-                }
-                smoltcp::wire::IpProtocol::Udp => {
-                    if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                        key = Some((udp_packet.dst_port(), IpProtocol::Udp))
-                    }
-                }
-                _ => {
-                    err!(
-                        device.logger,
-                        "unsupported protocol {}: {}",
-                        i,
-                        ip_packet.next_header()
-                    );
-                }
+
+        // Parse headers and get the protocol and destination (local port).
+        let ip_packet = Ipv4Packet::new_unchecked(&headers);
+        match ip_packet.next_header() {
+            smoltcp::wire::IpProtocol::Tcp => {
+                let tcp_packet =
+                    TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+                key = Some((tcp_packet.dst_port(), IpProtocol::Tcp))
             }
-        } else {
-            err!(device.logger, "failed to parse packet");
+            smoltcp::wire::IpProtocol::Udp => {
+                let udp_packet =
+                    UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+                key = Some((udp_packet.dst_port(), IpProtocol::Udp))
+            }
+            _ => {}
         }
 
-        // Reverse the retreat
-        NetworkAllocator::advance_net_buffer(nbl, IPV4_HEADER_LEN as u32);
+        // Check if we have the needed information to continue.
         let Some((port, protocol)) = key else {
             data.action_permit();
             return;
@@ -329,24 +304,31 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
                 redirect_port: _,
             } = connection.action
             {
-                let mut buffer = buffer.unwrap_or(full_packet.to_vec());
+                let Ok(()) = read_packet(nbl, &mut connection.in_packet_buffer) else {
+                    err!(device.logger, "failed to get net_buffer data");
+                    data.action_permit();
+                    return;
+                };
+
+                print_packet(&mut device.logger, &connection.in_packet_buffer);
                 redirect_inbound_packet(
-                    &mut buffer,
+                    &mut connection.in_packet_buffer,
                     connection.local_address,
                     connection.remote_address,
                     connection.remote_port,
                 );
-                // print_packet(&buffer);
-                if inject_packet(
-                    device,
-                    &buffer,
-                    false,
-                    redirect_address.is_loopback(),
-                    data.get_value_u32(Fields::InterfaceIndex as usize),
-                    data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                )
-                .is_ok()
+                if let Ok(nbl) = device
+                    .network_allocator
+                    .wrap_packet_in_nbl(&connection.in_packet_buffer)
                 {
+                    let packet = Injector::from_ip_callout(
+                        nbl,
+                        false,
+                        redirect_address.is_loopback(),
+                        data.get_value_u32(Fields::InterfaceIndex as usize),
+                        data.get_value_u32(Fields::SubInterfaceIndex as usize),
+                    );
+                    _ = device.injector.inject_packet_list_network(packet);
                     data.block_and_absorb();
                     return;
                 }

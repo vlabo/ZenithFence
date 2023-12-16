@@ -1,5 +1,6 @@
 use crate::types::Verdict;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::dbg;
 use wdk::rw_spin_lock::RwSpinLock;
@@ -21,8 +22,8 @@ pub struct Connection {
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
-    // pub(crate) interface_index: u32,
-    // pub(crate) sub_interface_index: u32,
+    pub(crate) packet_buffer: Vec<u8>,
+    pub(crate) in_packet_buffer: Vec<u8>,
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
@@ -62,11 +63,15 @@ impl ConnectionCache {
         }
     }
 
-    pub fn get_connection_action(&self, port: u16, protocol: IpProtocol) -> Option<Connection> {
+    pub fn get_connection_action(
+        &mut self,
+        port: u16,
+        protocol: IpProtocol,
+    ) -> Option<&mut Connection> {
         let _guard = self.lock.read_lock();
 
-        if let Some(connection) = self.connections.get(&Key { port, protocol }) {
-            return Some(connection.clone());
+        if let Some(connection) = self.connections.get_mut(&Key { port, protocol }) {
+            return Some(connection);
         }
 
         None

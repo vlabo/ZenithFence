@@ -1,6 +1,9 @@
 use core::mem::MaybeUninit;
 
-use alloc::string::{String, ToString};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use windows_sys::Wdk::System::SystemServices::{
     IoAllocateMdl, IoFreeMdl, MmBuildMdlForNonPagedPool,
 };
@@ -40,9 +43,7 @@ impl Iterator for NBLIterator {
 }
 
 /// Returns a buffer with the whole packet, or the size of the packet on error.
-pub fn read_first_packet<'a>(
-    nbl: *mut NET_BUFFER_LIST,
-) -> Result<(&'a [u8], Option<alloc::vec::Vec<u8>>), ()> {
+pub fn read_packet<'a>(nbl: *mut NET_BUFFER_LIST, buffer: &'a mut Vec<u8>) -> Result<(), ()> {
     unsafe {
         let Some(nbl) = nbl.as_ref() else {
             return Err(());
@@ -54,23 +55,53 @@ pub fn read_first_packet<'a>(
                 return Err(());
             }
 
-            // Try to return reference to the data.
-            let ptr = NdisGetDataBuffer(nb, data_length, core::ptr::null_mut(), 1, 0);
-            if !ptr.is_null() {
-                let slice = alloc::slice::from_raw_parts(ptr, data_length as usize);
-                return Ok((slice, None));
+            // Allocate space in buffer, if buffer is too small.
+            if buffer.len() < data_length as usize {
+                buffer.resize(data_length as usize, 0);
             }
-
-            // Cant return reference. Allocate buffer.
-            let mut vec = alloc::vec![0; data_length as usize];
-            let ptr = NdisGetDataBuffer(nb, data_length, vec.as_mut_ptr(), 1, 0);
+            let ptr = NdisGetDataBuffer(nb, data_length, buffer.as_mut_ptr(), 1, 0);
             if !ptr.is_null() {
-                let slice = alloc::slice::from_raw_parts(ptr, data_length as usize);
-                return Ok((slice, Some(vec)));
+                return Ok(());
             }
         }
     }
     return Err(());
+}
+
+pub fn read_packet_partial<'a>(nbl: *mut NET_BUFFER_LIST, buffer: &'a mut [u8]) -> Result<(), ()> {
+    unsafe {
+        let Some(nbl) = nbl.as_ref() else {
+            return Err(());
+        };
+        let nb = nbl.Header.first_net_buffer;
+        if let Some(nb) = nb.as_ref() {
+            let data_length = nb.stDataLength as u32;
+            if data_length == 0 {
+                return Err(());
+            }
+
+            if buffer.len() > data_length as usize {
+                return Err(());
+            }
+
+            let ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
+            if !ptr.is_null() {
+                return Ok(());
+            }
+        }
+    }
+    return Err(());
+}
+
+pub struct RetreatGuard {
+    size: u32,
+    nbl: *mut NET_BUFFER_LIST,
+}
+
+impl Drop for RetreatGuard {
+    fn drop(&mut self) {
+        NetworkAllocator::advance_net_buffer(self.nbl, self.size);
+    }
 }
 
 pub struct NetworkAllocator {
@@ -138,14 +169,23 @@ impl NetworkAllocator {
         });
     }
 
-    pub fn retreat_net_buffer(nbl: *mut NET_BUFFER_LIST, size: u32) {
+    pub fn retreat_net_buffer(
+        nbl: *mut NET_BUFFER_LIST,
+        size: u32,
+        auto_advance: bool,
+    ) -> Option<RetreatGuard> {
         unsafe {
             if let Some(nbl) = nbl.as_mut() {
                 if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
                     NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+                    if auto_advance {
+                        return Some(RetreatGuard { size, nbl });
+                    }
                 }
             }
         }
+
+        return None;
     }
     pub fn advance_net_buffer(nbl: *mut NET_BUFFER_LIST, size: u32) {
         unsafe {
