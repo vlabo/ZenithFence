@@ -19,7 +19,6 @@ use crate::{
     connection_cache::{ConnectionAction, ConnectionCache},
     dbg, err,
     id_cache::PacketCache,
-    info,
     logger::Logger,
     protocol::{self, Command},
     types::Verdict,

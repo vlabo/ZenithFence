@@ -45,7 +45,7 @@ type Connection struct {
 }
 
 type LogLine struct {
-	Severity string `json:"severity"`
+	Severity int    `json:"severity"`
 	Line     string `json:"line"`
 }
 
