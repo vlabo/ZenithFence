@@ -210,22 +210,15 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
                 redirect_port,
             } = connection.action
             {
-                // let mut buffer = Vec::new();
-                let Ok(()) = read_packet(nbl, &mut connection.packet_buffer) else {
+                let mut buffer = alloc::vec::Vec::new(); // TODO: remove allocation for each redirect.
+                let Ok(()) = read_packet(nbl, &mut buffer) else {
                     err!(device.logger, "failed to get net_buffer data");
                     data.action_permit();
                     return;
                 };
-                redirect_outbound_packet(
-                    &mut connection.packet_buffer,
-                    redirect_address,
-                    redirect_port,
-                );
-                print_packet(&mut device.logger, &connection.in_packet_buffer);
-                if let Ok(nbl) = device
-                    .network_allocator
-                    .wrap_packet_in_nbl(&connection.packet_buffer)
-                {
+                redirect_outbound_packet(&mut buffer, redirect_address, redirect_port);
+                // print_packet(&mut device.logger, &connection.in_packet_buffer);
+                if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&buffer) {
                     let packet = Injector::from_ip_callout(
                         nbl,
                         false,
@@ -304,23 +297,21 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
                 redirect_port: _,
             } = connection.action
             {
-                let Ok(()) = read_packet(nbl, &mut connection.in_packet_buffer) else {
+                let mut buffer = alloc::vec::Vec::new(); // TODO: remove allocation for each redirect.
+                let Ok(()) = read_packet(nbl, &mut buffer) else {
                     err!(device.logger, "failed to get net_buffer data");
                     data.action_permit();
                     return;
                 };
 
-                print_packet(&mut device.logger, &connection.in_packet_buffer);
+                // print_packet(&mut device.logger, &connection.in_packet_buffer);
                 redirect_inbound_packet(
-                    &mut connection.in_packet_buffer,
+                    &mut buffer,
                     connection.local_address,
                     connection.remote_address,
                     connection.remote_port,
                 );
-                if let Ok(nbl) = device
-                    .network_allocator
-                    .wrap_packet_in_nbl(&connection.in_packet_buffer)
-                {
+                if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&buffer) {
                     let packet = Injector::from_ip_callout(
                         nbl,
                         false,
@@ -337,4 +328,48 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
     }
 
     data.action_permit();
+}
+
+pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    else {
+        return;
+    };
+
+    let packet = PacketInfo::from_callout_data(&data);
+    match data.layer {
+        layer::Layer::FwpmLayerAleResourceAssignmentV4 => {
+            info!(
+                device.logger,
+                "Port {}/{} assigned pid={}",
+                packet.local_port,
+                packet.protocol,
+                packet.process_id.unwrap_or(0)
+            );
+        }
+        layer::Layer::FwpmLayerAleResourceReleaseV4 => {
+            if device
+                .connection_cache
+                .remove_connection(packet.local_port, IpProtocol::from(packet.protocol))
+                .is_some()
+            {
+                info!(
+                    device.logger,
+                    "Port {}/{} released pid={}",
+                    packet.local_port,
+                    packet.protocol,
+                    packet.process_id.unwrap_or(0)
+                );
+            } else {
+                info!(
+                    device.logger,
+                    "Port {}/{} released pid={} (was not in the cache)",
+                    packet.local_port,
+                    packet.protocol,
+                    packet.process_id.unwrap_or(0)
+                );
+            }
+        }
+        _ => {}
+    }
 }

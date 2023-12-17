@@ -67,8 +67,8 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
-            packet_buffer: alloc::vec::Vec::new(),
-            in_packet_buffer: alloc::vec::Vec::new(),
+            // out_packet_buffer: alloc::vec::Vec::new(),
+            // in_packet_buffer: alloc::vec::Vec::new(),
         }
     }
 
@@ -151,6 +151,7 @@ impl PacketInfo {
             Layer::FwpmLayerAleConnectRedirectV4 => {
                 type Field = layer::FwpsFieldsAleConnectRedirectV4;
                 Self {
+                    process_id: data.get_process_id(),
                     direction: 0,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
@@ -162,6 +163,34 @@ impl PacketInfo {
                         .to_be_bytes(),
                     local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     remote_port: data.get_value_u16(Field::IpRemotePort as usize),
+                    ..Default::default()
+                }
+            }
+            Layer::FwpmLayerAleResourceAssignmentV4 => {
+                type Field = layer::FwpsFieldsAleResourceAssignmentV4;
+                Self {
+                    process_id: data.get_process_id(),
+                    direction: 0,
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_be_bytes(),
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    ..Default::default()
+                }
+            }
+            Layer::FwpmLayerAleResourceReleaseV4 => {
+                type Field = layer::FwpsFieldsAleResourceReleaseV4;
+                Self {
+                    process_id: data.get_process_id(),
+                    direction: 0,
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_be_bytes(),
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
                     ..Default::default()
                 }
             }

@@ -80,6 +80,22 @@ impl Device {
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::network_layer_inbound,
             ),
+            Callout::new(
+                "AleResourceAssignment",
+                "Port release monitor",
+                0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
+                Layer::FwpmLayerAleResourceAssignmentV4,
+                consts::FWP_ACTION_CALLOUT_INSPECTION,
+                callouts::ale_resource_monitor_ipv4,
+            ),
+            Callout::new(
+                "AleResourceRelease",
+                "Port release monitor",
+                0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
+                Layer::FwpmLayerAleResourceReleaseV4,
+                consts::FWP_ACTION_CALLOUT_INSPECTION,
+                callouts::ale_resource_monitor_ipv4,
+            ),
         ];
 
         if let Err(err) = self.filter_engine.commit(callouts) {

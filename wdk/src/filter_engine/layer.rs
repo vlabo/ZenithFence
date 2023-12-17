@@ -1,6 +1,40 @@
 #![allow(dead_code)]
 
-use windows_sys::core::GUID;
+use windows_sys::{
+    core::GUID,
+    Win32::NetworkManagement::WindowsFilteringPlatform::{
+        FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V4_DISCARD,
+        FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_LAYER_ALE_AUTH_CONNECT_V6_DISCARD,
+        FWPM_LAYER_ALE_AUTH_LISTEN_V4, FWPM_LAYER_ALE_AUTH_LISTEN_V4_DISCARD,
+        FWPM_LAYER_ALE_AUTH_LISTEN_V6, FWPM_LAYER_ALE_AUTH_LISTEN_V6_DISCARD,
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4_DISCARD,
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6_DISCARD,
+        FWPM_LAYER_ALE_BIND_REDIRECT_V4, FWPM_LAYER_ALE_BIND_REDIRECT_V6,
+        FWPM_LAYER_ALE_CONNECT_REDIRECT_V4, FWPM_LAYER_ALE_CONNECT_REDIRECT_V6,
+        FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4, FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4_DISCARD,
+        FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6, FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6_DISCARD,
+        FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4_DISCARD,
+        FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6_DISCARD,
+        FWPM_LAYER_ALE_RESOURCE_RELEASE_V4, FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
+        FWPM_LAYER_DATAGRAM_DATA_V4, FWPM_LAYER_DATAGRAM_DATA_V4_DISCARD,
+        FWPM_LAYER_DATAGRAM_DATA_V6, FWPM_LAYER_DATAGRAM_DATA_V6_DISCARD,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V4, FWPM_LAYER_INBOUND_ICMP_ERROR_V4_DISCARD,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V6, FWPM_LAYER_INBOUND_ICMP_ERROR_V6_DISCARD,
+        FWPM_LAYER_INBOUND_IPPACKET_V4, FWPM_LAYER_INBOUND_IPPACKET_V4_DISCARD,
+        FWPM_LAYER_INBOUND_IPPACKET_V6, FWPM_LAYER_INBOUND_IPPACKET_V6_DISCARD,
+        FWPM_LAYER_INBOUND_TRANSPORT_V4, FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD,
+        FWPM_LAYER_INBOUND_TRANSPORT_V6, FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD,
+        FWPM_LAYER_IPFORWARD_V4, FWPM_LAYER_IPFORWARD_V4_DISCARD, FWPM_LAYER_IPFORWARD_V6,
+        FWPM_LAYER_IPFORWARD_V6_DISCARD, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4_DISCARD, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6_DISCARD, FWPM_LAYER_OUTBOUND_IPPACKET_V4,
+        FWPM_LAYER_OUTBOUND_IPPACKET_V4_DISCARD, FWPM_LAYER_OUTBOUND_IPPACKET_V6,
+        FWPM_LAYER_OUTBOUND_IPPACKET_V6_DISCARD, FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
+        FWPM_LAYER_OUTBOUND_TRANSPORT_V4_DISCARD, FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
+        FWPM_LAYER_OUTBOUND_TRANSPORT_V6_DISCARD, FWPM_LAYER_STREAM_V4,
+        FWPM_LAYER_STREAM_V4_DISCARD, FWPM_LAYER_STREAM_V6, FWPM_LAYER_STREAM_V6_DISCARD,
+    },
+};
 
 #[repr(C)]
 pub(crate) struct Value {
@@ -115,182 +149,86 @@ pub enum Layer {
     FwpmLayerAleConnectRedirectV6,
     FwpmLayerAleBindRedirectV4,
     FwpmLayerAleBindRedirectV6,
+    FwpmLayerAleResourceReleaseV4,
+    FwpmLayerAleResourceReleaseV6,
 }
 impl Layer {
     pub fn get_guid(&self) -> GUID {
         match self {
-            Layer::FwpmLayerInboundIppacketV4 => {
-                GUID::from_u128(0xc86fd1bf_21cd_497e_a0bb_17425c885c58)
-            }
-            Layer::FwpmLayerInboundIppacketV4Discard => {
-                GUID::from_u128(0xb5a230d0_a8c0_44f2_916e_991b53ded1f7)
-            }
-            Layer::FwpmLayerInboundIppacketV6 => {
-                GUID::from_u128(0xf52032cb_991c_46e7_971d_2601459a91ca)
-            }
-            Layer::FwpmLayerInboundIppacketV6Discard => {
-                GUID::from_u128(0xbb24c279_93b4_47a2_83ad_ae1698b50885)
-            }
-            Layer::FwpmLayerOutboundIppacketV4 => {
-                GUID::from_u128(0x1e5c9fae_8a84_4135_a331_950b54229ecd)
-            }
-            Layer::FwpmLayerOutboundIppacketV4Discard => {
-                GUID::from_u128(0x08e4bcb5_b647_48f3_953c_e5ddbd03937e)
-            }
-            Layer::FwpmLayerOutboundIppacketV6 => {
-                GUID::from_u128(0xa3b3ab6b_3564_488c_9117_f34e82142763)
-            }
-            Layer::FwpmLayerOutboundIppacketV6Discard => {
-                GUID::from_u128(0x9513d7c4_a934_49dc_91a7_6ccb80cc02e3)
-            }
-            Layer::FwpmLayerIpforwardV4 => GUID::from_u128(0xa82acc24_4ee1_4ee1_b465_fd1d25cb10a4),
-            Layer::FwpmLayerIpforwardV4Discard => {
-                GUID::from_u128(0x9e9ea773_2fae_4210_8f17_34129ef369eb)
-            }
-            Layer::FwpmLayerIpforwardV6 => GUID::from_u128(0x7b964818_19c7_493a_b71f_832c3684d28c),
-            Layer::FwpmLayerIpforwardV6Discard => {
-                GUID::from_u128(0x31524a5d_1dfe_472f_bb93_518ee945d8a2)
-            }
-            Layer::FwpmLayerInboundTransportV4 => {
-                GUID::from_u128(0x5926dfc8_e3cf_4426_a283_dc393f5d0f9d)
-            }
-            Layer::FwpmLayerInboundTransportV4Discard => {
-                GUID::from_u128(0xac4a9833_f69d_4648_b261_6dc84835ef39)
-            }
-            Layer::FwpmLayerInboundTransportV6 => {
-                GUID::from_u128(0x634a869f_fc23_4b90_b0c1_bf620a36ae6f)
-            }
-            Layer::FwpmLayerInboundTransportV6Discard => {
-                GUID::from_u128(0x2a6ff955_3b2b_49d2_9848_ad9d72dcaab7)
-            }
-            Layer::FwpmLayerOutboundTransportV4 => {
-                GUID::from_u128(0x09e61aea_d214_46e2_9b21_b26b0b2f28c8)
-            }
-            Layer::FwpmLayerOutboundTransportV4Discard => {
-                GUID::from_u128(0xc5f10551_bdb0_43d7_a313_50e211f4d68a)
-            }
-            Layer::FwpmLayerOutboundTransportV6 => {
-                GUID::from_u128(0xe1735bde_013f_4655_b351_a49e15762df0)
-            }
-            Layer::FwpmLayerOutboundTransportV6Discard => {
-                GUID::from_u128(0xf433df69_ccbd_482e_b9b2_57165658c3b3)
-            }
-            Layer::FwpmLayerStreamV4 => GUID::from_u128(0x3b89653c_c170_49e4_b1cd_e0eeeee19a3e),
-            Layer::FwpmLayerStreamV4Discard => {
-                GUID::from_u128(0x25c4c2c2_25ff_4352_82f9_c54a4a4726dc)
-            }
-            Layer::FwpmLayerStreamV6 => GUID::from_u128(0x47c9137a_7ec4_46b3_b6e4_48e926b1eda4),
-            Layer::FwpmLayerStreamV6Discard => {
-                GUID::from_u128(0x10a59fc7_b628_4c41_9eb8_cf37d55103cf)
-            }
-            Layer::FwpmLayerDatagramDataV4 => {
-                GUID::from_u128(0x3d08bf4e_45f6_4930_a922_417098e20027)
-            }
-            Layer::FwpmLayerDatagramDataV4Discard => {
-                GUID::from_u128(0x18e330c6_7248_4e52_aaab_472ed67704fd)
-            }
-            Layer::FwpmLayerDatagramDataV6 => {
-                GUID::from_u128(0xfa45fe2f_3cba_4427_87fc_57b9a4b10d00)
-            }
-            Layer::FwpmLayerDatagramDataV6Discard => {
-                GUID::from_u128(0x09d1dfe1_9b86_4a42_be9d_8c315b92a5d0)
-            }
-            Layer::FwpmLayerInboundIcmpErrorV4 => {
-                GUID::from_u128(0x61499990_3cb6_4e84_b950_53b94b6964f3)
-            }
-            Layer::FwpmLayerInboundIcmpErrorV4Discard => {
-                GUID::from_u128(0xa6b17075_ebaf_4053_a4e7_213c8121ede5)
-            }
-            Layer::FwpmLayerInboundIcmpErrorV6 => {
-                GUID::from_u128(0x65f9bdff_3b2d_4e5d_b8c6_c720651fe898)
-            }
-            Layer::FwpmLayerInboundIcmpErrorV6Discard => {
-                GUID::from_u128(0xa6e7ccc0_08fb_468d_a472_9771d5595e09)
-            }
-            Layer::FwpmLayerOutboundIcmpErrorV4 => {
-                GUID::from_u128(0x41390100_564c_4b32_bc1d_718048354d7c)
-            }
-            Layer::FwpmLayerOutboundIcmpErrorV4Discard => {
-                GUID::from_u128(0xb3598d36_0561_4588_a6bf_e955e3f6264b)
-            }
-            Layer::FwpmLayerOutboundIcmpErrorV6 => {
-                GUID::from_u128(0x7fb03b60_7b8d_4dfa_badd_980176fc4e12)
-            }
-            Layer::FwpmLayerOutboundIcmpErrorV6Discard => {
-                GUID::from_u128(0x65f2e647_8d0c_4f47_b19b_33a4d3f1357c)
-            }
-            Layer::FwpmLayerAleResourceAssignmentV4 => {
-                GUID::from_u128(0x1247d66d_0b60_4a15_8d44_7155d0f53a0c)
-            }
+            Layer::FwpmLayerInboundIppacketV4 => FWPM_LAYER_INBOUND_IPPACKET_V4,
+            Layer::FwpmLayerInboundIppacketV4Discard => FWPM_LAYER_INBOUND_IPPACKET_V4_DISCARD,
+            Layer::FwpmLayerInboundIppacketV6 => FWPM_LAYER_INBOUND_IPPACKET_V6,
+            Layer::FwpmLayerInboundIppacketV6Discard => FWPM_LAYER_INBOUND_IPPACKET_V6_DISCARD,
+            Layer::FwpmLayerOutboundIppacketV4 => FWPM_LAYER_OUTBOUND_IPPACKET_V4,
+            Layer::FwpmLayerOutboundIppacketV4Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V4_DISCARD,
+            Layer::FwpmLayerOutboundIppacketV6 => FWPM_LAYER_OUTBOUND_IPPACKET_V6,
+            Layer::FwpmLayerOutboundIppacketV6Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V6_DISCARD,
+            Layer::FwpmLayerIpforwardV4 => FWPM_LAYER_IPFORWARD_V4,
+            Layer::FwpmLayerIpforwardV4Discard => FWPM_LAYER_IPFORWARD_V4_DISCARD,
+            Layer::FwpmLayerIpforwardV6 => FWPM_LAYER_IPFORWARD_V6,
+            Layer::FwpmLayerIpforwardV6Discard => FWPM_LAYER_IPFORWARD_V6_DISCARD,
+            Layer::FwpmLayerInboundTransportV4 => FWPM_LAYER_INBOUND_TRANSPORT_V4,
+            Layer::FwpmLayerInboundTransportV4Discard => FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD,
+            Layer::FwpmLayerInboundTransportV6 => FWPM_LAYER_INBOUND_TRANSPORT_V6,
+            Layer::FwpmLayerInboundTransportV6Discard => FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD,
+            Layer::FwpmLayerOutboundTransportV4 => FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
+            Layer::FwpmLayerOutboundTransportV4Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V4_DISCARD,
+            Layer::FwpmLayerOutboundTransportV6 => FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
+            Layer::FwpmLayerOutboundTransportV6Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V6_DISCARD,
+            Layer::FwpmLayerStreamV4 => FWPM_LAYER_STREAM_V4,
+            Layer::FwpmLayerStreamV4Discard => FWPM_LAYER_STREAM_V4_DISCARD,
+            Layer::FwpmLayerStreamV6 => FWPM_LAYER_STREAM_V6,
+            Layer::FwpmLayerStreamV6Discard => FWPM_LAYER_STREAM_V6_DISCARD,
+            Layer::FwpmLayerDatagramDataV4 => FWPM_LAYER_DATAGRAM_DATA_V4,
+            Layer::FwpmLayerDatagramDataV4Discard => FWPM_LAYER_DATAGRAM_DATA_V4_DISCARD,
+            Layer::FwpmLayerDatagramDataV6 => FWPM_LAYER_DATAGRAM_DATA_V6,
+            Layer::FwpmLayerDatagramDataV6Discard => FWPM_LAYER_DATAGRAM_DATA_V6_DISCARD,
+            Layer::FwpmLayerInboundIcmpErrorV4 => FWPM_LAYER_INBOUND_ICMP_ERROR_V4,
+            Layer::FwpmLayerInboundIcmpErrorV4Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V4_DISCARD,
+            Layer::FwpmLayerInboundIcmpErrorV6 => FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
+            Layer::FwpmLayerInboundIcmpErrorV6Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V6_DISCARD,
+            Layer::FwpmLayerOutboundIcmpErrorV4 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+            Layer::FwpmLayerOutboundIcmpErrorV4Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4_DISCARD,
+            Layer::FwpmLayerOutboundIcmpErrorV6 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
+            Layer::FwpmLayerOutboundIcmpErrorV6Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6_DISCARD,
+            Layer::FwpmLayerAleResourceAssignmentV4 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
             Layer::FwpmLayerAleResourceAssignmentV4Discard => {
-                GUID::from_u128(0x0b5812a2_c3ff_4eca_b88d_c79e20ac6322)
+                FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4_DISCARD
             }
-            Layer::FwpmLayerAleResourceAssignmentV6 => {
-                GUID::from_u128(0x55a650e1_5f0a_4eca_a653_88f53b26aa8c)
-            }
+            Layer::FwpmLayerAleResourceAssignmentV6 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
             Layer::FwpmLayerAleResourceAssignmentV6Discard => {
-                GUID::from_u128(0xcbc998bb_c51f_4c1a_bb4f_9775fcacab2f)
+                FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6_DISCARD
             }
-            Layer::FwpmLayerAleAuthListenV4 => {
-                GUID::from_u128(0x88bb5dad_76d7_4227_9c71_df0a3ed7be7e)
-            }
-            Layer::FwpmLayerAleAuthListenV4Discard => {
-                GUID::from_u128(0x371dfada_9f26_45fd_b4eb_c29eb212893f)
-            }
-            Layer::FwpmLayerAleAuthListenV6 => {
-                GUID::from_u128(0x7ac9de24_17dd_4814_b4bd_a9fbc95a321b)
-            }
-            Layer::FwpmLayerAleAuthListenV6Discard => {
-                GUID::from_u128(0x60703b07_63c8_48e9_ada3_12b1af40a617)
-            }
-            Layer::FwpmLayerAleAuthRecvAcceptV4 => {
-                GUID::from_u128(0xe1cd9fe7_f4b5_4273_96c0_592e487b8650)
-            }
+            Layer::FwpmLayerAleAuthListenV4 => FWPM_LAYER_ALE_AUTH_LISTEN_V4,
+            Layer::FwpmLayerAleAuthListenV4Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V4_DISCARD,
+            Layer::FwpmLayerAleAuthListenV6 => FWPM_LAYER_ALE_AUTH_LISTEN_V6,
+            Layer::FwpmLayerAleAuthListenV6Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V6_DISCARD,
+            Layer::FwpmLayerAleAuthRecvAcceptV4 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
             Layer::FwpmLayerAleAuthRecvAcceptV4Discard => {
-                GUID::from_u128(0x9eeaa99b_bd22_4227_919f_0073c63357b1)
+                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4_DISCARD
             }
-            Layer::FwpmLayerAleAuthRecvAcceptV6 => {
-                GUID::from_u128(0xa3b42c97_9f04_4672_b87e_cee9c483257f)
-            }
+            Layer::FwpmLayerAleAuthRecvAcceptV6 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
             Layer::FwpmLayerAleAuthRecvAcceptV6Discard => {
-                GUID::from_u128(0x89455b97_dbe1_453f_a224_13da895af396)
+                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6_DISCARD
             }
-            Layer::FwpmLayerAleAuthConnectV4 => {
-                GUID::from_u128(0xc38d57d1_05a7_4c33_904f_7fbceee60e82)
-            }
-            Layer::FwpmLayerAleAuthConnectV4Discard => {
-                GUID::from_u128(0xd632a801_f5ba_4ad6_96e3_607017d9836a)
-            }
-            Layer::FwpmLayerAleAuthConnectV6 => {
-                GUID::from_u128(0x4a72393b_319f_44bc_84c3_ba54dcb3b6b4)
-            }
-            Layer::FwpmLayerAleAuthConnectV6Discard => {
-                GUID::from_u128(0xc97bc3b8_c9a3_4e33_8695_8e17aad4de09)
-            }
-            Layer::FwpmLayerAleFlowEstablishedV4 => {
-                GUID::from_u128(0xaf80470a_5596_4c13_9992_539e6fe57967)
-            }
+            Layer::FwpmLayerAleAuthConnectV4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            Layer::FwpmLayerAleAuthConnectV4Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V4_DISCARD,
+            Layer::FwpmLayerAleAuthConnectV6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            Layer::FwpmLayerAleAuthConnectV6Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V6_DISCARD,
+            Layer::FwpmLayerAleFlowEstablishedV4 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4,
             Layer::FwpmLayerAleFlowEstablishedV4Discard => {
-                GUID::from_u128(0x146ae4a9_a1d2_4d43_a31a_4c42682b8e4f)
+                FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4_DISCARD
             }
-            Layer::FwpmLayerAleFlowEstablishedV6 => {
-                GUID::from_u128(0x7021d2b3_dfa4_406e_afeb_6afaf7e70efd)
-            }
+            Layer::FwpmLayerAleFlowEstablishedV6 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6,
             Layer::FwpmLayerAleFlowEstablishedV6Discard => {
-                GUID::from_u128(0x46928636_bbca_4b76_941d_0fa7f5d7d372)
+                FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6_DISCARD
             }
-            Layer::FwpmLayerAleConnectRedirectV4 => {
-                GUID::from_u128(0xc6e63c8c_b784_4562_aa7d_0a67cfcaf9a3)
-            }
-            Layer::FwpmLayerAleConnectRedirectV6 => {
-                GUID::from_u128(0x587e54a7_8046_42ba_a0aa_b716250fc7fd)
-            }
-            Layer::FwpmLayerAleBindRedirectV4 => {
-                GUID::from_u128(0x66978cad_c704_42ac_86ac_7c1a231bd253)
-            }
-            Layer::FwpmLayerAleBindRedirectV6 => {
-                GUID::from_u128(0xbef02c9c_606b_4536_8c26_1c2fc7b631d4)
-            }
+            Layer::FwpmLayerAleConnectRedirectV4 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V4,
+            Layer::FwpmLayerAleConnectRedirectV6 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V6,
+            Layer::FwpmLayerAleBindRedirectV4 => FWPM_LAYER_ALE_BIND_REDIRECT_V4,
+            Layer::FwpmLayerAleBindRedirectV6 => FWPM_LAYER_ALE_BIND_REDIRECT_V6,
+            Layer::FwpmLayerAleResourceReleaseV4 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V4,
+            Layer::FwpmLayerAleResourceReleaseV6 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
         }
     }
 }
