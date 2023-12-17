@@ -68,6 +68,26 @@ unsafe impl GlobalAlloc for WindowsAllocator {
     }
 }
 
+unsafe impl Allocator for WindowsAllocator {
+    fn allocate(
+        &self,
+        layout: Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError> {
+        unsafe {
+            let pool = ExAllocatePoolWithTag(PoolType::NonPaged, layout.size(), POOL_TAG);
+            if pool.is_null() {
+                return Err(core::alloc::AllocError);
+            }
+            let array = core::slice::from_raw_parts_mut(pool as *mut u8, layout.size());
+            Ok(core::ptr::NonNull::new_unchecked(array))
+        }
+    }
+
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, _layout: Layout) {
+        ExFreePoolWithTag(ptr.as_ptr() as u64, POOL_TAG);
+    }
+}
+
 pub struct NullAllocator {}
 unsafe impl Sync for NullAllocator {}
 
