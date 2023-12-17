@@ -3,6 +3,8 @@ use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use wdk::rw_spin_lock::RwSpinLock;
 
+pub const LOG_LEVEL: u8 = Severity::Debug as u8;
+
 #[derive(Serialize, Deserialize, Debug)]
 #[repr(u8)]
 pub enum Severity {
@@ -53,39 +55,49 @@ impl Logger {
 #[macro_export]
 macro_rules! crit {
     ($log:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        $log.add_line($crate::logger::Severity::Critical, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        if $crate::logger::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
+            let message = alloc::format!($($arg)*);
+            $log.add_line($crate::logger::Severity::Critical, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        }
     });
 }
 
 #[macro_export]
 macro_rules! err {
     ($log:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        $log.add_line($crate::logger::Severity::Error, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        if $crate::logger::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
+            let message = alloc::format!($($arg)*);
+            $log.add_line($crate::logger::Severity::Error, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        }
     });
 }
 
 #[macro_export]
 macro_rules! dbg {
     ($log:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        $log.add_line($crate::logger::Severity::Debug, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        if $crate::logger::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
+            let message = alloc::format!($($arg)*);
+            $log.add_line($crate::logger::Severity::Debug, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+        }
     });
 }
 
 #[macro_export]
 macro_rules! warn {
     ($log:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        $log.add_line($crate::logger::Severity::Warning, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+        if $crate::logger::Severity::Warning as u8 >= $crate::logger::LOG_LEVEL {
+            let message = alloc::format!($($arg)*);
+            $log.add_line($crate::logger::Severity::Warning, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+        }
     });
 }
 
 #[macro_export]
 macro_rules! info {
     ($log:expr, $($arg:tt)*) => ({
-        let message = alloc::format!($($arg)*);
-        $log.add_line($crate::logger::Severity::Info, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+        if $crate::logger::Severity::Info as u8 >= $crate::logger::LOG_LEVEL {
+            let message = alloc::format!($($arg)*);
+            $log.add_line($crate::logger::Severity::Info, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+        }
     });
 }
