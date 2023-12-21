@@ -1,6 +1,5 @@
-use crate::device;
+use crate::device::{self, Device};
 use alloc::boxed::Box;
-use wdk::allocator::NullAllocator;
 use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
@@ -68,9 +67,13 @@ extern "system" fn device_cleanup(device: HANDLE) {
     unsafe {
         // Call drop without freeing memory. Memory is manged by the kernel.
         if !device_context.is_null() {
-            let mut owned_device_context = Box::from_raw_in(device_context, NullAllocator {});
-            owned_device_context.cleanup();
-            drop(owned_device_context);
+            let mut boxed_device_context = Box::from_raw(device_context);
+            #[allow(invalid_value)]
+            let mut temp_device_context: Device = core::mem::zeroed();
+            core::mem::swap(&mut temp_device_context, boxed_device_context.as_mut());
+            temp_device_context.cleanup();
+            drop(temp_device_context);
+            _ = Box::into_raw(boxed_device_context);
         }
     }
 }

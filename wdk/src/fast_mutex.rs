@@ -1,7 +1,6 @@
 use alloc::boxed::Box;
 use core::{
     cell::UnsafeCell,
-    mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 use windows_sys::{
@@ -52,7 +51,7 @@ impl<T> FastMutex<T> {
     }
 
     pub fn init(&self) {
-        let mutex = Box::into_raw(Box::new(unsafe { MaybeUninit::zeroed().assume_init() }));
+        let mutex = Box::into_raw(Box::new(unsafe { core::mem::zeroed() }));
         unsafe {
             ExInitializeFastMutex(mutex);
             *self.kmutex.get() = Some(mutex);
