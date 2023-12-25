@@ -68,7 +68,6 @@ extern "system" fn device_cleanup(device: HANDLE) {
         // Call drop without freeing memory. Memory is manged by the kernel.
         if !device_context.is_null() {
             let mut boxed_device_context = Box::from_raw(device_context);
-            #[allow(invalid_value)]
             let mut temp_device_context: Device = core::mem::zeroed();
             core::mem::swap(&mut temp_device_context, boxed_device_context.as_mut());
             temp_device_context.cleanup();
