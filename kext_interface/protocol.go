@@ -72,11 +72,14 @@ type Redirect struct {
 }
 
 type Update struct {
-	Protocol      uint8   `json:"protocol"`
-	Port          uint16  `json:"port"`
-	Verdict       uint8   `json:"verdict"`
-	RemoteAddress []uint8 `json:"remote_address"`
-	RemotePort    uint16  `json:"remote_port"`
+	Protocol        uint8   `json:"protocol"`
+	LocalAddress    []uint8 `json:"local_address"`
+	LocalPort       uint16  `json:"local_port"`
+	RemoteAddress   []uint8 `json:"remote_address"`
+	RemotePort      uint16  `json:"remote_port"`
+	Verdict         uint8   `json:"verdict"`
+	RedirectAddress []uint8 `json:"redirect_address"`
+	RedirectPort    uint16  `json:"redirect_port"`
 }
 
 type Command struct {

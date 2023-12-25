@@ -1,6 +1,7 @@
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket, UdpPacket, IPV4_HEADER_LEN,
 };
+use wdk::ffi::NET_BUFFER_LIST;
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
 use wdk::filter_engine::net_buffer::{
@@ -10,8 +11,9 @@ use wdk::filter_engine::packet::Injector;
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::info;
+use crate::connection_cache::Key;
 use crate::logger::Logger;
+use crate::types::Direction;
 use crate::{
     connection_cache::ConnectionAction,
     dbg,
@@ -19,6 +21,7 @@ use crate::{
     err,
     types::{PacketInfo, Verdict},
 };
+use crate::{info, warn};
 
 pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
@@ -36,9 +39,10 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
     let mut packet = PacketInfo::from_callout_data(&data);
     info!(device.logger, "Connect callout: {:?}", packet);
+    warn!(device.logger, "get key ale: {}", packet.get_key());
     if let Some(connection) = device
         .connection_cache
-        .get_connection_action(packet.local_port, IpProtocol::from(packet.protocol))
+        .get_connection_action(packet.get_key())
     {
         // We already have a verdict for it.
         match connection.action {
@@ -153,6 +157,61 @@ fn print_packet(logger: &mut Logger, packet: &[u8]) {
     }
 }
 
+fn get_key_from_nbl(
+    nbl: *mut NET_BUFFER_LIST,
+    logger: &mut Logger,
+    direction: Direction,
+) -> Option<Key> {
+    // Get bytes
+    let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
+    let Ok(()) = read_packet_partial(nbl, &mut headers) else {
+        err!(logger, "failed to get net_buffer data");
+        return None;
+    };
+
+    // Parse packet
+    let ip_packet = Ipv4Packet::new_unchecked(&headers);
+    let protocol;
+    let src_port;
+    let dst_port;
+    match ip_packet.next_header() {
+        smoltcp::wire::IpProtocol::Tcp => {
+            let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+            protocol = smoltcp::wire::IpProtocol::Tcp;
+            src_port = tcp_packet.src_port();
+            dst_port = tcp_packet.dst_port();
+        }
+        smoltcp::wire::IpProtocol::Udp => {
+            let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
+            protocol = smoltcp::wire::IpProtocol::Udp;
+            src_port = udp_packet.src_port();
+            dst_port = udp_packet.dst_port();
+        }
+        _ => {
+            return None;
+        }
+    };
+
+    // Build key
+    match direction {
+        Direction::Outbound => Some(Key {
+            protocol,
+            local_address: ip_packet.src_addr(),
+            local_port: src_port,
+            remote_address: ip_packet.dst_addr(),
+            remote_port: dst_port,
+        }),
+        Direction::Inbound => Some(Key {
+            protocol,
+            local_address: ip_packet.dst_addr(),
+            local_port: dst_port,
+            remote_address: ip_packet.src_addr(),
+            remote_port: src_port,
+        }),
+        Direction::NotApplicable => None,
+    }
+}
+
 pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FwpsFieldsOutboundIppacketV4;
 
@@ -170,41 +229,15 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
     }
 
     for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
-        // Read the headers of the packet. IP and TCP/UDP. Stack allocation should be faster.
-        let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
-        let Ok(()) = read_packet_partial(nbl, &mut headers) else {
-            err!(device.logger, "failed to get net_buffer data");
-            data.action_permit();
-            return;
-        };
-
-        // Parse packet.
-        let mut key: Option<(u16, IpProtocol)> = None;
-        let ip_packet = Ipv4Packet::new_unchecked(&headers);
-        match ip_packet.next_header() {
-            smoltcp::wire::IpProtocol::Tcp => {
-                let tcp_packet =
-                    TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-                key = Some((tcp_packet.src_port(), IpProtocol::Tcp));
-            }
-            smoltcp::wire::IpProtocol::Udp => {
-                let udp_packet =
-                    UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-                key = Some((udp_packet.src_port(), IpProtocol::Udp));
-            }
-            _ => {}
-        }
-
-        let Some((port, protocol)) = key else {
+        // Parse key.
+        let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Outbound) else {
             data.action_permit();
             return;
         };
 
         // Get action.
-        if let Some(connection) = device
-            .connection_cache
-            .get_connection_action(port, protocol)
-        {
+        warn!(device.logger, "get key out: {}", key);
+        if let Some(connection) = device.connection_cache.get_connection_action(key) {
             if let ConnectionAction::RedirectIP {
                 redirect_address,
                 redirect_port,
@@ -231,6 +264,8 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
                     return;
                 }
             }
+        } else {
+            err!(device.logger, "failed to get connection");
         }
     }
 
@@ -253,45 +288,19 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
     }
 
     for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
-        let mut key: Option<(u16, IpProtocol)> = None;
         let _advance_guard =
             NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32, true); // No idea why this works. Only the header is retreated but we get access to the whole packet.
 
         // Read the headers of the packet. IP and TCP/UDP. Stack allocation should be faster.
-        let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
-        let Ok(()) = read_packet_partial(nbl, &mut headers) else {
-            err!(device.logger, "failed to get net_buffer data");
-            data.action_permit();
-            return;
-        };
 
-        // Parse headers and get the protocol and destination (local port).
-        let ip_packet = Ipv4Packet::new_unchecked(&headers);
-        match ip_packet.next_header() {
-            smoltcp::wire::IpProtocol::Tcp => {
-                let tcp_packet =
-                    TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-                key = Some((tcp_packet.dst_port(), IpProtocol::Tcp))
-            }
-            smoltcp::wire::IpProtocol::Udp => {
-                let udp_packet =
-                    UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-                key = Some((udp_packet.dst_port(), IpProtocol::Udp))
-            }
-            _ => {}
-        }
-
-        // Check if we have the needed information to continue.
-        let Some((port, protocol)) = key else {
+        let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Inbound) else {
             data.action_permit();
             return;
         };
 
         // Get action.
-        if let Some(connection) = device
-            .connection_cache
-            .get_connection_action(port, protocol)
-        {
+        warn!(device.logger, "get key in: {}", key);
+        if let Some(connection) = device.connection_cache.get_connection_action(key) {
             if let ConnectionAction::RedirectIP {
                 redirect_address,
                 redirect_port: _,
@@ -324,6 +333,8 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
                     return;
                 }
             }
+        } else {
+            err!(device.logger, "failed to get connection");
         }
     }
 
@@ -350,7 +361,7 @@ pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_O
         layer::Layer::FwpmLayerAleResourceReleaseV4 => {
             if device
                 .connection_cache
-                .remove_connection(packet.local_port, IpProtocol::from(packet.protocol))
+                .remove_connection(packet.get_key())
                 .is_some()
             {
                 info!(

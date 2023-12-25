@@ -11,7 +11,7 @@ use wdk::{
     },
 };
 
-use crate::connection_cache::{Connection, ConnectionAction};
+use crate::connection_cache::{Connection, ConnectionAction, Key};
 
 #[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
 #[repr(u8)]
@@ -41,11 +41,28 @@ impl Display for Verdict {
     }
 }
 
-#[derive(Default)]
+#[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum Direction {
+    Outbound = 0,
+    Inbound = 1,
+    NotApplicable = 255,
+}
+
+impl Debug for Direction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Direction::Outbound => write!(f, "Outbound"),
+            Direction::Inbound => write!(f, "Inbound"),
+            Direction::NotApplicable => write!(f, "NotApplicable"),
+        }
+    }
+}
+
 pub struct PacketInfo {
     pub process_id: Option<u64>,
     pub process_path: Option<String>,
-    pub direction: u8,
+    pub direction: Direction,
     pub ip_v6: bool,
     pub protocol: u8,
     pub flags: u8,
@@ -67,8 +84,16 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
-            // out_packet_buffer: alloc::vec::Vec::new(),
-            // in_packet_buffer: alloc::vec::Vec::new(),
+        }
+    }
+
+    pub fn get_key(&self) -> Key {
+        Key {
+            protocol: IpProtocol::from(self.protocol),
+            local_address: Ipv4Address::from_bytes(&self.local_ip),
+            local_port: self.local_port,
+            remote_address: Ipv4Address::from_bytes(&self.remote_ip),
+            remote_port: self.remote_port,
         }
     }
 
@@ -77,7 +102,7 @@ impl PacketInfo {
             Layer::FwpmLayerInboundIppacketV4 => {
                 type Field = layer::FwpsFieldsInboundIppacketV4;
                 Self {
-                    direction: 1,
+                    direction: Direction::Inbound,
                     ip_v6: false,
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
@@ -93,7 +118,7 @@ impl PacketInfo {
             Layer::FwpmLayerOutboundIppacketV4 => {
                 type Field = layer::FwpsFieldsOutboundIppacketV4;
                 Self {
-                    direction: 0,
+                    direction: Direction::Outbound,
                     ip_v6: false,
                     local_ip: data
                         .get_value_u32(Field::IpLocalAddress as usize)
@@ -111,7 +136,7 @@ impl PacketInfo {
                 Self {
                     process_id: data.get_process_id(),
                     // process_path: data.get_process_path(),
-                    direction: 0,
+                    direction: Direction::Outbound,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
@@ -132,7 +157,7 @@ impl PacketInfo {
                 Self {
                     process_id: data.get_process_id(),
                     // process_path: data.get_process_path(),
-                    direction: 1,
+                    direction: Direction::Inbound,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
@@ -148,11 +173,27 @@ impl PacketInfo {
                     ..Default::default()
                 }
             }
+
+            Layer::FwpmLayerAleAuthListenV4 => {
+                type Field = layer::FwpsFieldsAleAuthListenV4;
+                Self {
+                    process_id: data.get_process_id(),
+                    // process_path: data.get_process_path(),
+                    direction: Direction::Inbound,
+                    ip_v6: false,
+                    protocol: u8::from(IpProtocol::Tcp),
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_be_bytes(),
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    ..Default::default()
+                }
+            }
             Layer::FwpmLayerAleConnectRedirectV4 => {
                 type Field = layer::FwpsFieldsAleConnectRedirectV4;
                 Self {
                     process_id: data.get_process_id(),
-                    direction: 0,
+                    direction: Direction::Outbound,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
@@ -170,7 +211,7 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleResourceAssignmentV4;
                 Self {
                     process_id: data.get_process_id(),
-                    direction: 0,
+                    direction: Direction::NotApplicable,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
@@ -184,7 +225,7 @@ impl PacketInfo {
                 type Field = layer::FwpsFieldsAleResourceReleaseV4;
                 Self {
                     process_id: data.get_process_id(),
-                    direction: 0,
+                    direction: Direction::NotApplicable,
                     ip_v6: false,
                     protocol: data.get_value_u8(Field::IpProtocol as usize),
                     local_ip: data
@@ -225,6 +266,26 @@ impl Debug for PacketInfo {
             .field("direction", &self.direction)
             .field("app", &self.process_path)
             .finish()
+    }
+}
+
+impl Default for PacketInfo {
+    fn default() -> Self {
+        Self {
+            process_id: None,
+            process_path: None,
+            direction: Direction::NotApplicable,
+            ip_v6: false,
+            protocol: 0,
+            flags: 0,
+            local_ip: [0; 4],
+            remote_ip: [0; 4],
+            local_port: 0,
+            remote_port: 0,
+            interface_index: 0,
+            sub_interface_index: 0,
+            classify_promise: None,
+        }
     }
 }
 

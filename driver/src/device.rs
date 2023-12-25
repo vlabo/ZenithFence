@@ -16,12 +16,13 @@ use wdk::{
 use crate::{
     array_holder::ArrayHolder,
     callouts,
-    connection_cache::{ConnectionAction, ConnectionCache},
+    connection_cache::{ConnectionAction, ConnectionCache, Key},
     dbg, err,
     id_cache::PacketCache,
     logger::Logger,
     protocol::{self, Command},
     types::Verdict,
+    warn,
 };
 
 // Device Context
@@ -187,9 +188,9 @@ impl Device {
                         dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        self.connection_cache.add_connection(
-                            packet.as_connection(ConnectionAction::Verdict(verdict)),
-                        );
+                        let conn = packet.as_connection(ConnectionAction::Verdict(verdict));
+                        warn!(self.logger, "add key: {}", conn.get_key());
+                        self.connection_cache.add_connection(conn);
                     };
                     completion_promise = packet.classify_promise.take();
                 } else {
@@ -214,6 +215,7 @@ impl Device {
                         redirect_address: Ipv4Address::from_bytes(&remote_address),
                         redirect_port: remote_port,
                     });
+                    warn!(self.logger, "add key red: {}", connection.get_key());
                     self.connection_cache.add_connection(connection);
 
                     completion_promise = packet.classify_promise.take();
@@ -224,20 +226,31 @@ impl Device {
             }
             Command::Update {
                 protocol,
-                port,
                 verdict,
                 remote_address,
                 remote_port,
+                local_address,
+                local_port,
+                redirect_address,
+                redirect_port,
             } => {
                 let action = match FromPrimitive::from_u8(verdict).unwrap() {
                     Verdict::Redirect => ConnectionAction::RedirectIP {
-                        redirect_address: Ipv4Address::from_bytes(&remote_address),
-                        redirect_port: remote_port,
+                        redirect_address: Ipv4Address::from_bytes(&redirect_address),
+                        redirect_port,
                     },
                     verdict => ConnectionAction::Verdict(verdict),
                 };
-                self.connection_cache
-                    .update_connection(IpProtocol::from(protocol), port, action);
+                self.connection_cache.update_connection(
+                    Key {
+                        protocol: IpProtocol::from(protocol),
+                        local_address: Ipv4Address::from_bytes(&local_address),
+                        local_port,
+                        remote_address: Ipv4Address::from_bytes(&remote_address),
+                        remote_port,
+                    },
+                    action,
+                );
                 // This will trigger re-evaluation of all connections.
                 if let Err(err) = self.filter_engine.reset_all_filters() {
                     err!(self.logger, "failed to reset filters: {}", err);
