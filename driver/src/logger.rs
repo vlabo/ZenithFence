@@ -1,5 +1,5 @@
-use alloc::collections::VecDeque;
 use alloc::string::String;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use wdk::rw_spin_lock::RwSpinLock;
 
@@ -23,30 +23,30 @@ pub(crate) struct LogLine {
 }
 
 pub(crate) struct Logger {
-    log_lines: Option<VecDeque<LogLine>>,
+    log_lines: Option<Vec<LogLine>>,
     lock: RwSpinLock,
 }
 
 impl Logger {
     pub fn init(&mut self) {
-        self.log_lines = Some(VecDeque::new());
+        self.log_lines = Some(Vec::new());
     }
 
     pub fn add_line(&mut self, severity: Severity, line: String) {
         let _guard = self.lock.write_lock();
         if let Some(log_lines) = &mut self.log_lines {
-            log_lines.push_back(LogLine {
+            log_lines.push(LogLine {
                 severity: severity as u8,
                 line,
             });
         }
     }
 
-    pub fn flush(&mut self) -> VecDeque<LogLine> {
+    pub fn flush(&mut self) -> Vec<LogLine> {
         let lines;
         {
             let _guard = self.lock.write_lock();
-            lines = self.log_lines.replace(VecDeque::new());
+            lines = self.log_lines.replace(Vec::new());
         }
         lines.unwrap()
     }
