@@ -361,7 +361,7 @@ pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_O
         layer::Layer::FwpmLayerAleResourceReleaseV4 => {
             if device
                 .connection_cache
-                .remove_connection(packet.get_key())
+                .unregister_port((IpProtocol::from(packet.protocol), packet.local_port))
                 .is_some()
             {
                 info!(
