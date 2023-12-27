@@ -39,7 +39,6 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
     let mut packet = PacketInfo::from_callout_data(&data);
     info!(device.logger, "Connect callout: {:?}", packet);
-    warn!(device.logger, "get key ale: {}", packet.get_key());
     if let Some(connection) = device
         .connection_cache
         .get_connection_action(packet.get_key())
@@ -90,6 +89,8 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     }
 }
 
+// TODO: Can redirect_outbound_packet and redirect_inbound_packet be combined?
+// TODO: Should this be inside the NBL injector?
 fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
     if let Ok(mut ip_packet) = Ipv4Packet::new_checked(packet) {
         ip_packet.set_dst_addr(remote_address);
@@ -114,6 +115,7 @@ fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remo
     }
 }
 
+// TODO: Should this be inside the NBL injector?
 fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: Ipv4Address,
@@ -141,6 +143,7 @@ fn redirect_inbound_packet(
     }
 }
 
+// TODO: move this to util file.
 #[allow(dead_code)]
 fn print_packet(logger: &mut Logger, packet: &[u8]) {
     if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
@@ -157,6 +160,7 @@ fn print_packet(logger: &mut Logger, packet: &[u8]) {
     }
 }
 
+// TODO: Move this to util file?
 fn get_key_from_nbl(
     nbl: *mut NET_BUFFER_LIST,
     logger: &mut Logger,
@@ -229,21 +233,22 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
     }
 
     for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
-        // Parse key.
+        // Get key from packet.
         let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Outbound) else {
             data.action_permit();
             return;
         };
 
-        // Get action.
-        warn!(device.logger, "get key out: {}", key);
+        // Check if there is action for this connection.
         if let Some(connection) = device.connection_cache.get_connection_action(key) {
+            // Only redirects have custom behavior.
             if let ConnectionAction::RedirectIP {
                 redirect_address,
                 redirect_port,
             } = connection.action
             {
-                let mut buffer = alloc::vec::Vec::new(); // TODO: remove allocation for each redirect.
+                // FIXME: make sure buffer is alive until packet is injected. Move this allocation to the NBL Injector.
+                let mut buffer = alloc::vec::Vec::new();
                 let Ok(()) = read_packet(nbl, &mut buffer) else {
                     err!(device.logger, "failed to get net_buffer data");
                     data.action_permit();
@@ -288,24 +293,26 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
     }
 
     for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
+        // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
+        // The guard will ensure that it will be advance after we exit the function.
         let _advance_guard =
-            NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32, true); // No idea why this works. Only the header is retreated but we get access to the whole packet.
+            NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32, true);
 
-        // Read the headers of the packet. IP and TCP/UDP. Stack allocation should be faster.
-
+        // Get key from packet.
         let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Inbound) else {
             data.action_permit();
             return;
         };
 
-        // Get action.
-        warn!(device.logger, "get key in: {}", key);
+        // Check if there is action for this connection.
         if let Some(connection) = device.connection_cache.get_connection_action(key) {
+            // Only redirects have custom behavior.
             if let ConnectionAction::RedirectIP {
                 redirect_address,
                 redirect_port: _,
             } = connection.action
             {
+                // FIXME: make sure buffer is alive until packet is injected. Move this allocation to the NBL Injector.
                 let mut buffer = alloc::vec::Vec::new(); // TODO: remove allocation for each redirect.
                 let Ok(()) = read_packet(nbl, &mut buffer) else {
                     err!(device.logger, "failed to get net_buffer data");

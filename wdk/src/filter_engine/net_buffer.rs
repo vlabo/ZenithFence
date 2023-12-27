@@ -127,6 +127,7 @@ impl NetworkAllocator {
             return Err("allocator not initialized".to_string());
         }
         unsafe {
+            // Create MDL struct that will hold the buffer.
             let mdl = IoAllocateMdl(
                 packet_data.as_ptr() as _,
                 packet_data.len() as u32,
@@ -137,7 +138,11 @@ impl NetworkAllocator {
             if mdl.is_null() {
                 return Err("failed to allocate mdl".to_string());
             }
+
+            // Allocating physical memory, for the packet.
             MmBuildMdlForNonPagedPool(mdl);
+
+            // Initialize NBL structure.
             let mut nbl = core::ptr::null_mut();
             let status = FwpsAllocateNetBufferAndNetBufferList0(
                 self.pool_handle,

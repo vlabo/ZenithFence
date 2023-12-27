@@ -62,6 +62,8 @@ pub struct Injector {
     network_inject_handle: HANDLE,
 }
 
+// FIXME: Rework the injector so it doesn't use directly the NB/NBL. Abstract the interface to ensure, memory safety and eliminate memory leaks.
+// TODO: Implement custom allocator for the packet buffers for reusing memory and reducing allocations. This should improve latency.
 impl Injector {
     pub fn new() -> Self {
         let mut transport_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
@@ -93,6 +95,7 @@ impl Injector {
 
     pub fn from_ale_callout(callout_data: &CalloutData, remote_ip: [u8; 4]) -> TransportPacketList {
         unsafe {
+            // FIXME: Replace with Deep copy using FwpsAllocateNetBufferAndNetBufferList0
             FwpsReferenceNetBufferList0(callout_data.layer_data as _, true);
         }
         let mut control_data = None;
@@ -134,6 +137,7 @@ impl Injector {
         if self.transport_inject_handle == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
+        // FIXME: free MDL buffer after success or unsuccessful injection.
         unsafe {
             let packet_list_boxed = Box::new(packet_list);
             let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();

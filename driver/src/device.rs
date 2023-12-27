@@ -22,7 +22,6 @@ use crate::{
     logger::Logger,
     protocol::{self, Command},
     types::Verdict,
-    warn,
 };
 
 // Device Context
@@ -189,7 +188,6 @@ impl Device {
 
                         // Add verdict in the cache.
                         let conn = packet.as_connection(ConnectionAction::Verdict(verdict));
-                        warn!(self.logger, "add key: {}", conn.get_key());
                         self.connection_cache.add_connection(conn);
                     };
                     completion_promise = packet.classify_promise.take();
@@ -215,7 +213,6 @@ impl Device {
                         redirect_address: Ipv4Address::from_bytes(&remote_address),
                         redirect_port: remote_port,
                     });
-                    warn!(self.logger, "add key red: {}", connection.get_key());
                     self.connection_cache.add_connection(connection);
 
                     completion_promise = packet.classify_promise.take();
