@@ -36,14 +36,11 @@ impl Connection {
     }
 
     fn local_equals(&self, key: &Key) -> bool {
-        if self.protocol.eq(&key.protocol) {
-            return false;
-        }
-
         if self.local_port != key.local_port {
             return false;
         }
-        if self.remote_port != key.remote_port {
+
+        if !self.local_address.eq(&key.local_address) {
             return false;
         }
 
@@ -51,7 +48,7 @@ impl Connection {
     }
 
     fn remote_equals(&self, key: &Key) -> bool {
-        if !self.local_address.eq(&key.local_address) {
+        if self.remote_port != key.remote_port {
             return false;
         }
 
@@ -137,14 +134,10 @@ impl ConnectionCache {
     pub fn update_connection(&mut self, key: Key, action: ConnectionAction) {
         let _guard = self.lock.write_lock();
         if let Some(conns) = self.connections.get_mut(&key.small()) {
-            if conns.len() == 1 {
-                conns[0].action = action;
-            } else {
-                for conn in conns {
-                    if conn.local_equals(&key) && conn.remote_equals(&key) {
-                        conn.action = action;
-                        return;
-                    }
+            for conn in conns {
+                if conn.local_equals(&key) && conn.remote_equals(&key) {
+                    conn.action = action;
+                    return;
                 }
             }
         }
@@ -154,19 +147,15 @@ impl ConnectionCache {
         let _guard = self.lock.read_lock();
 
         if let Some(conns) = self.connections.get(&key.small()) {
-            if conns.len() == 1 {
-                return Some(conns[0].clone());
-            } else {
-                for conn in conns {
-                    if !conn.local_equals(&key) {
-                        continue;
-                    }
-                    if conn.remote_equals(&key) {
-                        return Some(conn.clone());
-                    }
-                    if conn.redirect_equals(&key) {
-                        return Some(conn.clone());
-                    }
+            for conn in conns {
+                if !conn.local_equals(&key) {
+                    continue;
+                }
+                if conn.remote_equals(&key) {
+                    return Some(conn.clone());
+                }
+                if conn.redirect_equals(&key) {
+                    return Some(conn.clone());
                 }
             }
         }

@@ -95,7 +95,7 @@ impl FwpsIncomingMetadataValues {
             return Some(self.process_id);
         }
 
-        return None;
+        None
     }
 
     pub(crate) unsafe fn get_process_path(&self) -> Option<String> {
@@ -110,13 +110,14 @@ impl FwpsIncomingMetadataValues {
             }
         }
 
-        return None;
+        None
     }
 
     pub(crate) fn get_completion_handle(&self) -> Option<HANDLE> {
         if self.has_field(FWPS_METADATA_FIELD_COMPLETION_HANDLE) {
             return Some(self.completion_handle);
         }
+
         None
     }
 
