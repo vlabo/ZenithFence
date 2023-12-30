@@ -58,11 +58,19 @@ impl Device {
         let callouts = vec![
             Callout::new(
                 "AleLayerOutbound",
-                "ALE layer for outbund connections",
+                "ALE layer for outbound connections",
                 0x58545073_f893_454c_bbea_a57bc964f46d,
                 Layer::FwpmLayerAleAuthConnectV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::ale_layer_connect,
+            ),
+            Callout::new(
+                "AleLayerInbound",
+                "ALE layer for inbound connections",
+                0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
+                Layer::FwpmLayerAleAuthRecvAcceptV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                callouts::ale_layer_accept,
             ),
             Callout::new(
                 "IPPacketOutbound",

@@ -3,7 +3,7 @@ use smoltcp::wire::{
 };
 use wdk::ffi::NET_BUFFER_LIST;
 use wdk::filter_engine::callout_data::CalloutData;
-use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
+use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4, FwpsFieldsAleAuthRecvAcceptV4};
 use wdk::filter_engine::net_buffer::{
     read_packet, read_packet_partial, NBLIterator, NetworkAllocator,
 };
@@ -12,6 +12,7 @@ use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::connection_cache::Key;
+use crate::info;
 use crate::logger::Logger;
 use crate::types::Direction;
 use crate::{
@@ -21,7 +22,6 @@ use crate::{
     err,
     types::{PacketInfo, Verdict},
 };
-use crate::{info, warn};
 
 pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
@@ -63,7 +63,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // Pend decision of connection.
         dbg!(device.logger, "Pend decision");
         let mut packet_list = None;
-        if packet.protocol == 17 {
+        if packet.protocol == u8::from(IpProtocol::Udp) {
             packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
         }
         let promise = if data.is_reauthorize(FwpsFieldsAleAuthConnectV4::Flags as usize) {
@@ -73,6 +73,75 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
                 Ok(cc) => cc,
                 Err(error) => {
                     err!(device.logger, "failed to postpone decision: {}", error);
+                    data.action_permit(); // TODO: Do we need to permit on fail?
+                    return;
+                }
+            }
+        };
+
+        // Send request to user-space.
+        packet.classify_promise = Some(promise);
+        let serialized = device.packet_cache.push_and_serialize(packet);
+        if let Ok(bytes) = serialized {
+            let _ = device.io_queue.push(bytes);
+        }
+
+        data.block_and_absorb();
+    }
+}
+
+pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    else {
+        return;
+    };
+
+    if device
+        .injector
+        .was_network_packet_injected_by_self(data.get_layer_data() as _)
+    {
+        data.action_permit();
+        return;
+    }
+
+    let mut packet = PacketInfo::from_callout_data(&data);
+    info!(device.logger, "Accept callout: {:?}", packet);
+    if let Some(connection) = device
+        .connection_cache
+        .get_connection_action(packet.get_key())
+    {
+        // We already have a verdict for it.
+        match connection.action {
+            ConnectionAction::Verdict(verdict) => match verdict {
+                Verdict::Accept | Verdict::Redirect => data.action_permit(),
+                Verdict::Block => data.action_block(),
+                Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
+                    data.block_and_absorb()
+                }
+            },
+            ConnectionAction::RedirectIP {
+                redirect_address: _,
+                redirect_port: _,
+            } => {
+                data.action_permit();
+            }
+        }
+    } else {
+        // TODO: check if connection is already pended. As more packets are coming the callout will be called again.
+        // Pend decision of connection.
+        dbg!(device.logger, "Pend decision");
+        let mut packet_list = None;
+        if packet.protocol == u8::from(IpProtocol::Udp) {
+            packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
+        }
+        let promise = if data.is_reauthorize(FwpsFieldsAleAuthRecvAcceptV4::Flags as usize) {
+            data.pend_filter_rest(packet_list)
+        } else {
+            match data.pend_operation(packet_list) {
+                Ok(cc) => cc,
+                Err(error) => {
+                    err!(device.logger, "failed to postpone decision: {}", error);
+                    data.action_permit(); // TODO: Do we need to permit on fail?
                     return;
                 }
             }
