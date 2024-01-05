@@ -1,4 +1,4 @@
-use core::{ffi::c_void, ptr};
+use core::{ffi::c_void, mem::MaybeUninit, ptr};
 
 use windows_sys::Wdk::System::SystemServices::{
     KeAcquireInStackQueuedSpinLock, KeInitializeSpinLock, KeReleaseInStackQueuedSpinLock,
@@ -37,7 +37,7 @@ impl KSpinLock {
 
     pub fn lock(&mut self) -> KLockQueueHandle {
         unsafe {
-            let mut handle = core::mem::zeroed();
+            let mut handle = MaybeUninit::zeroed().assume_init();
             KeAcquireInStackQueuedSpinLock(self.ptr, &mut handle);
             KLockQueueHandle { lock: handle }
         }

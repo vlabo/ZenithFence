@@ -5,15 +5,15 @@ rustflags = [
     "-C", "panic=abort",
 
     # Pre Link Args
-    "-Z", "pre-link-arg=/NOLOGO",
-    "-Z", "pre-link-arg=/NXCOMPAT",
-    "-Z", "pre-link-arg=/NODEFAULTLIB",
-    "-Z", "pre-link-arg=/SUBSYSTEM:NATIVE",
-    "-Z", "pre-link-arg=/DRIVER",
-    "-Z", "pre-link-arg=/DYNAMICBASE",
-    "-Z", "pre-link-arg=/MANIFEST:NO",
-    "-Z", "pre-link-arg=/PDBALTPATH:none",
-    "-Z", "pre-link-arg=/MACHINE:X64",
+    "-C", "link-arg=/NOLOGO",
+    "-C", "link-arg=/NXCOMPAT",
+    "-C", "link-arg=/NODEFAULTLIB",
+    "-C", "link-arg=/SUBSYSTEM:NATIVE",
+    "-C", "link-arg=/DRIVER",
+    "-C", "link-arg=/DYNAMICBASE",
+    "-C", "link-arg=/MANIFEST:NO",
+    "-C", "link-arg=/PDBALTPATH:none",
+    "-C", "link-arg=/MACHINE:X64",
 
     # Post Link Args
     "-C", "link-arg=/OPT:REF,ICF",

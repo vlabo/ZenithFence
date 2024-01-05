@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -109,7 +111,7 @@ pub struct NetworkAllocator {
 impl NetworkAllocator {
     pub fn new() -> Self {
         unsafe {
-            let mut params: NET_BUFFER_LIST_POOL_PARAMETERS = core::mem::zeroed();
+            let mut params: NET_BUFFER_LIST_POOL_PARAMETERS = MaybeUninit::zeroed().assume_init();
             params.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
             params.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
             params.Header.Size = core::mem::size_of::<NET_BUFFER_LIST_POOL_PARAMETERS>() as u16;
@@ -139,7 +141,7 @@ impl NetworkAllocator {
                 return Err("failed to allocate mdl".to_string());
             }
 
-            // Allocating physical memory, for the packet.
+            // Build mdl with packet_data buffer.
             MmBuildMdlForNonPagedPool(mdl);
 
             // Initialize NBL structure.

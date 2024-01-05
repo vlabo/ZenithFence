@@ -301,7 +301,7 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         return;
     }
 
-    for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
+    for nbl in NBLIterator::new(data.get_layer_data() as _) {
         // Get key from packet.
         let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Outbound) else {
             data.action_permit();
@@ -361,7 +361,7 @@ pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_O
         return;
     }
 
-    for (_, nbl) in NBLIterator::new(data.get_layer_data() as _).enumerate() {
+    for nbl in NBLIterator::new(data.get_layer_data() as _) {
         // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
         // The guard will ensure that it will be advance after we exit the function.
         let _advance_guard =

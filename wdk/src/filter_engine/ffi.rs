@@ -4,6 +4,7 @@ use crate::ffi::{FwpsCalloutRegister3, FwpsCalloutUnregisterById0, FWPS_CALLOUT3
 use crate::utils::check_ntstatus;
 use alloc::string::String;
 
+use core::mem::MaybeUninit;
 use core::ptr;
 use widestring::U16CString;
 
@@ -27,7 +28,7 @@ use super::layer::Layer;
 pub(crate) fn create_filter_engine() -> Result<HANDLE, String> {
     unsafe {
         let mut handle: HANDLE = INVALID_HANDLE_VALUE;
-        let mut wdf_session: FWPM_SESSION0 = core::mem::zeroed();
+        let mut wdf_session: FWPM_SESSION0 = MaybeUninit::zeroed().assume_init();
         wdf_session.flags = FWPM_SESSION_FLAG_DYNAMIC;
         let status = FwpmEngineOpen0(
             core::ptr::null(),
@@ -56,7 +57,7 @@ pub(crate) fn register_sublayer(
     };
 
     unsafe {
-        let mut sublayer: FWPM_SUBLAYER0 = core::mem::zeroed();
+        let mut sublayer: FWPM_SUBLAYER0 = MaybeUninit::zeroed().assume_init();
         sublayer.subLayerKey = GUID::from_u128(guid);
         sublayer.displayData.name = name.as_ptr() as _;
         sublayer.displayData.description = description.as_ptr() as _;
@@ -139,7 +140,7 @@ fn callout_add(
     };
 
     unsafe {
-        let mut callout: FWPM_CALLOUT0 = core::mem::zeroed();
+        let mut callout: FWPM_CALLOUT0 = MaybeUninit::zeroed().assume_init();
         callout.calloutKey = GUID::from_u128(guid);
         callout.displayData = display_data;
         callout.applicableLayer = layer.get_guid();
@@ -182,7 +183,7 @@ pub(crate) fn register_filter(
     };
     let mut filter_id: u64 = 0;
     unsafe {
-        let mut filter: FWPM_FILTER0 = core::mem::zeroed();
+        let mut filter: FWPM_FILTER0 = MaybeUninit::zeroed().assume_init();
         filter.displayData.name = name.as_ptr() as _;
         filter.displayData.description = description.as_ptr() as _;
         filter.action.r#type = action; // Says this filter's callout MUST make a block/permit decision. Also see doc excerpts below.

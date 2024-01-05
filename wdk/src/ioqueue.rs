@@ -3,6 +3,7 @@ use core::{
     ffi::c_void,
     fmt::Display,
     marker::PhantomData,
+    mem::MaybeUninit,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -90,13 +91,13 @@ pub struct IOQueue<T> {
 unsafe impl<T> Sync for IOQueue<T> {}
 
 impl<T> IOQueue<T> {
-    // pub const fn default() -> Self {
-    //     Self {
-    //         kernel_queue: UnsafeCell::new(unsafe { core::mem::zeroed() }),
-    //         initialized: AtomicBool::new(false),
-    //         _type: PhantomData,
-    //     }
-    // }
+    pub const fn default() -> Self {
+        Self {
+            kernel_queue: UnsafeCell::new(unsafe { MaybeUninit::zeroed().assume_init() }),
+            initialized: AtomicBool::new(false),
+            _type: PhantomData,
+        }
+    }
 
     /// Returns new queue object.
     /// Make sure `rundown` is called on the end of the progrem, if `drop()` is not called for the object.
@@ -204,11 +205,11 @@ impl<T> IOQueue<T> {
 
 impl<T> Drop for IOQueue<T> {
     fn drop(&mut self) {
-        // Deinitialize queue.
+        // Reinitialize queue.
         self.rundown();
         unsafe {
             let ptr = self.kernel_queue.get();
-            *ptr = core::mem::zeroed();
+            *ptr = MaybeUninit::zeroed().assume_init();
         }
     }
 }

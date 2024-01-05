@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use core::ffi::c_void;
+use core::{ffi::c_void, mem::MaybeUninit};
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Networking::WinSock::{AF_INET, AF_UNSPEC, SCOPE_ID},
@@ -109,7 +109,7 @@ impl Injector {
             endpoint_handle: callout_data.get_transport_endpoint_handle().unwrap_or(0),
             remote_scope_id: callout_data
                 .get_remote_scope_id()
-                .unwrap_or(unsafe { core::mem::zeroed() }),
+                .unwrap_or(unsafe { MaybeUninit::zeroed().assume_init() }),
             control_data,
         }
     }

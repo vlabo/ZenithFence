@@ -56,7 +56,7 @@ impl FilterEngine {
 
     pub fn commit(&mut self, mut callouts: Vec<Callout>) -> Result<(), String> {
         {
-            // Begin write trasacction. This is also a lock guard.
+            // Begin write transaction. This is also a lock guard.
             let mut transaction = match Transaction::begin_write(self) {
                 Ok(transaction) => transaction,
                 Err(err) => {
@@ -82,7 +82,7 @@ impl FilterEngine {
                     return Err(err);
                 }
                 dbg!(
-                    "registerging callout: {} -> {}",
+                    "registering callout: {} -> {}",
                     callout.name,
                     callout.filter_id
                 );
@@ -100,7 +100,7 @@ impl FilterEngine {
     }
 
     pub(crate) fn reset_callout_filter(&self, callout_index: usize) -> Result<(), String> {
-        // Begin write trasacction. This is also a lock guard.
+        // Begin write transaction. This is also a lock guard.
         let mut transaction = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,
             Err(err) => {

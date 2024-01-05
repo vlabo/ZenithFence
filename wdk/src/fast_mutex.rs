@@ -51,7 +51,9 @@ impl<T> FastMutex<T> {
     }
 
     pub fn init(&self) {
-        let mutex = Box::into_raw(Box::new(unsafe { core::mem::zeroed() }));
+        let mutex = Box::into_raw(Box::new(unsafe {
+            MaybeUninit::zeroed().assume_init();
+        }));
         unsafe {
             ExInitializeFastMutex(mutex);
             *self.kmutex.get() = Some(mutex);

@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
-#![feature(allocator_api)]
 
 extern crate alloc;
 
