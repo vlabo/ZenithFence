@@ -21,6 +21,7 @@ ciborium = { git = "https://github.com/enarx/ciborium", rev = "09134e6", default
 ciborium-io = { git = "https://github.com/enarx/ciborium", rev = "09134e6", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.10", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
+allocator-api2 = { version = "0.2.16", default-features = false, features = ["alloc"] }
 
 [dependencies.windows-sys]
 git = "https://github.com/microsoft/windows-rs"
