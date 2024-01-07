@@ -21,7 +21,7 @@ use crate::{
     utils::check_ntstatus,
 };
 
-use super::{callout_data::CalloutData, net_buffer::NetworkAllocator};
+use super::{callout_data::CalloutData, net_buffer::NetBufferList};
 
 pub struct TransportPacketList {
     nbl: *mut NET_BUFFER_LIST,
@@ -31,12 +31,11 @@ pub struct TransportPacketList {
     control_data: Option<Vec<u8>>,
 }
 
-pub struct NetworkPacketList {
-    nbl: *mut NET_BUFFER_LIST,
-    inbound: bool,
-    loopback: bool,
-    interface_index: u32,
-    sub_interface_index: u32,
+pub struct InjectInfo {
+    pub inbound: bool,
+    pub loopback: bool,
+    pub interface_index: u32,
+    pub sub_interface_index: u32,
 }
 
 impl Drop for TransportPacketList {
@@ -45,14 +44,6 @@ impl Drop for TransportPacketList {
             unsafe {
                 FwpsDereferenceNetBufferList0(self.nbl, false);
             }
-        }
-    }
-}
-
-impl Drop for NetworkPacketList {
-    fn drop(&mut self) {
-        if !self.nbl.is_null() {
-            NetworkAllocator::free_net_buffer(self.nbl);
         }
     }
 }
@@ -114,22 +105,6 @@ impl Injector {
         }
     }
 
-    pub fn from_ip_callout(
-        nbl: *mut NET_BUFFER_LIST,
-        inbound: bool,
-        loopback: bool,
-        interface_index: u32,
-        sub_interface_index: u32,
-    ) -> NetworkPacketList {
-        NetworkPacketList {
-            nbl,
-            inbound,
-            loopback,
-            interface_index,
-            sub_interface_index,
-        }
-    }
-
     pub fn inject_packet_list_transport(
         &self,
         packet_list: TransportPacketList,
@@ -180,48 +155,58 @@ impl Injector {
         return Ok(());
     }
 
-    pub fn inject_packet_list_network(&self, packet_list: NetworkPacketList) -> Result<(), String> {
+    pub fn inject_net_buffer_list(
+        &self,
+        net_buffer_list: NetBufferList,
+        inject_info: InjectInfo,
+    ) -> Result<(), String> {
         if self.network_inject_handle == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
+        // Escape the stack, so the data can be freed after inject is complete.
+        let packet_boxed = Box::new(net_buffer_list);
+        let nbl = packet_boxed.nbl;
+        let packet_pointer = Box::into_raw(packet_boxed);
 
-        unsafe {
-            if packet_list.inbound && !packet_list.loopback {
-                let packet_list_boxed = Box::new(packet_list);
-                let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
-                let status = FwpsInjectNetworkReceiveAsync0(
+        let status = if inject_info.inbound && !inject_info.loopback {
+            // Inject inbound.
+            unsafe {
+                FwpsInjectNetworkReceiveAsync0(
                     self.network_inject_handle,
                     0,
                     0,
                     UNSPECIFIED_COMPARTMENT_ID,
-                    packet_list.interface_index,
-                    packet_list.sub_interface_index,
-                    packet_list.nbl,
-                    free_packet_network,
-                    (packet_list as *mut NetworkPacketList) as _,
-                );
-                if let Err(err) = check_ntstatus(status) {
-                    _ = Box::from_raw(packet_list);
-                    return Err(err);
-                }
-            } else {
-                let packet_list_boxed = Box::new(packet_list);
-                let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
-                let status = FwpsInjectNetworkSendAsync0(
-                    self.network_inject_handle,
-                    0,
-                    0,
-                    UNSPECIFIED_COMPARTMENT_ID,
-                    packet_list.nbl,
-                    free_packet_network,
-                    (packet_list as *mut NetworkPacketList) as _,
-                );
-                if let Err(err) = check_ntstatus(status) {
-                    _ = Box::from_raw(packet_list);
-                    return Err(err);
-                }
+                    inject_info.interface_index,
+                    inject_info.sub_interface_index,
+                    nbl,
+                    free_packet_packet,
+                    (packet_pointer as *mut NetBufferList) as _,
+                )
             }
+        } else {
+            // Inject outbound.
+            unsafe {
+                FwpsInjectNetworkSendAsync0(
+                    self.network_inject_handle,
+                    0,
+                    0,
+                    UNSPECIFIED_COMPARTMENT_ID,
+                    nbl,
+                    free_packet_packet,
+                    (packet_pointer as *mut NetBufferList) as _,
+                )
+            }
+        };
+
+        // Check for error.
+        if let Err(err) = check_ntstatus(status) {
+            unsafe {
+                // Get back ownership for data.
+                _ = Box::from_raw(packet_pointer);
+            }
+            return Err(err);
         }
+
         return Ok(());
     }
 
@@ -279,7 +264,7 @@ unsafe extern "C" fn free_packet_transport(
     _ = Box::from_raw(context as *mut TransportPacketList);
 }
 
-unsafe extern "C" fn free_packet_network(
+unsafe extern "C" fn free_packet_packet(
     context: *mut c_void,
     net_buffer_list: *mut NET_BUFFER_LIST,
     _dispatch_level: bool,
@@ -289,5 +274,5 @@ unsafe extern "C" fn free_packet_network(
             crate::err!("inject status: {}", err);
         }
     }
-    _ = Box::from_raw(context as *mut NetworkPacketList);
+    _ = Box::from_raw(context as *mut NetBufferList);
 }

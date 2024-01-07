@@ -20,52 +20,157 @@ use crate::{
     utils::check_ntstatus,
 };
 
-pub struct NBLIterator(*mut NET_BUFFER_LIST);
+pub struct NetBufferList {
+    pub(crate) nbl: *mut NET_BUFFER_LIST,
+    owned: bool,
+    data: Option<Vec<u8>>,
+    advance_on_drop: Option<u32>,
+}
 
-impl NBLIterator {
+impl NetBufferList {
+    pub fn new(nbl: *mut NET_BUFFER_LIST) -> NetBufferList {
+        NetBufferList {
+            nbl,
+            owned: false,
+            data: None,
+            advance_on_drop: None,
+        }
+    }
+
+    pub fn iter(&self) -> NetBufferListIter {
+        NetBufferListIter(self.nbl)
+    }
+
+    pub fn read_bytes(&self, buffer: &mut [u8]) -> Result<(), ()> {
+        unsafe {
+            let Some(nbl) = self.nbl.as_ref() else {
+                return Err(());
+            };
+            let nb = nbl.Header.first_net_buffer;
+            if let Some(nb) = nb.as_ref() {
+                let data_length = nb.stDataLength as u32;
+                if data_length == 0 {
+                    return Err(());
+                }
+
+                if buffer.len() > data_length as usize {
+                    return Err(());
+                }
+
+                let ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
+                if !ptr.is_null() {
+                    return Ok(());
+                }
+            }
+        }
+        return Err(());
+    }
+
+    pub fn clone(&self, net_allocator: &NetworkAllocator) -> Result<NetBufferList, String> {
+        unsafe {
+            let Some(nbl) = self.nbl.as_ref() else {
+                return Err("net buffer list is null".to_string());
+            };
+
+            let nb = nbl.Header.first_net_buffer;
+            if let Some(nb) = nb.as_ref() {
+                let data_length = nb.stDataLength as u32;
+                if data_length == 0 {
+                    return Err("can't clone empty packet".to_string());
+                }
+
+                // Allocate space in buffer, if buffer is too small.
+                let mut buffer = alloc::vec![0 as u8; data_length as usize];
+                let ptr = NdisGetDataBuffer(nb, data_length, buffer.as_mut_ptr(), 1, 0);
+                if ptr.is_null() {
+                    return Err("failed to copy packet buffer".to_string());
+                }
+
+                let new_nbl = net_allocator.wrap_packet_in_nbl(&buffer)?;
+
+                return Ok(NetBufferList {
+                    nbl: new_nbl,
+                    owned: true,
+                    data: Some(buffer),
+                    advance_on_drop: None,
+                });
+            } else {
+                return Err("net buffer is null".to_string());
+            }
+        }
+    }
+
+    pub fn get_data_mut(&mut self) -> Option<&mut [u8]> {
+        if self.owned {
+            if let Some(data) = &mut self.data {
+                return Some(data.as_mut_slice());
+            }
+        }
+        return None;
+    }
+
+    /// Retreats the mnl of the buffer. Does not auto advance multiple retreats.
+    pub fn retreat(&mut self, size: u32, auto_advance: bool) {
+        unsafe {
+            if let Some(nbl) = self.nbl.as_mut() {
+                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
+                    NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+                    if auto_advance {
+                        self.advance_on_drop = Some(size);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Advances the MDL of the buffer.
+    pub fn advance(&self, size: u32) {
+        unsafe {
+            if let Some(nbl) = self.nbl.as_mut() {
+                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
+                    NdisAdvanceNetBufferDataStart(nb as _, size, false, core::ptr::null_mut());
+                }
+            }
+        }
+    }
+}
+
+impl Drop for NetBufferList {
+    fn drop(&mut self) {
+        if let Some(advance_amount) = self.advance_on_drop {
+            self.advance(advance_amount);
+        }
+        if self.owned {
+            NetworkAllocator::free_net_buffer(self.nbl);
+        }
+    }
+}
+
+pub struct NetBufferListIter(*mut NET_BUFFER_LIST);
+
+impl NetBufferListIter {
     pub fn new(nbl: *mut NET_BUFFER_LIST) -> Self {
         Self(nbl)
     }
 }
 
-impl Iterator for NBLIterator {
-    type Item = *mut NET_BUFFER_LIST;
+impl Iterator for NetBufferListIter {
+    type Item = NetBufferList;
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             if let Some(nbl) = self.0.as_mut() {
                 self.0 = nbl.Header.next as _;
-                return Some(nbl);
+                return Some(NetBufferList {
+                    nbl,
+                    owned: false,
+                    data: None,
+                    advance_on_drop: None,
+                });
             }
             None
         }
     }
-}
-
-/// Returns a buffer with the whole packet, or the size of the packet on error.
-pub fn read_packet<'a>(nbl: *mut NET_BUFFER_LIST, buffer: &'a mut Vec<u8>) -> Result<(), ()> {
-    unsafe {
-        let Some(nbl) = nbl.as_ref() else {
-            return Err(());
-        };
-        let nb = nbl.Header.first_net_buffer;
-        if let Some(nb) = nb.as_ref() {
-            let data_length = nb.stDataLength as u32;
-            if data_length == 0 {
-                return Err(());
-            }
-
-            // Allocate space in buffer, if buffer is too small.
-            if buffer.len() < data_length as usize {
-                buffer.resize(data_length as usize, 0);
-            }
-            let ptr = NdisGetDataBuffer(nb, data_length, buffer.as_mut_ptr(), 1, 0);
-            if !ptr.is_null() {
-                return Ok(());
-            }
-        }
-    }
-    return Err(());
 }
 
 pub fn read_packet_partial<'a>(nbl: *mut NET_BUFFER_LIST, buffer: &'a mut [u8]) -> Result<(), ()> {
@@ -164,8 +269,8 @@ impl NetworkAllocator {
     }
 
     pub fn free_net_buffer(nbl: *mut NET_BUFFER_LIST) {
-        NBLIterator::new(nbl).for_each(|nbl| unsafe {
-            if let Some(nbl) = nbl.as_mut() {
+        NetBufferListIter::new(nbl).for_each(|nbl| unsafe {
+            if let Some(nbl) = nbl.nbl.as_mut() {
                 if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
                     IoFreeMdl(nb.MdlChain);
                 }

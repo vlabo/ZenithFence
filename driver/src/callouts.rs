@@ -1,13 +1,11 @@
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket, UdpPacket, IPV4_HEADER_LEN,
 };
-use wdk::ffi::NET_BUFFER_LIST;
+
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4, FwpsFieldsAleAuthRecvAcceptV4};
-use wdk::filter_engine::net_buffer::{
-    read_packet, read_packet_partial, NBLIterator, NetworkAllocator,
-};
-use wdk::filter_engine::packet::Injector;
+use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
+use wdk::filter_engine::packet::{InjectInfo, Injector};
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
@@ -41,7 +39,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     info!(device.logger, "Connect callout: {:?}", packet);
     if let Some(connection) = device
         .connection_cache
-        .get_connection_action(packet.get_key())
+        .get_connection_action(&packet.get_key())
     {
         // We already have a verdict for it.
         match connection.action {
@@ -108,7 +106,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
     info!(device.logger, "Accept callout: {:?}", packet);
     if let Some(connection) = device
         .connection_cache
-        .get_connection_action(packet.get_key())
+        .get_connection_action(&packet.get_key())
     {
         // We already have a verdict for it.
         match connection.action {
@@ -158,8 +156,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
     }
 }
 
-// TODO: Can redirect_outbound_packet and redirect_inbound_packet be combined?
-// TODO: Should this be inside the NBL injector?
+// TODO: move this to util file.
 fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
     if let Ok(mut ip_packet) = Ipv4Packet::new_checked(packet) {
         ip_packet.set_dst_addr(remote_address);
@@ -184,7 +181,7 @@ fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remo
     }
 }
 
-// TODO: Should this be inside the NBL injector?
+// TODO: move this to util file.
 fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: Ipv4Address,
@@ -230,14 +227,10 @@ fn print_packet(logger: &mut Logger, packet: &[u8]) {
 }
 
 // TODO: Move this to util file?
-fn get_key_from_nbl(
-    nbl: *mut NET_BUFFER_LIST,
-    logger: &mut Logger,
-    direction: Direction,
-) -> Option<Key> {
+fn get_key_from_nbl(nbl: &NetBufferList, logger: &mut Logger, direction: Direction) -> Option<Key> {
     // Get bytes
     let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
-    let Ok(()) = read_packet_partial(nbl, &mut headers) else {
+    let Ok(()) = nbl.read_bytes(&mut headers) else {
         err!(logger, "failed to get net_buffer data");
         return None;
     };
@@ -285,14 +278,45 @@ fn get_key_from_nbl(
     }
 }
 
-pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn network_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FwpsFieldsOutboundIppacketV4;
+    let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
+    let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
+    network_layer(
+        data,
+        device_object,
+        Direction::Outbound,
+        interface_index,
+        sub_interface_index,
+    );
+}
+
+pub fn network_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    type Fields = layer::FwpsFieldsInboundIppacketV4;
+    let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
+    let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+
+    network_layer(
+        data,
+        device_object,
+        Direction::Inbound,
+        interface_index,
+        sub_interface_index,
+    );
+}
+
+fn network_layer(
+    mut data: CalloutData,
+    device_object: &mut DEVICE_OBJECT,
+    direction: Direction,
+    interface_index: u32,
+    sub_interface_index: u32,
+) {
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
     else {
         return;
     };
-
     if device
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _)
@@ -301,116 +325,79 @@ pub fn network_layer_outbound(mut data: CalloutData, device_object: &mut DEVICE_
         return;
     }
 
-    for nbl in NBLIterator::new(data.get_layer_data() as _) {
+    for mut nbl in NetBufferListIter::new(data.get_layer_data() as _) {
+        if let Direction::Inbound = direction {
+            // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
+            // The net buffer list will auto advance after it loses scope.
+            nbl.retreat(IPV4_HEADER_LEN as u32, true);
+        }
+
         // Get key from packet.
-        let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Outbound) else {
+        let Some(key) = get_key_from_nbl(&nbl, &mut device.logger, direction) else {
             data.action_permit();
             return;
         };
 
         // Check if there is action for this connection.
-        if let Some(connection) = device.connection_cache.get_connection_action(key) {
+        if let Some(connection) = device.connection_cache.get_connection_action(&key) {
             // Only redirects have custom behavior.
             if let ConnectionAction::RedirectIP {
                 redirect_address,
                 redirect_port,
             } = connection.action
             {
-                // FIXME: make sure buffer is alive until packet is injected. Move this allocation to the NBL Injector.
-                let mut buffer = alloc::vec::Vec::new();
-                let Ok(()) = read_packet(nbl, &mut buffer) else {
-                    err!(device.logger, "failed to get net_buffer data");
-                    data.action_permit();
-                    return;
+                // Clone net buffer so it can be modified.
+                let mut clone = match nbl.clone(&device.network_allocator) {
+                    Ok(clone) => clone,
+                    Err(err) => {
+                        err!(device.logger, "failed to clone net buffer: {}", err);
+                        data.action_permit(); // TODO: should the error action be permit?
+                        return;
+                    }
                 };
-                redirect_outbound_packet(&mut buffer, redirect_address, redirect_port);
+
                 // print_packet(&mut device.logger, &connection.in_packet_buffer);
-                if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&buffer) {
-                    let packet = Injector::from_ip_callout(
-                        nbl,
-                        false,
-                        redirect_address.is_loopback(),
-                        data.get_value_u32(Fields::InterfaceIndex as usize),
-                        data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                    );
-                    _ = device.injector.inject_packet_list_network(packet);
-                    data.block_and_absorb();
-                    return;
+                let mut inbound = false;
+                match direction {
+                    Direction::Outbound => {
+                        redirect_outbound_packet(
+                            clone.get_data_mut().unwrap(),
+                            redirect_address,
+                            redirect_port,
+                        );
+                    }
+                    Direction::Inbound => {
+                        redirect_inbound_packet(
+                            clone.get_data_mut().unwrap(),
+                            connection.local_address,
+                            connection.remote_address,
+                            connection.remote_port,
+                        );
+                        inbound = true;
+                    }
+                    Direction::NotApplicable => todo!(),
                 }
-            }
-        } else {
-            err!(device.logger, "failed to get connection");
-        }
-    }
 
-    data.action_permit();
-}
-
-pub fn network_layer_inbound(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    type Fields = layer::FwpsFieldsInboundIppacketV4;
-
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
-        return;
-    };
-    if device
-        .injector
-        .was_network_packet_injected_by_self(data.get_layer_data() as _)
-    {
-        data.action_permit();
-        return;
-    }
-
-    for nbl in NBLIterator::new(data.get_layer_data() as _) {
-        // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
-        // The guard will ensure that it will be advance after we exit the function.
-        let _advance_guard =
-            NetworkAllocator::retreat_net_buffer(nbl, IPV4_HEADER_LEN as u32, true);
-
-        // Get key from packet.
-        let Some(key) = get_key_from_nbl(nbl, &mut device.logger, Direction::Inbound) else {
-            data.action_permit();
-            return;
-        };
-
-        // Check if there is action for this connection.
-        if let Some(connection) = device.connection_cache.get_connection_action(key) {
-            // Only redirects have custom behavior.
-            if let ConnectionAction::RedirectIP {
-                redirect_address,
-                redirect_port: _,
-            } = connection.action
-            {
-                // FIXME: make sure buffer is alive until packet is injected. Move this allocation to the NBL Injector.
-                let mut buffer = alloc::vec::Vec::new(); // TODO: remove allocation for each redirect.
-                let Ok(()) = read_packet(nbl, &mut buffer) else {
-                    err!(device.logger, "failed to get net_buffer data");
-                    data.action_permit();
-                    return;
-                };
-
-                // print_packet(&mut device.logger, &connection.in_packet_buffer);
-                redirect_inbound_packet(
-                    &mut buffer,
-                    connection.local_address,
-                    connection.remote_address,
-                    connection.remote_port,
+                let result = device.injector.inject_net_buffer_list(
+                    clone,
+                    InjectInfo {
+                        inbound,
+                        loopback: redirect_address.is_loopback(),
+                        interface_index,
+                        sub_interface_index,
+                    },
                 );
-                if let Ok(nbl) = device.network_allocator.wrap_packet_in_nbl(&buffer) {
-                    let packet = Injector::from_ip_callout(
-                        nbl,
-                        false,
-                        redirect_address.is_loopback(),
-                        data.get_value_u32(Fields::InterfaceIndex as usize),
-                        data.get_value_u32(Fields::SubInterfaceIndex as usize),
-                    );
-                    _ = device.injector.inject_packet_list_network(packet);
-                    data.block_and_absorb();
-                    return;
+
+                if let Err(err) = result {
+                    err!(device.logger, "failed to inject net buffer: {}", err);
                 }
+
+                // TODO: block also on failed inject?
+                data.block_and_absorb();
+                return;
             }
         } else {
-            err!(device.logger, "failed to get connection");
+            err!(device.logger, "failed to get connection: {}", key);
         }
     }
 

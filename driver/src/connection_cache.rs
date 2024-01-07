@@ -35,28 +35,12 @@ impl Connection {
         }
     }
 
-    fn local_equals(&self, key: &Key) -> bool {
-        if self.local_port != key.local_port {
-            return false;
-        }
-
-        if !self.local_address.eq(&key.local_address) {
-            return false;
-        }
-
-        true
-    }
-
     fn remote_equals(&self, key: &Key) -> bool {
         if self.remote_port != key.remote_port {
             return false;
         }
 
-        if !self.remote_address.eq(&key.remote_address) {
-            return false;
-        }
-
-        true
+        self.remote_address.eq(&key.remote_address)
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -69,11 +53,7 @@ impl Connection {
                     return false;
                 }
 
-                if !redirect_address.eq(&key.remote_address) {
-                    return false;
-                }
-
-                true
+                redirect_address.eq(&key.remote_address)
             }
             _ => false,
         }
@@ -93,7 +73,7 @@ impl Display for Key {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "p: {} l: {}:{} r: {} {}",
+            "p: {} l: {}:{} r: {}:{}",
             self.protocol,
             self.local_address,
             self.local_port,
@@ -135,7 +115,7 @@ impl ConnectionCache {
         let _guard = self.lock.write_lock();
         if let Some(conns) = self.connections.get_mut(&key.small()) {
             for conn in conns {
-                if conn.local_equals(&key) && conn.remote_equals(&key) {
+                if conn.remote_equals(&key) {
                     conn.action = action;
                     return;
                 }
@@ -143,18 +123,15 @@ impl ConnectionCache {
         }
     }
 
-    pub fn get_connection_action(&mut self, key: Key) -> Option<Connection> {
+    pub fn get_connection_action(&mut self, key: &Key) -> Option<Connection> {
         let _guard = self.lock.read_lock();
 
         if let Some(conns) = self.connections.get(&key.small()) {
             for conn in conns {
-                if !conn.local_equals(&key) {
-                    continue;
-                }
-                if conn.remote_equals(&key) {
+                if conn.remote_equals(key) {
                     return Some(conn.clone());
                 }
-                if conn.redirect_equals(&key) {
+                if conn.redirect_equals(key) {
                     return Some(conn.clone());
                 }
             }
