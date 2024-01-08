@@ -6,7 +6,7 @@ use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     err,
     filter_engine::{
-        callout_data::{CalloutData, ClassifyPromise},
+        callout_data::CalloutData,
         layer::{self, Layer},
     },
 };
@@ -16,7 +16,7 @@ use crate::connection_cache::{Connection, ConnectionAction, Key};
 #[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Verdict {
-    // VerdictUndecided is the default status of new connections.
+    // Undecided is the default status of new connections.
     Undecided = 0,
     Undeterminable = 1,
     Accept = 2,
@@ -35,7 +35,6 @@ impl Display for Verdict {
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
             Verdict::Redirect => write!(f, "Redirect"),
-            // Verdict::RerouteToTunnel => write!(f, "RerouteToTunnel"),
             Verdict::Failed => write!(f, "Failed"),
         }
     }
@@ -59,6 +58,7 @@ impl Debug for Direction {
     }
 }
 
+#[derive(Clone)]
 pub struct PacketInfo {
     pub process_id: Option<u64>,
     pub process_path: Option<String>,
@@ -72,7 +72,6 @@ pub struct PacketInfo {
     pub remote_port: u16,
     pub interface_index: u32,
     pub sub_interface_index: u32,
-    pub classify_promise: Option<ClassifyPromise>,
 }
 
 impl PacketInfo {
@@ -84,6 +83,7 @@ impl PacketInfo {
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
             action,
+            packet_queue: None,
         }
     }
 
@@ -284,29 +284,6 @@ impl Default for PacketInfo {
             remote_port: 0,
             interface_index: 0,
             sub_interface_index: 0,
-            classify_promise: None,
         }
     }
 }
-
-// impl PacketInfo {
-// pub fn get_verdict_key(&self) -> Key {
-//     Key {
-//         local_ip: self.local_ip,
-//         local_port: self.local_port,
-//         remote_ip: self.remote_ip,
-//         remote_port: self.remote_port,
-//         protocol: self.protocol,
-//     }
-// }
-
-// pub fn get_redirect_key(&self) -> Key {
-//     Key {
-//         local_ip: self.local_ip,
-//         local_port: self.local_port,
-//         remote_ip: self.local_ip,
-//         remote_port: 0,
-//         protocol: self.protocol,
-//     }
-// }
-// }

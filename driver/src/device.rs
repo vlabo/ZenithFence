@@ -64,14 +64,14 @@ impl Device {
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::ale_layer_connect,
             ),
-            Callout::new(
-                "AleLayerInbound",
-                "ALE layer for inbound connections",
-                0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
-                Layer::FwpmLayerAleAuthRecvAcceptV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::ale_layer_accept,
-            ),
+            // Callout::new(
+            //     "AleLayerInbound",
+            //     "ALE layer for inbound connections",
+            //     0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
+            //     Layer::FwpmLayerAleAuthRecvAcceptV4,
+            //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+            //     callouts::ale_layer_accept,
+            // ),
             Callout::new(
                 "IPPacketOutbound",
                 "IP packet outbound network layer callout",
@@ -189,16 +189,19 @@ impl Device {
             Command::Verdict { id, verdict } => {
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
-                if let Some(mut packet) = self.packet_cache.pop_id(id) {
+                if let Some(packet) = self.packet_cache.pop_id(id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict) {
                         dbg!(self.logger, "Packet: {:?}", packet);
                         dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        let conn = packet.as_connection(ConnectionAction::Verdict(verdict));
-                        self.connection_cache.add_connection(conn);
+                        // let conn = packet.as_connection(ConnectionAction::Verdict(verdict));
+                        let key = packet.get_key();
+                        completion_promise = self
+                            .connection_cache
+                            .update_connection(key, ConnectionAction::Verdict(verdict));
                     };
-                    completion_promise = packet.classify_promise.take();
+                    // completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
                     err!(self.logger, "Invalid id: {}", id);
@@ -209,7 +212,7 @@ impl Device {
                 remote_address,
                 remote_port,
             } => {
-                if let Some(mut packet) = self.packet_cache.pop_id(id) {
+                if let Some(packet) = self.packet_cache.pop_id(id) {
                     dbg!(self.logger, "packet: {:?}", packet);
                     dbg!(
                         self.logger,
@@ -217,13 +220,15 @@ impl Device {
                         remote_address,
                         remote_port
                     );
-                    let connection = packet.as_connection(ConnectionAction::RedirectIP {
-                        redirect_address: Ipv4Address::from_bytes(&remote_address),
-                        redirect_port: remote_port,
-                    });
-                    self.connection_cache.add_connection(connection);
 
-                    completion_promise = packet.classify_promise.take();
+                    let key = packet.get_key();
+                    completion_promise = self.connection_cache.update_connection(
+                        key,
+                        ConnectionAction::RedirectIP {
+                            redirect_address: Ipv4Address::from_bytes(&remote_address),
+                            redirect_port: remote_port,
+                        },
+                    );
                 } else {
                     // Id was not in the packet cache.
                     err!(self.logger, "Invalid id: {}", id);

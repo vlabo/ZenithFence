@@ -3,7 +3,7 @@ use smoltcp::wire::{
 };
 
 use wdk::filter_engine::callout_data::CalloutData;
-use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4, FwpsFieldsAleAuthRecvAcceptV4};
+use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4};
 use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
 use wdk::filter_engine::packet::{InjectInfo, Injector};
 use wdk::interface;
@@ -29,6 +29,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         return;
     };
 
+    // Check if packet was previously injected from here.
     if device
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _)
@@ -37,7 +38,9 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         return;
     }
 
-    let mut packet = PacketInfo::from_callout_data(&data);
+    let is_reauthorize = data.is_reauthorize(Fields::Flags as usize);
+
+    let packet = PacketInfo::from_callout_data(&data);
     info!(device.logger, "Connect callout: {:?}", packet);
     if let Some(action) = device.connection_cache.get_connection_action(
         &packet.get_key(),
@@ -47,6 +50,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         },
     ) {
         // We already have a verdict for it.
+        dbg!(device.logger, "Verdict: {}", action);
         match action {
             ConnectionAction::Verdict(verdict) => match verdict {
                 Verdict::Accept | Verdict::Redirect => data.action_permit(),
@@ -55,7 +59,15 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
                     data.block_and_absorb();
                 }
                 Verdict::Undecided => {
-                    // FIXME: save net buffer list for later.
+                    if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
+                        if let Ok(clone) = NetBufferList::new(data.get_layer_data() as _)
+                            .clone(&device.network_allocator)
+                        {
+                            device
+                                .connection_cache
+                                .push_packet_to_connection(packet.get_key(), clone);
+                        }
+                    }
                     data.block_and_absorb();
                 }
             },
@@ -69,103 +81,111 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     } else {
         // Pend decision of connection.
         let mut packet_list = None;
-        if packet.protocol == u8::from(IpProtocol::Udp) {
-            packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
+        if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
+            if let Ok(clone) =
+                NetBufferList::new(data.get_layer_data() as _).clone(&device.network_allocator)
+            {
+                packet_list = Some(Injector::from_ale_callout(&data, clone, packet.remote_ip));
+            }
         }
-        let promise = if data.is_reauthorize(Fields::Flags as usize) {
+        let promise = if is_reauthorize {
             data.pend_filter_rest(packet_list)
         } else {
             match data.pend_operation(packet_list) {
                 Ok(cc) => cc,
                 Err(error) => {
                     err!(device.logger, "failed to postpone decision: {}", error);
-                    data.action_permit(); // TODO: Do we need to permit on fail?
+                    data.action_permit(); // TODO: should error action be permit?
                     return;
                 }
             }
         };
 
         // Send request to user-space.
-        packet.classify_promise = Some(promise);
-        let serialized = device.packet_cache.push_and_serialize(packet);
-        if let Ok(bytes) = serialized {
+        let id = device.packet_cache.push(packet.clone());
+        if let Ok(bytes) = packet.serialize(id) {
             let _ = device.io_queue.push(bytes);
         }
+
+        // Save the connection.
+        let mut conn = packet.as_connection(ConnectionAction::Verdict(Verdict::Undecided));
+        conn.packet_queue = Some(promise);
+        device.connection_cache.add_connection(conn);
 
         data.block_and_absorb();
     }
 }
 
-pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
-        return;
-    };
+// pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+//     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+//     else {
+//         return;
+//     };
 
-    if device
-        .injector
-        .was_network_packet_injected_by_self(data.get_layer_data() as _)
-    {
-        data.action_permit();
-        return;
-    }
+//     if device
+//         .injector
+//         .was_network_packet_injected_by_self(data.get_layer_data() as _)
+//     {
+//         data.action_permit();
+//         return;
+//     }
 
-    let mut packet = PacketInfo::from_callout_data(&data);
-    info!(device.logger, "Accept callout: {:?}", packet);
-    if let Some(action) = device.connection_cache.get_connection_action(
-        &packet.get_key(),
-        |conn| -> Option<ConnectionAction> {
-            // Function is locked, just copy and return.
-            Some(conn.action.clone())
-        },
-    ) {
-        // We already have a verdict for it.
-        match action {
-            ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept | Verdict::Redirect => data.action_permit(),
-                Verdict::Block => data.action_block(),
-                Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
-                    data.block_and_absorb()
-                }
-            },
-            ConnectionAction::RedirectIP {
-                redirect_address: _,
-                redirect_port: _,
-            } => {
-                data.action_permit();
-            }
-        }
-    } else {
-        // TODO: check if connection is already pended. As more packets are coming the callout will be called again.
-        // Pend decision of connection.
-        dbg!(device.logger, "Pend decision");
-        let mut packet_list = None;
-        if packet.protocol == u8::from(IpProtocol::Udp) {
-            packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
-        }
-        let promise = if data.is_reauthorize(FwpsFieldsAleAuthRecvAcceptV4::Flags as usize) {
-            data.pend_filter_rest(packet_list)
-        } else {
-            match data.pend_operation(packet_list) {
-                Ok(cc) => cc,
-                Err(error) => {
-                    err!(device.logger, "failed to postpone decision: {}", error);
-                    data.action_permit(); // TODO: Do we need to permit on fail?
-                    return;
-                }
-            }
-        };
+//     let mut packet = PacketInfo::from_callout_data(&data);
+//     info!(device.logger, "Accept callout: {:?}", packet);
+//     if let Some(action) = device.connection_cache.get_connection_action(
+//         &packet.get_key(),
+//         |conn| -> Option<ConnectionAction> {
+//             // Function is locked, just copy and return.
+//             Some(conn.action.clone())
+//         },
+//     ) {
+//         // We already have a verdict for it.
+//         match action {
+//             ConnectionAction::Verdict(verdict) => match verdict {
+//                 Verdict::Accept | Verdict::Redirect => data.action_permit(),
+//                 Verdict::Block => data.action_block(),
+//                 Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
+//                     data.block_and_absorb()
+//                 }
+//             },
+//             ConnectionAction::RedirectIP {
+//                 redirect_address: _,
+//                 redirect_port: _,
+//             } => {
+//                 data.action_permit();
+//             }
+//         }
+//     } else {
+//         // TODO: check if connection is already pended. As more packets are coming the callout will be called again.
+//         // Pend decision of connection.
+//         dbg!(device.logger, "Pend decision");
+//         let mut packet_list = None;
+//         if packet.protocol == u8::from(IpProtocol::Udp) {
+//             packet_list = Some(Injector::from_ale_callout(&data, clone, packet.remote_ip));
+//         }
+//         let promise = if data.is_reauthorize(FwpsFieldsAleAuthRecvAcceptV4::Flags as usize) {
+//             data.pend_filter_rest(packet_list)
+//         } else {
+//             match data.pend_operation(packet_list) {
+//                 Ok(cc) => cc,
+//                 Err(error) => {
+//                     err!(device.logger, "failed to postpone decision: {}", error);
+//                     data.action_permit(); // TODO: Do we need to permit on fail?
+//                     return;
+//                 }
+//             }
+//         };
 
-        // Send request to user-space.
-        packet.classify_promise = Some(promise);
-        let serialized = device.packet_cache.push_and_serialize(packet);
-        if let Ok(bytes) = serialized {
-            let _ = device.io_queue.push(bytes);
-        }
+//         // Send request to user-space.
+//         packet.classify_promise = Some(promise);
+//         let serialized = device.packet_cache.push_and_serialize(packet);
+//         if let Ok(bytes) = serialized {
+//             let _ = device.io_queue.push(bytes);
+//         }
 
-        data.block_and_absorb();
-    }
-}
+//         data.block_and_absorb();
+//     }
+// }
 
 // TODO: move this to util file.
 fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
@@ -345,6 +365,7 @@ fn network_layer(
 
         // Get key from packet.
         let Some(key) = get_key_from_nbl(&nbl, &mut device.logger, direction) else {
+            dbg!(device.logger, "failed to read key");
             data.action_permit();
             return;
         };
@@ -355,12 +376,14 @@ fn network_layer(
             remote_port: u16,
             redirect_address: Ipv4Address,
             redirect_port: u16,
+            action: ConnectionAction,
         }
         // Check if packet should be redirected.
         let conn_info = device.connection_cache.get_connection_action(
             &key,
             |conn: &Connection| -> Option<ConnectionInfo> {
                 // Function is locked. Just copy and return.
+                // action = Some(conn.action.clone());
                 if let ConnectionAction::RedirectIP {
                     redirect_address,
                     redirect_port,
@@ -372,6 +395,7 @@ fn network_layer(
                         remote_port: conn.remote_port,
                         redirect_address,
                         redirect_port,
+                        action: conn.action.clone(),
                     });
                 }
                 None
@@ -380,6 +404,7 @@ fn network_layer(
 
         // Check if there is action for this connection.
         if let Some(conn) = conn_info {
+            dbg!(device.logger, "action: {}", conn.action);
             // Only redirects have custom behavior.
             // Clone net buffer so it can be modified.
             let mut clone = match nbl.clone(&device.network_allocator) {
@@ -410,7 +435,7 @@ fn network_layer(
                     );
                     inbound = true;
                 }
-                Direction::NotApplicable => todo!(),
+                Direction::NotApplicable => {}
             }
 
             let result = device.injector.inject_net_buffer_list(
@@ -429,7 +454,7 @@ fn network_layer(
 
             // TODO: should it block on failed inject?
             data.block_and_absorb();
-            continue;
+            return;
         }
     }
 

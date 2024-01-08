@@ -3,7 +3,10 @@ use core::fmt::Display;
 use crate::types::Verdict;
 use alloc::{collections::BTreeMap, vec::Vec};
 use smoltcp::wire::{IpProtocol, Ipv4Address};
-use wdk::rw_spin_lock::RwSpinLock;
+use wdk::{
+    filter_engine::{callout_data::ClassifyDefer, net_buffer::NetBufferList},
+    rw_spin_lock::RwSpinLock,
+};
 
 #[derive(Clone)]
 pub enum ConnectionAction {
@@ -14,7 +17,18 @@ pub enum ConnectionAction {
     },
 }
 
-#[derive(Clone)]
+impl Display for ConnectionAction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConnectionAction::Verdict(verdict) => write!(f, "{}", verdict),
+            ConnectionAction::RedirectIP {
+                redirect_address,
+                redirect_port,
+            } => write!(f, "Redirect: {}:{}", redirect_address, redirect_port),
+        }
+    }
+}
+
 pub struct Connection {
     pub(crate) protocol: IpProtocol,
     pub(crate) local_address: Ipv4Address,
@@ -22,6 +36,7 @@ pub struct Connection {
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
+    pub(crate) packet_queue: Option<ClassifyDefer>,
 }
 
 impl Connection {
@@ -101,8 +116,8 @@ impl ConnectionCache {
     }
 
     pub fn add_connection(&mut self, connection: Connection) {
-        let _guard = self.lock.write_lock();
         let key = connection.get_key();
+        let _guard = self.lock.write_lock();
         if let Some(conns) = self.connections.get_mut(&key.small()) {
             conns.push(connection);
         } else {
@@ -111,16 +126,35 @@ impl ConnectionCache {
         }
     }
 
-    pub fn update_connection(&mut self, key: Key, action: ConnectionAction) {
+    pub fn push_packet_to_connection(&mut self, key: Key, packet: NetBufferList) {
+        let _guard = self.lock.write_lock();
+        if let Some(conns) = self.connections.get_mut(&key.small()) {
+            for conn in conns {
+                if conn.remote_equals(&key) {
+                    if let Some(classify_defer) = &mut conn.packet_queue {
+                        classify_defer.add_net_buffer(packet);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn update_connection(
+        &mut self,
+        key: Key,
+        action: ConnectionAction,
+    ) -> Option<ClassifyDefer> {
         let _guard = self.lock.write_lock();
         if let Some(conns) = self.connections.get_mut(&key.small()) {
             for conn in conns {
                 if conn.remote_equals(&key) {
                     conn.action = action;
-                    return;
+                    return conn.packet_queue.take();
                 }
             }
         }
+        None
     }
 
     pub fn get_connection_action<T>(
@@ -133,10 +167,10 @@ impl ConnectionCache {
         if let Some(conns) = self.connections.get(&key.small()) {
             for conn in conns {
                 if conn.remote_equals(key) {
-                    return process_connection(&conn);
+                    return process_connection(conn);
                 }
                 if conn.redirect_equals(key) {
-                    return process_connection(&conn);
+                    return process_connection(conn);
                 }
             }
         }
@@ -145,7 +179,7 @@ impl ConnectionCache {
     }
 
     pub fn unregister_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<Connection>> {
-        let _guard = self.lock.read_lock();
+        let _guard = self.lock.write_lock();
         self.connections.remove(&key)
     }
 

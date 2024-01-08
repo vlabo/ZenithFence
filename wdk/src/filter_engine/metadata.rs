@@ -1,4 +1,4 @@
-use core::ffi::c_void;
+use core::{ffi::c_void, ptr::NonNull};
 
 use alloc::string::String;
 use widestring::U16CString;
@@ -137,15 +137,14 @@ impl FwpsIncomingMetadataValues {
         None
     }
 
-    pub(crate) unsafe fn get_control_data(&self) -> Option<&[u8]> {
+    pub(crate) unsafe fn get_control_data(&self) -> Option<NonNull<[u8]>> {
         if self.has_field(FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA) {
             if self.control_data.is_null() || self.control_data_length == 0 {
                 return None;
             }
-
-            let control_data =
-                alloc::slice::from_raw_parts(self.control_data, self.control_data_length as usize);
-            return Some(control_data);
+            let ptr = NonNull::new(self.control_data as *mut u8).unwrap();
+            let slice = NonNull::slice_from_raw_parts(ptr, self.control_data_length as usize);
+            return Some(slice);
         }
 
         None

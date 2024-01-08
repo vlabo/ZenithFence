@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use core::{ffi::c_void, mem::MaybeUninit};
+use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Networking::WinSock::{AF_INET, AF_UNSPEC, SCOPE_ID},
@@ -12,11 +12,10 @@ use windows_sys::Win32::{
 
 use crate::{
     ffi::{
-        FwpsDereferenceNetBufferList0, FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0,
-        FwpsInjectTransportSendAsync1, FwpsInjectionHandleCreate0, FwpsInjectionHandleDestroy0,
-        FwpsQueryPacketInjectionState0, FwpsReferenceNetBufferList0, FWPS_INJECTION_TYPE_NETWORK,
-        FWPS_INJECTION_TYPE_TRANSPORT, FWPS_PACKET_INJECTION_STATE, FWPS_TRANSPORT_SEND_PARAMS1,
-        NET_BUFFER_LIST,
+        FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0, FwpsInjectTransportSendAsync1,
+        FwpsInjectionHandleCreate0, FwpsInjectionHandleDestroy0, FwpsQueryPacketInjectionState0,
+        FWPS_INJECTION_TYPE_NETWORK, FWPS_INJECTION_TYPE_TRANSPORT, FWPS_PACKET_INJECTION_STATE,
+        FWPS_TRANSPORT_SEND_PARAMS1, NET_BUFFER_LIST,
     },
     utils::check_ntstatus,
 };
@@ -24,11 +23,11 @@ use crate::{
 use super::{callout_data::CalloutData, net_buffer::NetBufferList};
 
 pub struct TransportPacketList {
-    nbl: *mut NET_BUFFER_LIST,
+    pub net_buffer_list_queue: Vec<NetBufferList>,
     remote_ip: [u8; 4],
     endpoint_handle: u64,
     remote_scope_id: SCOPE_ID,
-    control_data: Option<Vec<u8>>,
+    control_data: Option<NonNull<[u8]>>,
 }
 
 pub struct InjectInfo {
@@ -38,22 +37,11 @@ pub struct InjectInfo {
     pub sub_interface_index: u32,
 }
 
-impl Drop for TransportPacketList {
-    fn drop(&mut self) {
-        if !self.nbl.is_null() {
-            unsafe {
-                FwpsDereferenceNetBufferList0(self.nbl, false);
-            }
-        }
-    }
-}
-
 pub struct Injector {
     transport_inject_handle: HANDLE,
     network_inject_handle: HANDLE,
 }
 
-// FIXME: Rework the injector so it doesn't use directly the NB/NBL. Abstract the interface to ensure, memory safety and eliminate memory leaks.
 // TODO: Implement custom allocator for the packet buffers for reusing memory and reducing allocations. This should improve latency.
 impl Injector {
     pub fn new() -> Self {
@@ -84,18 +72,18 @@ impl Injector {
         }
     }
 
-    pub fn from_ale_callout(callout_data: &CalloutData, remote_ip: [u8; 4]) -> TransportPacketList {
-        unsafe {
-            // FIXME: Replace with Deep copy using FwpsAllocateNetBufferAndNetBufferList0
-            FwpsReferenceNetBufferList0(callout_data.layer_data as _, true);
-        }
+    pub fn from_ale_callout(
+        callout_data: &CalloutData,
+        net_buffer_list: NetBufferList,
+        remote_ip: [u8; 4],
+    ) -> TransportPacketList {
         let mut control_data = None;
         if let Some(cd) = callout_data.get_control_data() {
-            control_data = Some(cd.to_vec());
+            control_data = Some(cd);
         }
 
         TransportPacketList {
-            nbl: callout_data.layer_data as _,
+            net_buffer_list_queue: alloc::vec![net_buffer_list],
             remote_ip,
             endpoint_handle: callout_data.get_transport_endpoint_handle().unwrap_or(0),
             remote_scope_id: callout_data
@@ -112,15 +100,12 @@ impl Injector {
         if self.transport_inject_handle == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
-        // FIXME: free MDL buffer after success or unsuccessful injection.
         unsafe {
-            let packet_list_boxed = Box::new(packet_list);
-            let packet_list = Box::into_raw(packet_list_boxed).as_mut().unwrap();
             let mut control_data_length = 0;
             let control_data = match &packet_list.control_data {
                 Some(cd) => {
                     control_data_length = cd.len();
-                    cd.as_ptr()
+                    cd.as_ptr().cast()
                 }
                 None => core::ptr::null_mut(),
             };
@@ -134,21 +119,26 @@ impl Injector {
                 header_include_header_length: 0,
             };
 
-            let status = FwpsInjectTransportSendAsync1(
-                self.transport_inject_handle,
-                0,
-                packet_list.endpoint_handle,
-                0,
-                &mut send_params,
-                AF_INET,
-                UNSPECIFIED_COMPARTMENT_ID,
-                packet_list.nbl,
-                free_packet_transport,
-                (packet_list as *mut TransportPacketList) as _,
-            );
-            if let Err(err) = check_ntstatus(status) {
-                _ = Box::from_raw(packet_list);
-                return Err(err);
+            for net_buffer_list in packet_list.net_buffer_list_queue {
+                let boxed_nbl = Box::new(net_buffer_list);
+                let raw_nbl = boxed_nbl.nbl;
+                let raw_ptr = Box::into_raw(boxed_nbl);
+                let status = FwpsInjectTransportSendAsync1(
+                    self.transport_inject_handle,
+                    0,
+                    packet_list.endpoint_handle,
+                    0,
+                    &mut send_params,
+                    AF_INET,
+                    UNSPECIFIED_COMPARTMENT_ID,
+                    raw_nbl,
+                    free_packet,
+                    raw_ptr as _,
+                );
+                if let Err(err) = check_ntstatus(status) {
+                    _ = Box::from_raw(raw_ptr);
+                    return Err(err);
+                }
             }
         }
 
@@ -179,7 +169,7 @@ impl Injector {
                     inject_info.interface_index,
                     inject_info.sub_interface_index,
                     nbl,
-                    free_packet_packet,
+                    free_packet,
                     (packet_pointer as *mut NetBufferList) as _,
                 )
             }
@@ -192,7 +182,7 @@ impl Injector {
                     0,
                     UNSPECIFIED_COMPARTMENT_ID,
                     nbl,
-                    free_packet_packet,
+                    free_packet,
                     (packet_pointer as *mut NetBufferList) as _,
                 )
             }
@@ -251,20 +241,7 @@ impl Drop for Injector {
     }
 }
 
-unsafe extern "C" fn free_packet_transport(
-    context: *mut c_void,
-    net_buffer_list: *mut NET_BUFFER_LIST,
-    _dispatch_level: bool,
-) {
-    if let Some(nbl) = net_buffer_list.as_ref() {
-        if let Err(err) = check_ntstatus(nbl.Status) {
-            crate::err!("inject status: {}", err);
-        }
-    }
-    _ = Box::from_raw(context as *mut TransportPacketList);
-}
-
-unsafe extern "C" fn free_packet_packet(
+unsafe extern "C" fn free_packet(
     context: *mut c_void,
     net_buffer_list: *mut NET_BUFFER_LIST,
     _dispatch_level: bool,

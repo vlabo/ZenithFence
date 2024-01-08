@@ -7,38 +7,48 @@ use super::{
     classify::ClassifyOut,
     layer::{Layer, Value},
     metadata::FwpsIncomingMetadataValues,
+    net_buffer::NetBufferList,
     packet::TransportPacketList,
     FilterEngine,
 };
 use alloc::string::{String, ToString};
-use core::ffi::c_void;
+use core::{ffi::c_void, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::HANDLE,
     NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_FLAG_IS_REAUTHORIZE,
     Networking::WinSock::SCOPE_ID,
 };
 
-pub enum ClassifyPromise {
+pub enum ClassifyDefer {
     Initial(HANDLE, Option<TransportPacketList>),
     Reauthorization(usize, Option<TransportPacketList>),
 }
 
-impl ClassifyPromise {
+impl ClassifyDefer {
     pub fn complete(
         self,
         filter_engine: &FilterEngine,
     ) -> Result<Option<TransportPacketList>, String> {
         unsafe {
             match self {
-                ClassifyPromise::Initial(context, packet_list) => {
+                ClassifyDefer::Initial(context, packet_list) => {
                     FwpsCompleteOperation0(context, core::ptr::null_mut());
                     return Ok(packet_list);
                 }
-                ClassifyPromise::Reauthorization(callout_index, packet_list) => {
+                ClassifyDefer::Reauthorization(callout_index, packet_list) => {
                     filter_engine.reset_callout_filter(callout_index)?;
                     return Ok(packet_list);
                 }
             }
+        }
+    }
+
+    pub fn add_net_buffer(&mut self, nbl: NetBufferList) {
+        if let Some(packet_list) = match self {
+            ClassifyDefer::Initial(_, packet_list) => packet_list,
+            ClassifyDefer::Reauthorization(_, packet_list) => packet_list,
+        } {
+            packet_list.net_buffer_list_queue.push(nbl);
         }
     }
 }
@@ -93,7 +103,7 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn get_control_data(&self) -> Option<&[u8]> {
+    pub fn get_control_data(&self) -> Option<NonNull<[u8]>> {
         unsafe {
             return (*self.metadata).get_control_data();
         }
@@ -106,25 +116,22 @@ impl<'a> CalloutData<'a> {
     pub fn pend_operation(
         &mut self,
         packet_list: Option<TransportPacketList>,
-    ) -> Result<ClassifyPromise, String> {
+    ) -> Result<ClassifyDefer, String> {
         unsafe {
             let mut completion_context = 0;
             if let Some(completion_handle) = (*self.metadata).get_completion_handle() {
                 let status = FwpsPendOperation0(completion_handle, &mut completion_context);
                 check_ntstatus(status)?;
 
-                return Ok(ClassifyPromise::Initial(completion_context, packet_list));
+                return Ok(ClassifyDefer::Initial(completion_context, packet_list));
             }
 
             Err("callout not supported".to_string())
         }
     }
 
-    pub fn pend_filter_rest(
-        &mut self,
-        packet_list: Option<TransportPacketList>,
-    ) -> ClassifyPromise {
-        return ClassifyPromise::Reauthorization(self.callout_index, packet_list);
+    pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
+        return ClassifyDefer::Reauthorization(self.callout_index, packet_list);
     }
 
     pub fn action_permit(&mut self) {
