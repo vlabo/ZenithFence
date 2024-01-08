@@ -123,16 +123,20 @@ impl ConnectionCache {
         }
     }
 
-    pub fn get_connection_action(&mut self, key: &Key) -> Option<Connection> {
+    pub fn get_connection_action<T>(
+        &mut self,
+        key: &Key,
+        process_connection: fn(&Connection) -> Option<T>,
+    ) -> Option<T> {
         let _guard = self.lock.read_lock();
 
         if let Some(conns) = self.connections.get(&key.small()) {
             for conn in conns {
                 if conn.remote_equals(key) {
-                    return Some(conn.clone());
+                    return process_connection(&conn);
                 }
                 if conn.redirect_equals(key) {
-                    return Some(conn.clone());
+                    return process_connection(&conn);
                 }
             }
         }

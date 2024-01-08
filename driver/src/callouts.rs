@@ -9,7 +9,7 @@ use wdk::filter_engine::packet::{InjectInfo, Injector};
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::connection_cache::Key;
+use crate::connection_cache::{Connection, Key};
 use crate::info;
 use crate::logger::Logger;
 use crate::types::Direction;
@@ -22,6 +22,8 @@ use crate::{
 };
 
 pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    type Fields = FwpsFieldsAleAuthConnectV4;
+
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
     else {
         return;
@@ -37,17 +39,24 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
     let mut packet = PacketInfo::from_callout_data(&data);
     info!(device.logger, "Connect callout: {:?}", packet);
-    if let Some(connection) = device
-        .connection_cache
-        .get_connection_action(&packet.get_key())
-    {
+    if let Some(action) = device.connection_cache.get_connection_action(
+        &packet.get_key(),
+        |conn| -> Option<ConnectionAction> {
+            // Function is locked, just copy and return.
+            Some(conn.action.clone())
+        },
+    ) {
         // We already have a verdict for it.
-        match connection.action {
+        match action {
             ConnectionAction::Verdict(verdict) => match verdict {
                 Verdict::Accept | Verdict::Redirect => data.action_permit(),
                 Verdict::Block => data.action_block(),
-                Verdict::Drop | Verdict::Undecided | Verdict::Undeterminable | Verdict::Failed => {
-                    data.block_and_absorb()
+                Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
+                    data.block_and_absorb();
+                }
+                Verdict::Undecided => {
+                    // FIXME: save net buffer list for later.
+                    data.block_and_absorb();
                 }
             },
             ConnectionAction::RedirectIP {
@@ -59,12 +68,11 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         }
     } else {
         // Pend decision of connection.
-        dbg!(device.logger, "Pend decision");
         let mut packet_list = None;
         if packet.protocol == u8::from(IpProtocol::Udp) {
             packet_list = Some(Injector::from_ale_callout(&data, packet.remote_ip));
         }
-        let promise = if data.is_reauthorize(FwpsFieldsAleAuthConnectV4::Flags as usize) {
+        let promise = if data.is_reauthorize(Fields::Flags as usize) {
             data.pend_filter_rest(packet_list)
         } else {
             match data.pend_operation(packet_list) {
@@ -104,12 +112,15 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
 
     let mut packet = PacketInfo::from_callout_data(&data);
     info!(device.logger, "Accept callout: {:?}", packet);
-    if let Some(connection) = device
-        .connection_cache
-        .get_connection_action(&packet.get_key())
-    {
+    if let Some(action) = device.connection_cache.get_connection_action(
+        &packet.get_key(),
+        |conn| -> Option<ConnectionAction> {
+            // Function is locked, just copy and return.
+            Some(conn.action.clone())
+        },
+    ) {
         // We already have a verdict for it.
-        match connection.action {
+        match action {
             ConnectionAction::Verdict(verdict) => match verdict {
                 Verdict::Accept | Verdict::Redirect => data.action_permit(),
                 Verdict::Block => data.action_block(),
@@ -338,66 +349,87 @@ fn network_layer(
             return;
         };
 
+        struct ConnectionInfo {
+            local_address: Ipv4Address,
+            remote_address: Ipv4Address,
+            remote_port: u16,
+            redirect_address: Ipv4Address,
+            redirect_port: u16,
+        }
+        // Check if packet should be redirected.
+        let conn_info = device.connection_cache.get_connection_action(
+            &key,
+            |conn: &Connection| -> Option<ConnectionInfo> {
+                // Function is locked. Just copy and return.
+                if let ConnectionAction::RedirectIP {
+                    redirect_address,
+                    redirect_port,
+                } = conn.action
+                {
+                    return Some(ConnectionInfo {
+                        local_address: conn.local_address,
+                        remote_address: conn.remote_address,
+                        remote_port: conn.remote_port,
+                        redirect_address,
+                        redirect_port,
+                    });
+                }
+                None
+            },
+        );
+
         // Check if there is action for this connection.
-        if let Some(connection) = device.connection_cache.get_connection_action(&key) {
+        if let Some(conn) = conn_info {
             // Only redirects have custom behavior.
-            if let ConnectionAction::RedirectIP {
-                redirect_address,
-                redirect_port,
-            } = connection.action
-            {
-                // Clone net buffer so it can be modified.
-                let mut clone = match nbl.clone(&device.network_allocator) {
-                    Ok(clone) => clone,
-                    Err(err) => {
-                        err!(device.logger, "failed to clone net buffer: {}", err);
-                        data.action_permit(); // TODO: should the error action be permit?
-                        return;
-                    }
-                };
-
-                // print_packet(&mut device.logger, &connection.in_packet_buffer);
-                let mut inbound = false;
-                match direction {
-                    Direction::Outbound => {
-                        redirect_outbound_packet(
-                            clone.get_data_mut().unwrap(),
-                            redirect_address,
-                            redirect_port,
-                        );
-                    }
-                    Direction::Inbound => {
-                        redirect_inbound_packet(
-                            clone.get_data_mut().unwrap(),
-                            connection.local_address,
-                            connection.remote_address,
-                            connection.remote_port,
-                        );
-                        inbound = true;
-                    }
-                    Direction::NotApplicable => todo!(),
+            // Clone net buffer so it can be modified.
+            let mut clone = match nbl.clone(&device.network_allocator) {
+                Ok(clone) => clone,
+                Err(err) => {
+                    err!(device.logger, "failed to clone net buffer: {}", err);
+                    data.action_permit(); // TODO: should the error action be permit?
+                    return;
                 }
+            };
 
-                let result = device.injector.inject_net_buffer_list(
-                    clone,
-                    InjectInfo {
-                        inbound,
-                        loopback: redirect_address.is_loopback(),
-                        interface_index,
-                        sub_interface_index,
-                    },
-                );
-
-                if let Err(err) = result {
-                    err!(device.logger, "failed to inject net buffer: {}", err);
+            // print_packet(&mut device.logger, &connection.in_packet_buffer);
+            let mut inbound = false;
+            match direction {
+                Direction::Outbound => {
+                    redirect_outbound_packet(
+                        clone.get_data_mut().unwrap(),
+                        conn.redirect_address,
+                        conn.redirect_port,
+                    );
                 }
-
-                // TODO: block also on failed inject?
-                data.block_and_absorb();
-                return;
+                Direction::Inbound => {
+                    redirect_inbound_packet(
+                        clone.get_data_mut().unwrap(),
+                        conn.local_address,
+                        conn.remote_address,
+                        conn.remote_port,
+                    );
+                    inbound = true;
+                }
+                Direction::NotApplicable => todo!(),
             }
-        } else {
-            err!(device.logger, "failed to get connection: {}", key);
+
+            let result = device.injector.inject_net_buffer_list(
+                clone,
+                InjectInfo {
+                    inbound,
+                    loopback: conn.redirect_address.is_loopback(),
+                    interface_index,
+                    sub_interface_index,
+                },
+            );
+
+            if let Err(err) = result {
+                err!(device.logger, "failed to inject net buffer: {}", err);
+            }
+
+            // TODO: should it block on failed inject?
+            data.block_and_absorb();
+            continue;
         }
     }
 
