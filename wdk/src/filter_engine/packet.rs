@@ -12,7 +12,8 @@ use windows_sys::Win32::{
 
 use crate::{
     ffi::{
-        FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0, FwpsInjectTransportSendAsync1,
+        FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0,
+        FwpsInjectTransportReceiveAsync0, FwpsInjectTransportSendAsync1,
         FwpsInjectionHandleCreate0, FwpsInjectionHandleDestroy0, FwpsQueryPacketInjectionState0,
         FWPS_INJECTION_TYPE_NETWORK, FWPS_INJECTION_TYPE_TRANSPORT, FWPS_PACKET_INJECTION_STATE,
         FWPS_TRANSPORT_SEND_PARAMS1, NET_BUFFER_LIST,
@@ -28,6 +29,9 @@ pub struct TransportPacketList {
     endpoint_handle: u64,
     remote_scope_id: SCOPE_ID,
     control_data: Option<NonNull<[u8]>>,
+    inbound: bool,
+    interface_index: u32,
+    sub_interface_index: u32,
 }
 
 pub struct InjectInfo {
@@ -76,6 +80,9 @@ impl Injector {
         callout_data: &CalloutData,
         net_buffer_list: NetBufferList,
         remote_ip: [u8; 4],
+        inbound: bool,
+        interface_index: u32,
+        sub_interface_index: u32,
     ) -> TransportPacketList {
         let mut control_data = None;
         if let Some(cd) = callout_data.get_control_data() {
@@ -90,6 +97,9 @@ impl Injector {
                 .get_remote_scope_id()
                 .unwrap_or(unsafe { MaybeUninit::zeroed().assume_init() }),
             control_data,
+            inbound,
+            interface_index,
+            sub_interface_index,
         }
     }
 
@@ -120,21 +130,41 @@ impl Injector {
             };
 
             for net_buffer_list in packet_list.net_buffer_list_queue {
+                // Escape the stack. Packet buffer should be valid until the packet is injected.
                 let boxed_nbl = Box::new(net_buffer_list);
                 let raw_nbl = boxed_nbl.nbl;
                 let raw_ptr = Box::into_raw(boxed_nbl);
-                let status = FwpsInjectTransportSendAsync1(
-                    self.transport_inject_handle,
-                    0,
-                    packet_list.endpoint_handle,
-                    0,
-                    &mut send_params,
-                    AF_INET,
-                    UNSPECIFIED_COMPARTMENT_ID,
-                    raw_nbl,
-                    free_packet,
-                    raw_ptr as _,
-                );
+
+                // Inject
+                let status = if packet_list.inbound {
+                    FwpsInjectTransportReceiveAsync0(
+                        self.transport_inject_handle,
+                        0,
+                        core::ptr::null_mut(),
+                        0,
+                        AF_INET,
+                        UNSPECIFIED_COMPARTMENT_ID,
+                        packet_list.interface_index,
+                        packet_list.sub_interface_index,
+                        raw_nbl,
+                        free_packet,
+                        raw_ptr as _,
+                    )
+                } else {
+                    FwpsInjectTransportSendAsync1(
+                        self.transport_inject_handle,
+                        0,
+                        packet_list.endpoint_handle,
+                        0,
+                        &mut send_params,
+                        AF_INET,
+                        UNSPECIFIED_COMPARTMENT_ID,
+                        raw_nbl,
+                        free_packet,
+                        raw_ptr as _,
+                    )
+                };
+                // Check for success
                 if let Err(err) = check_ntstatus(status) {
                     _ = Box::from_raw(raw_ptr);
                     return Err(err);

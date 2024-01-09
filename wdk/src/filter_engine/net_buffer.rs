@@ -57,7 +57,14 @@ impl NetBufferList {
                     return Err(());
                 }
 
-                let ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
+                let mut ptr =
+                    NdisGetDataBuffer(nb, buffer.len() as u32, core::ptr::null_mut(), 1, 0);
+                if !ptr.is_null() {
+                    buffer.copy_from_slice(core::slice::from_raw_parts(ptr, buffer.len()));
+                    return Ok(());
+                }
+
+                ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
                 if !ptr.is_null() {
                     return Ok(());
                 }
@@ -81,9 +88,16 @@ impl NetBufferList {
 
                 // Allocate space in buffer, if buffer is too small.
                 let mut buffer = alloc::vec![0 as u8; data_length as usize];
+
                 let ptr = NdisGetDataBuffer(nb, data_length, buffer.as_mut_ptr(), 1, 0);
-                if ptr.is_null() {
-                    return Err("failed to copy packet buffer".to_string());
+
+                if !ptr.is_null() {
+                    buffer.copy_from_slice(core::slice::from_raw_parts(ptr, data_length as usize));
+                } else {
+                    let ptr = NdisGetDataBuffer(nb, data_length, buffer.as_mut_ptr(), 1, 0);
+                    if ptr.is_null() {
+                        return Err("failed to copy packet buffer".to_string());
+                    }
                 }
 
                 let new_nbl = net_allocator.wrap_packet_in_nbl(&buffer)?;
@@ -104,6 +118,15 @@ impl NetBufferList {
         if self.owned {
             if let Some(data) = &mut self.data {
                 return Some(data.as_mut_slice());
+            }
+        }
+        return None;
+    }
+
+    pub fn get_data(&self) -> Option<&[u8]> {
+        if self.owned {
+            if let Some(data) = &self.data {
+                return Some(data.as_slice());
             }
         }
         return None;

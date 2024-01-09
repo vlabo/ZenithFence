@@ -64,14 +64,14 @@ impl Device {
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::ale_layer_connect,
             ),
-            // Callout::new(
-            //     "AleLayerInbound",
-            //     "ALE layer for inbound connections",
-            //     0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
-            //     Layer::FwpmLayerAleAuthRecvAcceptV4,
-            //     consts::FWP_ACTION_CALLOUT_TERMINATING,
-            //     callouts::ale_layer_accept,
-            // ),
+            Callout::new(
+                "AleLayerInbound",
+                "ALE layer for inbound connections",
+                0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
+                Layer::FwpmLayerAleAuthRecvAcceptV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                callouts::ale_layer_accept,
+            ),
             Callout::new(
                 "IPPacketOutbound",
                 "IP packet outbound network layer callout",
