@@ -65,7 +65,7 @@ fn internal_link_search() {
 #[cfg(target_os = "windows")]
 fn main() {
     internal_link_search();
-    println!("cargo:rustc-link-search=native=../wfp_lib/x64/Debug");
+    println!("cargo:rustc-link-search=native=../c_helper/x64/Debug");
 }
 
 #[cfg(target_os = "linux")]

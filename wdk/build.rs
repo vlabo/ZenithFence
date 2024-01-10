@@ -93,8 +93,8 @@ fn main() {
     println!("cargo:rustc-link-search=native=C:/Program Files (x86)/Windows Kits/10/lib/wdf/kmdf/{}/1.15", arch);
 
     // Helper WFP library
-    println!("cargo:rerun-if-changed=../wfp_lib/{}/wfp_lib.lib", arch);
-    println!("cargo:rustc-link-search=native=../wfp_lib/{}", arch);
+    println!("cargo:rerun-if-changed=../c_hlper/{}/c_helper.lib", arch);
+    println!("cargo:rustc-link-search=native=../c_helper/{}", arch);
 }
 
 #[cfg(target_os = "linux")]

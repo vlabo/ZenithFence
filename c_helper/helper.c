@@ -68,7 +68,6 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 		return status;
 	}
 
-	WdfControlFinishInitializing(*device);
 	return STATUS_SUCCESS;
 }
 

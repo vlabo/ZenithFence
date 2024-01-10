@@ -295,7 +295,7 @@ impl WdfObjectAttributes {
 #[link(name = "wmilib", kind = "static")]
 #[link(name = "ntoskrnl", kind = "static")]
 #[link(name = "ndis", kind = "static")]
-#[link(name = "wfp_lib", kind = "static")]
+#[link(name = "c_helper", kind = "static")]
 extern "C" {
     /// The FwpsCalloutUnregisterById0 function unregisters a callout from the filter engine.
     pub(crate) fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
