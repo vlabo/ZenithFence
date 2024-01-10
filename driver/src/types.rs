@@ -75,7 +75,7 @@ pub struct PacketInfo {
 }
 
 impl PacketInfo {
-    pub fn as_connection(&self, action: ConnectionAction) -> Connection {
+    pub fn as_connection(&self, action: ConnectionAction, callout_id: usize) -> Connection {
         Connection {
             protocol: IpProtocol::from(self.protocol),
             local_address: Ipv4Address::from_bytes(&self.local_ip),
@@ -84,6 +84,7 @@ impl PacketInfo {
             remote_port: self.remote_port,
             action,
             packet_queue: None,
+            callout_id,
         }
     }
 

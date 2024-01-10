@@ -5,6 +5,7 @@ use crate::driver::Driver;
 use crate::ffi::FWPS_FILTER2;
 use crate::filter_engine::transaction::Transaction;
 use crate::{dbg, info};
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::{format, vec::Vec};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
@@ -32,9 +33,10 @@ pub mod transaction;
 
 pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
-    filter_engine_handle: HANDLE,
+    handle: HANDLE,
     sublayer_guid: u128,
     committed: bool,
+    callouts: Vec<Box<Callout>>,
 }
 
 impl FilterEngine {
@@ -49,35 +51,43 @@ impl FilterEngine {
             }
         }
         self.device_object = driver.get_device_object();
-        self.filter_engine_handle = filter_engine_handle;
+        self.handle = filter_engine_handle;
         self.sublayer_guid = layer_guid;
         return Ok(());
     }
 
-    pub fn commit(&mut self, mut callouts: Vec<Callout>) -> Result<(), String> {
+    pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String> {
         {
             // Begin write transaction. This is also a lock guard.
-            let mut transaction = match Transaction::begin_write(self) {
+            let mut filter_engine = match Transaction::begin_write(self) {
                 Ok(transaction) => transaction,
                 Err(err) => {
                     return Err(err);
                 }
             };
 
-            if let Err(err) = self.register_sublayer() {
+            if let Err(err) = filter_engine.register_sublayer() {
                 return Err(format!("filter_engine: {}", err));
             }
 
             dbg!("Callouts count: {}", callouts.len());
+            let mut boxed_callouts = Vec::new();
             // Register all callouts
-            for (i, callout) in callouts.iter_mut().enumerate() {
-                callout.index = i as u64;
+            for callout in callouts {
+                let mut callout = Box::new(callout);
+                callout.address = callout.as_ref() as *const Callout as u64;
 
-                if let Err(err) = callout.register_callout(self, catch_all_callout) {
+                if let Err(err) = callout.register_callout(
+                    filter_engine.handle,
+                    filter_engine.device_object,
+                    catch_all_callout,
+                ) {
                     // This will destroy the callout structs.
                     return Err(err);
                 }
-                if let Err(err) = callout.register_filter(self) {
+                if let Err(err) =
+                    callout.register_filter(filter_engine.handle, filter_engine.sublayer_guid)
+                {
                     // This will destroy the callout structs.
                     return Err(err);
                 }
@@ -86,10 +96,11 @@ impl FilterEngine {
                     callout.name,
                     callout.filter_id
                 );
+                boxed_callouts.push(callout)
             }
-            unsafe { CALLOUTS.replace(callouts) };
+            filter_engine.callouts.append(&mut boxed_callouts);
 
-            if let Err(err) = transaction.commit() {
+            if let Err(err) = filter_engine.commit() {
                 return Err(err);
             }
         }
@@ -99,69 +110,66 @@ impl FilterEngine {
         return Ok(());
     }
 
-    pub(crate) fn reset_callout_filter(&self, callout_index: usize) -> Result<(), String> {
+    pub(crate) fn reset_callout_filter(&mut self, callout_id: usize) -> Result<(), String> {
         // Begin write transaction. This is also a lock guard.
-        let mut transaction = match Transaction::begin_write(self) {
+        let mut filter_engine = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,
             Err(err) => {
                 return Err(err);
             }
         };
         unsafe {
-            if let Some(callouts) = CALLOUTS.as_mut() {
-                if let Some(callout) = callouts.get_mut(callout_index) {
-                    if callout.filter_id != 0 {
-                        // Remove old filter.
-                        if let Err(err) =
-                            ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
-                        {
-                            return Err(format!("filter_engine: {}", err));
-                        }
-                        callout.filter_id = 0;
-                    }
-                    // Create new filter.
-                    if let Err(err) = callout.register_filter(self) {
+            let callout = callout_id as *mut Callout;
+            if let Some(callout) = callout.as_mut() {
+                if callout.filter_id != 0 {
+                    // Remove old filter.
+                    if let Err(err) =
+                        ffi::unregister_filter(filter_engine.handle, callout.filter_id)
+                    {
                         return Err(format!("filter_engine: {}", err));
                     }
+                    callout.filter_id = 0;
+                }
+                // Create new filter.
+                if let Err(err) =
+                    callout.register_filter(filter_engine.handle, filter_engine.sublayer_guid)
+                {
+                    return Err(format!("filter_engine: {}", err));
                 }
             }
         }
         // Commit transaction.
-        if let Err(err) = transaction.commit() {
+        if let Err(err) = filter_engine.commit() {
             return Err(err);
         }
         return Ok(());
     }
 
-    pub fn reset_all_filters(&self) -> Result<(), String> {
+    pub fn reset_all_filters(&mut self) -> Result<(), String> {
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
-        let mut transaction = match Transaction::begin_write(self) {
+        let mut filter_engine = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,
             Err(err) => {
                 return Err(err);
             }
         };
-        unsafe {
-            if let Some(callouts) = CALLOUTS.as_mut() {
-                for callout in callouts {
-                    if callout.filter_id != 0 {
-                        // Remove old filter.
-                        if let Err(err) =
-                            ffi::unregister_filter(self.filter_engine_handle, callout.filter_id)
-                        {
-                            return Err(format!("filter_engine: {}", err));
-                        }
-                        callout.filter_id = 0;
-                    }
-                    // Create new filter.
-                    if let Err(err) = callout.register_filter(self) {
-                        return Err(format!("filter_engine: {}", err));
-                    }
+        let filter_engine_handle = filter_engine.handle;
+        let sublayer_guid = filter_engine.sublayer_guid;
+        for callout in &mut filter_engine.callouts {
+            if callout.filter_id != 0 {
+                // Remove old filter.
+                if let Err(err) = ffi::unregister_filter(filter_engine_handle, callout.filter_id) {
+                    return Err(format!("filter_engine: {}", err));
                 }
+                callout.filter_id = 0;
+            }
+            // Create new filter.
+            if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
+                return Err(format!("filter_engine: {}", err));
             }
         }
         // Commit transaction.
-        if let Err(err) = transaction.commit() {
+        if let Err(err) = filter_engine.commit() {
             return Err(err);
         }
         return Ok(());
@@ -169,7 +177,7 @@ impl FilterEngine {
 
     fn register_sublayer(&self) -> Result<(), String> {
         let result = ffi::register_sublayer(
-            self.filter_engine_handle,
+            self.handle,
             "PortmasterSublayer",
             "The Portmaster sublayer holds all it's filters.",
             self.sublayer_guid,
@@ -185,40 +193,30 @@ impl FilterEngine {
 impl Drop for FilterEngine {
     fn drop(&mut self) {
         dbg!("Unregistering callouts");
-        unsafe {
-            if let Some(callouts) = CALLOUTS.take() {
-                for ele in callouts {
-                    if ele.registered {
-                        if let Err(code) = ffi::unregister_callout(ele.id) {
-                            dbg!("failed to unregister callout: {}", code);
-                        }
-                        if ele.filter_id != 0 {
-                            if let Err(code) =
-                                ffi::unregister_filter(self.filter_engine_handle, ele.filter_id)
-                            {
-                                dbg!("failed to unregister filter: {}", code)
-                            }
-                        }
+        for callout in &self.callouts {
+            if callout.registered {
+                if let Err(code) = ffi::unregister_callout(callout.id) {
+                    dbg!("failed to unregister callout: {}", code);
+                }
+                if callout.filter_id != 0 {
+                    if let Err(code) = ffi::unregister_filter(self.handle, callout.filter_id) {
+                        dbg!("failed to unregister filter: {}", code)
                     }
                 }
             }
         }
 
         if self.committed {
-            if let Err(code) =
-                ffi::unregister_sublayer(self.filter_engine_handle, self.sublayer_guid)
-            {
+            if let Err(code) = ffi::unregister_sublayer(self.handle, self.sublayer_guid) {
                 dbg!("Failed to unregister sublayer: {}", code);
             }
         }
 
-        if self.filter_engine_handle != INVALID_HANDLE_VALUE {
-            _ = ffi::filter_engine_close(self.filter_engine_handle);
+        if self.handle != INVALID_HANDLE_VALUE {
+            _ = ffi::filter_engine_close(self.handle);
         }
     }
 }
-
-static mut CALLOUTS: Option<Vec<Callout>> = None;
 
 #[no_mangle]
 unsafe extern "C" fn catch_all_callout(
@@ -233,23 +231,26 @@ unsafe extern "C" fn catch_all_callout(
     let _ = context; // Unused
 
     let filter = &(*filter);
-    if let Some(callouts) = CALLOUTS.as_ref() {
-        if let Some(callout) = callouts.get(filter.context as usize) {
-            let array = core::slice::from_raw_parts(
-                (*fixed_values).incoming_value_array,
-                (*fixed_values).value_count as usize,
-            );
-            let data = CalloutData {
-                callout_index: filter.context as usize,
-                layer: callout.layer,
-                values: array,
-                metadata: meta_values,
-                classify_out,
-                layer_data,
-            };
-            if let Some(device_object) = callout.device_object.as_mut() {
-                (callout.callout_fn)(data, device_object);
-            }
+    // Filter context is the address of the callout.
+    let callout = filter.context as *mut Callout;
+
+    if let Some(callout) = callout.as_ref() {
+        // Setup callout data.
+        let array = core::slice::from_raw_parts(
+            (*fixed_values).incoming_value_array,
+            (*fixed_values).value_count as usize,
+        );
+        let data = CalloutData {
+            callout_id: filter.context as usize,
+            layer: callout.layer,
+            values: array,
+            metadata: meta_values,
+            classify_out,
+            layer_data,
+        };
+        // Call the defined function.
+        if let Some(device_object) = callout.device_object.as_mut() {
+            (callout.callout_fn)(data, device_object);
         }
     }
 }

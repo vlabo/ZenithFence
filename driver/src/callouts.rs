@@ -116,7 +116,10 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         }
 
         // Save the connection.
-        let mut conn = packet.as_connection(ConnectionAction::Verdict(Verdict::Undecided));
+        let mut conn = packet.as_connection(
+            ConnectionAction::Verdict(Verdict::Undecided),
+            data.get_callout_id(),
+        );
         conn.packet_queue = Some(promise);
         device.connection_cache.add_connection(conn);
 
@@ -220,7 +223,10 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         }
 
         // Save the connection.
-        let mut conn = packet.as_connection(ConnectionAction::Verdict(Verdict::Undecided));
+        let mut conn = packet.as_connection(
+            ConnectionAction::Verdict(Verdict::Undecided),
+            data.get_callout_id(),
+        );
         conn.packet_queue = Some(promise);
         device.connection_cache.add_connection(conn);
 

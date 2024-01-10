@@ -1,11 +1,11 @@
 use super::{callout_data::CalloutData, ffi, layer::Layer};
-use crate::{ffi::FwpsCalloutClassifyFn, filter_engine::FilterEngine};
+use crate::ffi::FwpsCalloutClassifyFn;
 use alloc::{borrow::ToOwned, format, string::String};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 pub struct Callout {
     pub(crate) id: u32,
-    pub(super) index: u64,
+    pub(super) address: u64,
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) guid: u128,
@@ -28,7 +28,7 @@ impl Callout {
     ) -> Self {
         Self {
             id: 0,
-            index: 0,
+            address: 0,
             name: name.to_owned(),
             description: description.to_owned(),
             guid,
@@ -41,16 +41,20 @@ impl Callout {
         }
     }
 
-    pub fn register_filter(&mut self, filter_engine: &FilterEngine) -> Result<(), String> {
+    pub fn register_filter(
+        &mut self,
+        filter_engine_handle: isize,
+        sublayer_guid: u128,
+    ) -> Result<(), String> {
         match ffi::register_filter(
-            filter_engine.filter_engine_handle,
-            filter_engine.sublayer_guid,
+            filter_engine_handle,
+            sublayer_guid,
             &format!("{}-filter", self.name),
             &self.description,
             self.guid,
             self.layer,
             self.action,
-            self.index,
+            self.address, // The address of the callout is passed as context.
         ) {
             Ok(id) => {
                 self.filter_id = id;
@@ -65,13 +69,14 @@ impl Callout {
 
     pub(crate) fn register_callout(
         &mut self,
-        filter_engine: &FilterEngine,
+        filter_engine_handle: isize,
+        device_object: *mut DEVICE_OBJECT,
         callout_fn: FwpsCalloutClassifyFn,
     ) -> Result<(), String> {
-        self.device_object = filter_engine.device_object;
+        self.device_object = device_object;
         match ffi::register_callout(
             self.device_object,
-            filter_engine.filter_engine_handle,
+            filter_engine_handle,
             &format!("{}-callout", self.name),
             &self.description,
             self.guid,

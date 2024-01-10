@@ -37,6 +37,7 @@ pub struct Connection {
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
     pub(crate) packet_queue: Option<ClassifyDefer>,
+    pub(crate) callout_id: usize,
 }
 
 impl Connection {
@@ -150,7 +151,12 @@ impl ConnectionCache {
             for conn in conns {
                 if conn.remote_equals(&key) {
                     conn.action = action;
-                    return conn.packet_queue.take();
+                    let classify_defer = conn.packet_queue.take();
+                    if classify_defer.is_some() {
+                        return classify_defer;
+                    } else {
+                        return Some(ClassifyDefer::Reauthorization(conn.callout_id, None));
+                    }
                 }
             }
         }

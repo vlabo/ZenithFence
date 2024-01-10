@@ -27,7 +27,7 @@ pub enum ClassifyDefer {
 impl ClassifyDefer {
     pub fn complete(
         self,
-        filter_engine: &FilterEngine,
+        filter_engine: &mut FilterEngine,
     ) -> Result<Option<TransportPacketList>, String> {
         unsafe {
             match self {
@@ -35,8 +35,8 @@ impl ClassifyDefer {
                     FwpsCompleteOperation0(context, core::ptr::null_mut());
                     return Ok(packet_list);
                 }
-                ClassifyDefer::Reauthorization(callout_index, packet_list) => {
-                    filter_engine.reset_callout_filter(callout_index)?;
+                ClassifyDefer::Reauthorization(callout_id, packet_list) => {
+                    filter_engine.reset_callout_filter(callout_id)?;
                     return Ok(packet_list);
                 }
             }
@@ -55,7 +55,7 @@ impl ClassifyDefer {
 
 pub struct CalloutData<'a> {
     pub layer: Layer,
-    pub(crate) callout_index: usize,
+    pub(crate) callout_id: usize,
     pub(crate) values: &'a [Value],
     pub(crate) metadata: *const FwpsIncomingMetadataValues,
     pub(crate) classify_out: *mut ClassifyOut,
@@ -131,7 +131,7 @@ impl<'a> CalloutData<'a> {
     }
 
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
-        return ClassifyDefer::Reauthorization(self.callout_index, packet_list);
+        return ClassifyDefer::Reauthorization(self.callout_id, packet_list);
     }
 
     pub fn action_permit(&mut self) {
@@ -173,5 +173,9 @@ impl<'a> CalloutData<'a> {
             (*self.classify_out).action_permit();
             (*self.classify_out).set_absorb();
         }
+    }
+
+    pub fn get_callout_id(&self) -> usize {
+        return self.callout_id;
     }
 }

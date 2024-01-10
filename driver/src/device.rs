@@ -130,7 +130,7 @@ impl Device {
         }
     }
 
-    /// Called when handle. Read is called from userspace.
+    /// Called when handle. Read is called from user-space.
     pub fn read(&mut self, read_request: &mut ReadRequest) {
         if let Some(data) = self.read_leftover.load() {
             // There are leftovers from previous request.
@@ -178,7 +178,7 @@ impl Device {
             }
         };
 
-        let mut completion_promise = None;
+        let mut classify_defer = None;
 
         match command {
             Command::Shutdown() => {
@@ -195,9 +195,8 @@ impl Device {
                         dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        // let conn = packet.as_connection(ConnectionAction::Verdict(verdict));
                         let key = packet.get_key();
-                        completion_promise = self
+                        classify_defer = self
                             .connection_cache
                             .update_connection(key, ConnectionAction::Verdict(verdict));
                     };
@@ -216,13 +215,13 @@ impl Device {
                     dbg!(self.logger, "packet: {:?}", packet);
                     dbg!(
                         self.logger,
-                        "redirect: {:?} {}",
+                        "Redirect: {:?} {}",
                         remote_address,
                         remote_port
                     );
 
                     let key = packet.get_key();
-                    completion_promise = self.connection_cache.update_connection(
+                    classify_defer = self.connection_cache.update_connection(
                         key,
                         ConnectionAction::RedirectIP {
                             redirect_address: Ipv4Address::from_bytes(&remote_address),
@@ -244,6 +243,7 @@ impl Device {
                 redirect_address,
                 redirect_port,
             } => {
+                // Build the new action.
                 let action = match FromPrimitive::from_u8(verdict).unwrap() {
                     Verdict::Redirect => ConnectionAction::RedirectIP {
                         redirect_address: Ipv4Address::from_bytes(&redirect_address),
@@ -251,7 +251,8 @@ impl Device {
                     },
                     verdict => ConnectionAction::Verdict(verdict),
                 };
-                self.connection_cache.update_connection(
+                // Update with new action.
+                classify_defer = self.connection_cache.update_connection(
                     Key {
                         protocol: IpProtocol::from(protocol),
                         local_address: Ipv4Address::from_bytes(&local_address),
@@ -261,10 +262,6 @@ impl Device {
                     },
                     action,
                 );
-                // This will trigger re-evaluation of all connections.
-                if let Err(err) = self.filter_engine.reset_all_filters() {
-                    err!(self.logger, "failed to reset filters: {}", err);
-                }
             }
             Command::ClearCache() => {
                 wdk::dbg!("ClearCache command");
@@ -285,13 +282,14 @@ impl Device {
         }
 
         // Check if connection was pended. If yes call complete to trigger the callout again.
-        if let Some(promise) = completion_promise {
-            match promise.complete(&self.filter_engine) {
+        if let Some(classify_defer) = classify_defer {
+            match classify_defer.complete(&mut self.filter_engine) {
                 Ok(packet_list) => {
                     if let Some(packet_list) = packet_list {
+                        // Inject back all packets collected while classification was pending.
                         let result = self.injector.inject_packet_list_transport(packet_list);
                         if let Err(err) = result {
-                            err!(self.logger, "failed to inject packet: {}", err);
+                            err!(self.logger, "failed to inject packets: {}", err);
                         }
                     }
                 }
