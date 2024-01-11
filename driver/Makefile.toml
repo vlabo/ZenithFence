@@ -7,27 +7,12 @@ BUILD_FLAGS = "--release"
 
 [tasks.build-driver]
 script = [
-    "cargo build %BUILD_FLAGS%",
+    "cargo build $BUILD_FLAGS",
 ]
 
-
-[tasks.rename]
-ignore_errors = true
+[tasks.upload]
+dependencies = ["build"]
 script = [
-    "cd %TARGET_PATH%",
-		"del driver.sys",
-    "rename driver.dll driver.sys",
+    "scp $TARGET_PATH/driver.lib windows:'C:/Dev/'",
 ]
 
-[tasks.sign]
-dependencies = ["build-driver", "clippy", "rename"]
-script = [
-    # Load the Visual Studio Developer environment
-    "call \"%ProgramFiles%\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat\"",
-
-    # Create a self signed certificate (only if not already done)
-    # "if not exist DriverCertificate.cer ( makecert -r -pe -ss PrivateCertStore -n CN=DriverCertificate DriverCertificate.cer ) else ( echo Certificate already exists. )",
-
-    # Sign the driver
-    "signtool sign /a /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com %TARGET_PATH%/driver.sys"
-]

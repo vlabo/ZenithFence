@@ -11,14 +11,11 @@ __Prerequesites:__
 
 - Visual Studio 2022
     - Install C++ and Windows 11 SDK (22H2) components
-- Windows 11 WDK (22H2) (https://docs.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
-    - Install Visual Studio extension
+    - Add `link.exe` and `signtool` in the PATH
 - Rust
     - https://www.rust-lang.org/tools/install
-- Cargo make
+- Cargo make(optional)
     - https://github.com/sagiegurari/cargo-make
-
-
 
 __Setup Test Signing:__
 
@@ -47,8 +44,15 @@ __Build driver:__
 
 ```
 cd driver
-cargo make sign
+cargo build
 ```
+> Build also works on linux
+
+__Link and sign:__
+On a windows machine copy `driver.lib` form the project target directory (`driver/target/x86_64-pc-windows-msvc/debug/driver.lib`) in the same folder as `link.bat`.
+Run `link.bat`.
+
+`driver.sys` should appear in the folder. Load and use the driver.
 
 ### Test
 - Install go

@@ -1,29 +1,3 @@
 [build]
 target = "x86_64-pc-windows-msvc"
-
-rustflags = [
-    "-C", "panic=abort",
-
-    # Pre Link Args
-    "-C", "link-arg=/NOLOGO",
-    "-C", "link-arg=/NXCOMPAT",
-    "-C", "link-arg=/NODEFAULTLIB",
-    "-C", "link-arg=/SUBSYSTEM:NATIVE",
-    "-C", "link-arg=/DRIVER",
-    "-C", "link-arg=/DYNAMICBASE",
-    "-C", "link-arg=/MANIFEST:NO",
-    "-C", "link-arg=/PDBALTPATH:none",
-    "-C", "link-arg=/MACHINE:X64",
-
-    # Post Link Args
-    "-C", "link-arg=/OPT:REF,ICF",
-    "-C", "link-arg=/MACHINE:X64",
-    "-C", "link-arg=/SUBSYSTEM:NATIVE,6.01",
-    "-C", "link-arg=/ENTRY:FxDriverEntry",
-    "-C", "link-arg=/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE",
-    "-C", "link-arg=/MERGE:.rustc=.data",
-    "-C", "link-arg=/INTEGRITYCHECK",
-]
-
-# [target.x86_64-pc-windows-msvc]
-# linker = "lld-link"
+rustflags = ["-C", "panic=abort"]

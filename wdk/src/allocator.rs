@@ -13,7 +13,7 @@ enum PoolType {
     // Paged = 1,
 }
 
-#[link(name = "ntoskrnl")]
+#[link(name = "NtosKrnl")]
 extern "system" {
     fn ExAllocatePoolWithTag(pool_type: PoolType, number_of_bytes: usize, tag: u32) -> *mut u64;
     fn ExFreePoolWithTag(pool: u64, tag: u32);

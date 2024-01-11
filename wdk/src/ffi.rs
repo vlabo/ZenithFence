@@ -293,7 +293,7 @@ impl WdfObjectAttributes {
 #[link(name = "uuid", kind = "static")]
 #[link(name = "wdmsec", kind = "static")]
 #[link(name = "wmilib", kind = "static")]
-#[link(name = "ntoskrnl", kind = "static")]
+#[link(name = "NtosKrnl", kind = "static")]
 #[link(name = "ndis", kind = "static")]
 #[link(name = "c_helper", kind = "static")]
 extern "C" {
