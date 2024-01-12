@@ -11,7 +11,6 @@ mod device;
 mod entry;
 mod id_cache;
 pub mod logger;
-mod null_allocator;
 mod protocol;
 mod types;
 

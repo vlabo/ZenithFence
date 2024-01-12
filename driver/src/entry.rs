@@ -1,5 +1,4 @@
 use crate::device;
-use crate::null_allocator::NullAllocator;
 use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
@@ -59,18 +58,15 @@ pub extern "system" fn DriverEntry(
 
 // device_cleanup cleanup function is called when the current device object will be removed.
 extern "system" fn device_cleanup(device: HANDLE) {
-    let device_context =
-        interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
-            &DRIVER_CONFIG
-        });
+    let device = interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
+        &DRIVER_CONFIG
+    });
 
     unsafe {
         // Call drop without freeing memory. Memory is manged by the kernel.
-        if !device_context.is_null() {
-            let mut device =
-                allocator_api2::boxed::Box::from_raw_in(device_context, NullAllocator {});
+        if let Some(device) = device.as_mut() {
             device.cleanup();
-            drop(device);
+            core::ptr::drop_in_place(device);
         }
     }
 }
