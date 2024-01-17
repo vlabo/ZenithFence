@@ -12,8 +12,8 @@ static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
 
 // DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
 // Name should not be changed
-#[no_mangle]
-pub extern "system" fn DriverEntry(
+#[export_name = "DriverEntry"]
+pub extern "system" fn driver_entry(
     driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
     registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
 ) -> windows_sys::Win32::Foundation::NTSTATUS {

@@ -1,7 +1,8 @@
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
-use wdk::rw_spin_lock::RwSpinLock;
 
 pub const LOG_LEVEL: u8 = Severity::Debug as u8;
 
@@ -22,33 +23,62 @@ pub(crate) struct LogLine {
     line: String,
 }
 
+struct Synced {
+    value: Option<LogLine>,
+    processing: AtomicBool,
+}
+
 pub(crate) struct Logger {
-    log_lines: Option<Vec<LogLine>>,
-    lock: RwSpinLock,
+    log_lines: [Synced; 1024],
+    start_index: usize,
+    end_index: AtomicUsize,
 }
 
 impl Logger {
     pub fn init(&mut self) {
-        self.log_lines = Some(Vec::new());
+        for line in &mut self.log_lines {
+            line.value = None;
+            line.processing = AtomicBool::default();
+        }
     }
 
-    pub fn add_line(&mut self, severity: Severity, line: String) {
-        let _guard = self.lock.write_lock();
-        if let Some(log_lines) = &mut self.log_lines {
-            log_lines.push(LogLine {
-                severity: severity as u8,
-                line,
-            });
+    pub fn add_line(&mut self, severity: Severity, line_str: String) {
+        let mut index = self.end_index.fetch_add(1, Ordering::Acquire);
+        index %= self.log_lines.len();
+        let line = &mut self.log_lines[index];
+        let result =
+            line.processing
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed);
+        if result.is_err() {
+            return;
         }
+
+        line.value = Some(LogLine {
+            severity: severity as u8,
+            line: line_str,
+        });
+        line.processing.store(false, Ordering::Release);
     }
 
     pub fn flush(&mut self) -> Vec<LogLine> {
-        let lines;
-        {
-            let _guard = self.lock.write_lock();
-            lines = self.log_lines.replace(Vec::new());
+        let mut vec = Vec::new();
+        loop {
+            if self.end_index.load(Ordering::Acquire) <= self.start_index {
+                break;
+            }
+            let index = self.start_index % self.log_lines.len();
+            let line = &mut self.log_lines[index];
+            if line.processing.load(Ordering::SeqCst) {
+                break;
+            }
+
+            if let Some(line) = line.value.take() {
+                vec.push(line);
+            }
+
+            self.start_index = self.start_index.wrapping_add(1);
         }
-        lines.unwrap()
+        vec
     }
 }
 
