@@ -67,7 +67,8 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
-
+	// The system will not send I/O requests or Windows Management Instrumentation (WMI) requests to a control device object unless the driver has called WdfControlFinishInitializing.
+	WdfControlFinishInitializing(*device);
 	return STATUS_SUCCESS;
 }
 

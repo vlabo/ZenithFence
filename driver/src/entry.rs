@@ -1,4 +1,6 @@
+use crate::common::ControlCode;
 use crate::device;
+use num_traits::FromPrimitive;
 use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
@@ -121,11 +123,22 @@ unsafe extern "system" fn device_control(
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
 
-    // TODO: Reading the control code does not work.
-    // if control_request.get_control_code() == crate::common::IOCTL_VERSION {
-    info!("Reading version");
-    control_request.write(&VERSION);
-    // }
+    let Some(control_code): Option<ControlCode> =
+        FromPrimitive::from_u32(control_request.get_control_code())
+    else {
+        wdk::info!("Unknown IOCTL code: {}", control_request.get_control_code());
+        control_request.not_implemented();
+        return control_request.get_status();
+    };
+
+    wdk::info!("IOCTL: {}", control_code);
+
+    match control_code {
+        ControlCode::Version => {
+            control_request.write(&VERSION);
+        }
+    };
+
     control_request.complete();
     control_request.get_status()
 }

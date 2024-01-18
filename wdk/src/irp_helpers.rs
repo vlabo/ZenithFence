@@ -1,9 +1,12 @@
 use windows_sys::{
     Wdk::{
-        Foundation::IRP, Storage::FileSystem::IO_NO_INCREMENT,
+        Foundation::{IO_STACK_LOCATION_0_4, IRP},
+        Storage::FileSystem::IO_NO_INCREMENT,
         System::SystemServices::IofCompleteRequest,
     },
-    Win32::Foundation::{NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS, STATUS_TIMEOUT},
+    Win32::Foundation::{
+        NTSTATUS, STATUS_END_OF_FILE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_TIMEOUT,
+    },
 };
 
 pub struct ReadRequest<'a> {
@@ -114,23 +117,38 @@ pub struct DeviceControlRequest<'a> {
     control_code: u32,
 }
 
+// Windows-rs version of the struct is incorrect (18.01.2024). Use the official version when fixed.
+// For future reference: https://github.com/microsoft/windows-rs/issues/2805
+#[repr(C)]
+struct DeviceIOControlParams {
+    output_buffer_length: u32,
+    _padding: u32,
+    input_buffer_length: u32,
+    _padding2: u32,
+    io_control_code: u32,
+    _padding3: u32,
+}
+
 impl DeviceControlRequest<'_> {
     pub fn new(irp: &mut IRP) -> DeviceControlRequest {
         unsafe {
             let irp_sp = irp.Tail.Overlay.Anonymous2.Anonymous.CurrentStackLocation;
-            let device_io = (*irp_sp).Parameters.DeviceIoControl;
-            let control_code = device_io.IoControlCode; // This is always zero. Why?
+            // Use the struct directly when replaced with proper version.
+            let device_io: DeviceIOControlParams =
+                core::mem::transmute::<IO_STACK_LOCATION_0_4, DeviceIOControlParams>(
+                    (*irp_sp).Parameters.DeviceIoControl,
+                );
 
             let system_buffer = irp.AssociatedIrp.SystemBuffer;
             let buffer = core::slice::from_raw_parts_mut(
                 system_buffer as *mut u8,
-                device_io.OutputBufferLength as usize,
+                device_io.output_buffer_length as usize,
             );
             DeviceControlRequest {
                 irp,
                 buffer,
                 fill_index: 0,
-                control_code,
+                control_code: device_io.io_control_code,
             }
         }
     }
@@ -157,6 +175,11 @@ impl DeviceControlRequest<'_> {
     pub fn complete(&mut self) {
         self.irp.IoStatus.Information = self.buffer.len();
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
+    }
+
+    pub fn not_implemented(&mut self) {
+        self.irp.IoStatus.Anonymous.Status = STATUS_NOT_IMPLEMENTED;
         unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }
 

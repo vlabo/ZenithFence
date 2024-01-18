@@ -13,7 +13,7 @@ pub struct Driver {
 }
 unsafe impl Sync for Driver {}
 
-pub type UnloadFnType = unsafe extern "system" fn(driverobject: *const DRIVER_OBJECT);
+pub type UnloadFnType = unsafe extern "system" fn(driver_object: *const DRIVER_OBJECT);
 pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
 
 impl Driver {
