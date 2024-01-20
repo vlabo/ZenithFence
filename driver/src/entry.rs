@@ -30,7 +30,7 @@ pub extern "system" fn driver_entry(
     let mut driver = match interface::init_driver_object(
         driver_object,
         registry_path,
-        "PortmasterTest",
+        "PortmasterKext",
         object_attributes,
     ) {
         Ok(driver) => driver,

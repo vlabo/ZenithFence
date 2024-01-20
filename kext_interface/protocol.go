@@ -5,9 +5,7 @@ package kext_interface
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
-	"log"
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
@@ -116,13 +114,13 @@ func BuildGetLogs() Command {
 	return Command{GetLogs: &[]struct{}{}}
 }
 
-func WriteCommand(writer io.Writer, command Command) {
+func WriteCommand(writer io.Writer, command Command) error {
 	data, err := cbor.Marshal(&command)
 	if err != nil {
-		log.Printf("failed to marshal command: %s\n", err)
-		return
+		return err
 	}
-	writer.Write(data)
+	_, err = writer.Write(data)
+	return err
 }
 
 func ReadInfo(reader io.Reader) (*Info, error) {
@@ -143,10 +141,6 @@ func ReadInfo(reader io.Reader) (*Info, error) {
 
 func ReadVersion(file *KextFile) ([]uint8, error) {
 	data := make([]uint8, 4)
-	fmt.Printf("Device control code %d\n", IOCTL_VERSION)
-	bs := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bs, IOCTL_VERSION)
-	fmt.Println(bs)
 	_, err := file.deviceIOControl(IOCTL_VERSION, nil, data)
 
 	if err != nil {
