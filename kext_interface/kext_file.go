@@ -8,14 +8,47 @@ import (
 )
 
 type KextFile struct {
-	handle windows.Handle
+	handle     windows.Handle
+	buffer     []byte
+	read_slice []byte
 }
 
 func (f *KextFile) Read(buffer []byte) (int, error) {
+	if f.read_slice == nil || len(f.read_slice) == 0 {
+		err := f.refill_read_buffer()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	if len(f.read_slice) >= len(buffer) {
+		// Wrote all requested bytes.
+		copy(buffer, f.read_slice[0:len(buffer)])
+		f.read_slice = f.read_slice[len(buffer):]
+	} else {
+		// Write all available bytes and read again.
+		copy(buffer[0:len(f.read_slice)], f.read_slice)
+		copiedBytes := len(f.read_slice)
+		f.read_slice = nil
+		_, err := f.Read(buffer[copiedBytes:])
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return len(buffer), nil
+}
+
+func (f *KextFile) refill_read_buffer() error {
 	var count uint32 = 0
 	overlapped := &windows.Overlapped{}
-	err := windows.ReadFile(f.handle, buffer, &count, overlapped)
-	return int(count), err
+	err := windows.ReadFile(f.handle, f.buffer[:], &count, overlapped)
+	if err != nil {
+		return err
+	}
+	f.read_slice = f.buffer[0:count]
+
+	return nil
 }
 
 func (f *KextFile) Write(buffer []byte) (int, error) {
@@ -58,5 +91,4 @@ func (f *KextFile) deviceIOControl(code uint32, inData []byte, outData []byte) (
 	}
 
 	return overlapped, nil
-
 }

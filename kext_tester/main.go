@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
-
-	// "net"
 	"os"
+	"time"
 
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
 )
@@ -32,7 +30,7 @@ const (
 
 func main() {
 	driverName := "PortmasterTest"
-	sysPath := "C:\\Dev\\portmaster-kext\\driver\\target\\x86_64-pc-windows-msvc\\debug\\driver.sys"
+	sysPath := "C:\\Dev\\driver.sys"
 	kext, err := kext_interface.CreateKextService(driverName, sysPath)
 	if err != nil {
 		log.Panicf("failed to create driver service: %s", err)
@@ -45,7 +43,7 @@ func main() {
 	}
 	defer kext.Stop(true)
 
-	file, err := kext.OpenFile()
+	file, err := kext.OpenFile(1024)
 	if err != nil {
 		log.Panicf("failed to open driver file: %s", err)
 	}
@@ -58,36 +56,48 @@ func main() {
 		log.Printf("Error reading version: %s\n", err)
 	}
 
-	infoChan := make(chan *kext_interface.Info)
-	endChan := make(chan struct{})
+	ticker := time.NewTicker(1 * time.Second)
 	go func() {
-		kext_interface.ReadInfo(file, infoChan)
+		for {
+			select {
+			case <-ticker.C:
+				kext_interface.WriteCommand(file, kext_interface.BuildGetLogs())
+			}
+		}
 	}()
 
 	go func() {
 		for true {
-			select {
-			case info := <-infoChan:
+			info, err := kext_interface.ReadInfo(file)
+			if err != nil {
+				log.Printf("error reading from file %s", err)
+				return
+			}
+			switch {
+			case info.Connection != nil:
 				{
-					switch {
-					case info.Connection != nil:
-						{
-							connection := info.Connection
-							log.Printf("info: %s\n", *connection.ProcessPath)
-							if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{1, 1, 1, 1})) {
-								kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.Redirect{Id: connection.Id, RemoteAddress: []uint8{9, 9, 9, 9}, RemotePort: 53}))
-							} else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
-								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
-							} else {
-								kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
-							}
-
-						}
+					connection := info.Connection
+					log.Printf("info: %+v\n", connection)
+					if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{9, 9, 9, 9})) {
+						kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.Redirect{Id: connection.Id, RemoteAddress: []uint8{1, 1, 1, 1}, RemotePort: 53}))
+					} else
+					// } else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
+					// 	kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
+					// } else {
+					if connection.Direction == 1 {
+						kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
+					} else {
+						kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
 					}
+					// }
 
 				}
-			case <-endChan:
-				return
+			case info.LogLines != nil:
+				{
+					for _, logline := range *info.LogLines {
+						log.Println(logline.Line)
+					}
+				}
 			}
 		}
 	}()
@@ -95,10 +105,6 @@ func main() {
 	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
-	// file.Close()
 	kext_interface.WriteCommand(file, kext_interface.BuildShutdown())
-	endChan <- struct{}{}
-	// close(commandChan)
-	// file.Write(kext_interface.GetShutdownRequest())
-	// file.Write(kext_interface.GetVerdirctResponse(1, 2))
+	file.Close()
 }

@@ -5,6 +5,7 @@ package kext_interface
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 
@@ -124,101 +125,28 @@ func WriteCommand(writer io.Writer, command Command) {
 	writer.Write(data)
 }
 
-func ReadInfo(reader io.Reader, dataChan chan *Info) {
-	var readBuffer []byte = make([]byte, 500)
-	var buffer []byte = nil
-	var structBuf []byte = nil
-	var structSize uint32 = 0
-	var fillIndex int = 0
-
-	for true {
-		if buffer == nil {
-			// Read data from the file
-			count, err := reader.Read(readBuffer)
-			if err != nil {
-				log.Printf("failed to read from driver: %s\n", err)
-				return
-			}
-
-			if count == 0 {
-				log.Printf("failed to read from driver: empty buffer\n")
-				return
-			}
-
-			// log.Printf("received %d bytes", count)
-
-			// Slice only with the actual data
-			buffer = readBuffer[0:count]
-		}
-
-		// Extract data
-		if structBuf == nil {
-			// Begging of a struct
-			// The first 4 bytes contain the size of the struct (it may be bigger then the read buffer).
-			structSize = binary.LittleEndian.Uint32(buffer[0:4])
-			buffer = buffer[4:]
-			structBuf = make([]byte, structSize)
-
-			if len(buffer) >= int(structSize) {
-				// The read buffer contains the whole struct
-				copy(structBuf, buffer[0:structSize])
-				info, err := ParseInfo(structBuf)
-				if err == nil {
-					dataChan <- info
-				} else {
-					log.Printf("failed to parse info: %s", err)
-				}
-				structBuf = nil
-				fillIndex = 0
-
-				// Check if there is more data at the end
-				if len(buffer) == int(structSize) {
-					buffer = nil
-				} else {
-					buffer = buffer[structSize:]
-				}
-			} else {
-				// The read buffer is not big enough for the whole struct.
-				// copy the data and read again.
-				copy(structBuf, buffer)
-				fillIndex += len(buffer)
-				buffer = nil
-			}
-		} else {
-			// Filling the next part of the struct.
-			if int(structSize)-fillIndex > len(buffer) {
-				// There is more data, copy and read again.
-				copy(structBuf[fillIndex:], buffer)
-				fillIndex += len(buffer)
-				buffer = nil
-			} else {
-				// This is the last part of the struct.
-				size := int(structSize) - fillIndex
-				copy(structBuf[fillIndex:], buffer[0:size])
-				info, err := ParseInfo(structBuf)
-				if err == nil {
-					dataChan <- info
-				} else {
-					log.Printf("failed to parse info: %s", err)
-				}
-				structBuf = nil
-				fillIndex = 0
-
-				// Check if there is more data at the end
-				if len(buffer) == size {
-					buffer = nil
-				} else {
-					buffer = buffer[size:]
-				}
-			}
-		}
-
+func ReadInfo(reader io.Reader) (*Info, error) {
+	var sizeBuffer [4]byte
+	_, err := reader.Read(sizeBuffer[:])
+	if err != nil {
+		return nil, err
 	}
-
+	structSize := binary.LittleEndian.Uint32(sizeBuffer[:])
+	structBuffer := make([]byte, structSize)
+	_, err = reader.Read(structBuffer)
+	if err != nil {
+		return nil, err
+	}
+	info, err := ParseInfo(structBuffer)
+	return info, err
 }
 
 func ReadVersion(file *KextFile) ([]uint8, error) {
 	data := make([]uint8, 4)
+	fmt.Printf("Device control code %d\n", IOCTL_VERSION)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, IOCTL_VERSION)
+	fmt.Println(bs)
 	_, err := file.deviceIOControl(IOCTL_VERSION, nil, data)
 
 	if err != nil {

@@ -156,7 +156,7 @@ func (s *KextService) WaitUntilDeleted(serviceManager windows.Handle) error {
 	return nil
 }
 
-func (s *KextService) OpenFile() (*KextFile, error) {
+func (s *KextService) OpenFile(readBufferSize int) (*KextFile, error) {
 	if !s.isValid() {
 		return nil, fmt.Errorf("invalid kext object")
 	}
@@ -171,7 +171,7 @@ func (s *KextService) OpenFile() (*KextFile, error) {
 		return nil, err
 	}
 
-	return &KextFile{handle: handle}, nil
+	return &KextFile{handle: handle, buffer: make([]byte, readBufferSize)}, nil
 }
 
 func CreateKextService(driverName string, driverPath string) (*KextService, error) {

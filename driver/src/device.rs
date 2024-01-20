@@ -272,11 +272,14 @@ impl Device {
             }
             Command::GetLogs() => {
                 wdk::dbg!("GetLogs command");
-                let lines = protocol::Info::LogLines(self.logger.flush());
-                if let Ok(bytes) = lines.serialize() {
-                    let _ = self.io_queue.push(bytes);
-                } else {
-                    wdk::err!("Failed parse logs");
+                let lines_vec = self.logger.flush();
+                if !lines_vec.is_empty() {
+                    let lines = protocol::Info::LogLines(lines_vec);
+                    if let Ok(bytes) = lines.serialize() {
+                        let _ = self.io_queue.push(bytes);
+                    } else {
+                        wdk::err!("Failed parse logs");
+                    }
                 }
             }
         }
