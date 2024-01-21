@@ -54,7 +54,9 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         dbg!(device.logger, "Verdict: {}", action);
         match action {
             ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept | Verdict::Redirect => data.action_permit(),
+                Verdict::Accept | Verdict::Redirect | Verdict::RedirectTunnel => {
+                    data.action_permit()
+                }
                 Verdict::Block => data.action_block(),
                 Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
                     data.block_and_absorb();
@@ -111,9 +113,8 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
 
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
-        if let Ok(bytes) = packet.serialize(id) {
-            let _ = device.io_queue.push(bytes);
-        }
+        let conn_info = packet.as_connection_info(id);
+        let _ = device.io_queue.push(conn_info.as_info());
 
         // Save the connection.
         let mut conn = packet.as_connection(
@@ -161,7 +162,9 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         dbg!(device.logger, "Verdict: {}", action);
         match action {
             ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept | Verdict::Redirect => data.action_permit(),
+                Verdict::Accept | Verdict::Redirect | Verdict::RedirectTunnel => {
+                    data.action_permit()
+                }
                 Verdict::Block => data.action_block(),
                 Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
                     data.block_and_absorb();
@@ -218,9 +221,8 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
 
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
-        if let Ok(bytes) = packet.serialize(id) {
-            let _ = device.io_queue.push(bytes);
-        }
+        let conn_info = packet.as_connection_info(id);
+        let _ = device.io_queue.push(conn_info.as_info());
 
         // Save the connection.
         let mut conn = packet.as_connection(

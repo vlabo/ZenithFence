@@ -1,6 +1,7 @@
+use alloc::boxed::Box;
 use alloc::vec;
-use alloc::vec::Vec;
 use num_traits::FromPrimitive;
+use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     consts,
@@ -20,7 +21,6 @@ use crate::{
     dbg, err,
     id_cache::PacketCache,
     logger::Logger,
-    protocol::{self, Command},
     types::Verdict,
 };
 
@@ -28,7 +28,7 @@ use crate::{
 pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
-    pub(crate) io_queue: IOQueue<Vec<u8>>,
+    pub(crate) io_queue: IOQueue<Box<Info>>,
     pub(crate) packet_cache: PacketCache,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
@@ -114,19 +114,14 @@ impl Device {
     /// Cleanup is called just before drop.
     pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&mut self, read_request: &mut ReadRequest, data: &[u8], write_size: bool) {
-        let buffer_size = data.len();
-        if write_size {
-            // Write the size of the buffer. False when writhing leftovers.
-            let size = (data.len() as u32).to_le_bytes();
-            let _ = read_request.write(&size);
-        }
-        let count = read_request.write(data);
+    fn write_buffer(&mut self, read_request: &mut ReadRequest, info: &Info) {
+        let bytes = info.as_bytes();
+        let count = read_request.write(bytes);
 
         // Check if full command was written.
-        if count < buffer_size {
+        if count < bytes.len() {
             // Save the leftovers for later.
-            self.read_leftover.save(&data[count..]);
+            self.read_leftover.save(&bytes[count..]);
         }
     }
 
@@ -134,13 +129,20 @@ impl Device {
     pub fn read(&mut self, read_request: &mut ReadRequest) {
         if let Some(data) = self.read_leftover.load() {
             // There are leftovers from previous request.
-            self.write_buffer(read_request, &data, false);
+            let count = read_request.write(&data);
+
+            // Check if full command was written.
+            if count < data.len() {
+                // Save the leftovers for later.
+                self.read_leftover.save(&data[count..]);
+            }
         } else {
             // Noting left from before. Wait for next commands.
             match self.io_queue.wait_and_pop() {
                 Ok(info) => {
                     // Received new serialized object write it to the buffer.
-                    self.write_buffer(read_request, &info, true);
+                    // let bytes = info.as_bytes();
+                    self.write_buffer(read_request, &info);
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
@@ -157,9 +159,9 @@ impl Device {
         }
 
         // Try to write more.
-        while read_request.free_space() > 4 {
+        while read_request.free_space() > 0 {
             if let Ok(info) = self.io_queue.pop() {
-                self.write_buffer(read_request, &info, true);
+                self.write_buffer(read_request, &info);
             } else {
                 break;
             }
@@ -170,27 +172,24 @@ impl Device {
     // Called when handle.Write is called from user-space.
     pub fn write(&mut self, write_request: &mut WriteRequest) {
         // Try parsing the command.
-        let command = match protocol::parse_command(write_request.get_buffer()) {
-            Ok(command) => command,
-            Err(err) => {
-                wdk::err!("Failed to parse command: {}", err);
-                return;
-            }
-        };
+        let mut buffer = write_request.get_buffer();
+        let command = protocol::command::parse_type(buffer);
+        buffer = &buffer[1..];
 
         let mut classify_defer = None;
 
         match command {
-            Command::Shutdown() => {
+            CommandType::Shutdown => {
                 wdk::dbg!("Shutdown command");
                 // End blocking operations from the queue. This will end pending read requests.
                 self.io_queue.rundown();
             }
-            Command::Verdict { id, verdict } => {
+            CommandType::Verdict => {
+                let verdict = protocol::command::parse_verdict(buffer);
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
-                if let Some(packet) = self.packet_cache.pop_id(id) {
-                    if let Some(verdict) = FromPrimitive::from_u8(verdict) {
+                if let Some(packet) = self.packet_cache.pop_id(verdict.id) {
+                    if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
                         dbg!(self.logger, "Packet: {:?}", packet);
                         dbg!(self.logger, "Verdict response: {}", verdict);
 
@@ -203,16 +202,16 @@ impl Device {
                     // completion_promise = packet.classify_promise.take();
                 } else {
                     // Id was not in the packet cache.
-                    err!(self.logger, "Invalid id: {}", id);
+                    let id = verdict.id;
+                    err!(self.logger, "Verdict invalid id: {}", id);
                 }
             }
-            Command::Redirect {
-                id,
-                remote_address,
-                remote_port,
-            } => {
-                if let Some(packet) = self.packet_cache.pop_id(id) {
+            CommandType::RedirectV4 => {
+                let redirect = protocol::command::parse_redirect_v4(buffer);
+                if let Some(packet) = self.packet_cache.pop_id(redirect.id) {
                     dbg!(self.logger, "packet: {:?}", packet);
+                    let remote_address = redirect.remote_address;
+                    let remote_port = redirect.remote_port;
                     dbg!(
                         self.logger,
                         "Redirect: {:?} {}",
@@ -230,57 +229,56 @@ impl Device {
                     );
                 } else {
                     // Id was not in the packet cache.
-                    err!(self.logger, "Invalid id: {}", id);
+                    let id = redirect.id;
+                    err!(self.logger, "Redirect invalid id: {}", id);
                 }
             }
-            Command::Update {
-                protocol,
-                verdict,
-                remote_address,
-                remote_port,
-                local_address,
-                local_port,
-                redirect_address,
-                redirect_port,
-            } => {
+            CommandType::UpdateV4 => {
+                let update = protocol::command::parse_update_v4(buffer);
                 // Build the new action.
-                let action = match FromPrimitive::from_u8(verdict).unwrap() {
-                    Verdict::Redirect => ConnectionAction::RedirectIP {
-                        redirect_address: Ipv4Address::from_bytes(&redirect_address),
-                        redirect_port,
-                    },
-                    verdict => ConnectionAction::Verdict(verdict),
-                };
-                // Update with new action.
-                classify_defer = self.connection_cache.update_connection(
-                    Key {
-                        protocol: IpProtocol::from(protocol),
-                        local_address: Ipv4Address::from_bytes(&local_address),
-                        local_port,
-                        remote_address: Ipv4Address::from_bytes(&remote_address),
-                        remote_port,
-                    },
-                    action,
-                );
+                if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
+                    let action = match verdict {
+                        Verdict::Redirect | Verdict::RedirectTunnel => {
+                            ConnectionAction::RedirectIP {
+                                redirect_address: Ipv4Address::from_bytes(&update.redirect_address),
+                                redirect_port: update.redirect_port,
+                            }
+                        }
+                        verdict => ConnectionAction::Verdict(verdict),
+                    };
+                    // Update with new action.
+                    classify_defer = self.connection_cache.update_connection(
+                        Key {
+                            protocol: IpProtocol::from(update.protocol),
+                            local_address: Ipv4Address::from_bytes(&update.local_address),
+                            local_port: update.local_port,
+                            remote_address: Ipv4Address::from_bytes(&update.remote_address),
+                            remote_port: update.remote_port,
+                        },
+                        action,
+                    );
+                } else {
+                    err!(self.logger, "invalid verdict value: {}", update.verdict);
+                }
             }
-            Command::ClearCache() => {
+            CommandType::ClearCache => {
                 wdk::dbg!("ClearCache command");
                 self.connection_cache.clear();
                 if let Err(err) = self.filter_engine.reset_all_filters() {
                     err!(self.logger, "failed to reset filters: {}", err);
                 }
             }
-            Command::GetLogs() => {
+            CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");
-                let lines_vec = self.logger.flush();
-                if !lines_vec.is_empty() {
-                    let lines = protocol::Info::LogLines(lines_vec);
-                    if let Ok(bytes) = lines.serialize() {
-                        let _ = self.io_queue.push(bytes);
-                    } else {
-                        wdk::err!("Failed parse logs");
-                    }
-                }
+                // let lines_vec = self.logger.flush();
+                // if !lines_vec.is_empty() {
+                //     let lines = protocol::Info::LogLines(lines_vec);
+                //     if let Ok(bytes) = lines.serialize() {
+                //         let _ = self.io_queue.push(bytes);
+                //     } else {
+                //         wdk::err!("Failed parse logs");
+                //     }
+                // }
             }
         }
 

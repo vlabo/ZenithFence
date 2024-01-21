@@ -1,7 +1,7 @@
 use alloc::{format, string::String};
 use core::fmt::{Debug, Display};
 use num_derive::FromPrimitive;
-use serde::{Deserialize, Serialize};
+use protocol::info::ConnectionInfoV4;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     err,
@@ -13,7 +13,7 @@ use wdk::{
 
 use crate::connection_cache::{Connection, ConnectionAction, Key};
 
-#[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
+#[derive(Copy, Clone, FromPrimitive)]
 #[repr(u8)]
 pub enum Verdict {
     // Undecided is the default status of new connections.
@@ -23,6 +23,7 @@ pub enum Verdict {
     Block = 3,
     Drop = 4,
     Redirect = 5,
+    RedirectTunnel = 6,
     Failed = 7,
 }
 
@@ -35,12 +36,13 @@ impl Display for Verdict {
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
             Verdict::Redirect => write!(f, "Redirect"),
+            Verdict::RedirectTunnel => write!(f, "RedirectTunnel"),
             Verdict::Failed => write!(f, "Failed"),
         }
     }
 }
 
-#[derive(Copy, Clone, FromPrimitive, Serialize, Deserialize)]
+#[derive(Copy, Clone, FromPrimitive)]
 #[repr(u8)]
 pub enum Direction {
     Outbound = 0,
@@ -241,6 +243,19 @@ impl PacketInfo {
                 err!("unsupported layer: {:#x}", guid.data1);
                 Self::default()
             }
+        }
+    }
+
+    pub fn as_connection_info(&self, id: u64) -> ConnectionInfoV4 {
+        ConnectionInfoV4 {
+            id,
+            process_id: self.process_id.unwrap_or(0),
+            direction: self.direction as u8,
+            protocol: self.protocol,
+            local_ip: self.local_ip,
+            remote_ip: self.remote_ip,
+            local_port: self.local_port,
+            remote_port: self.remote_port,
         }
     }
 }

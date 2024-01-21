@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"time"
 
@@ -29,7 +28,7 @@ const (
 )
 
 func main() {
-	driverName := "PortmasterTest"
+	driverName := "PortmasterKext"
 	sysPath := "C:\\Dev\\driver.sys"
 	kext, err := kext_interface.CreateKextService(driverName, sysPath)
 	if err != nil {
@@ -61,7 +60,10 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				kext_interface.WriteCommand(file, kext_interface.BuildGetLogs())
+				err := kext_interface.WriteGetLogsCommand(file)
+				if err != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -78,26 +80,27 @@ func main() {
 				{
 					connection := info.Connection
 					log.Printf("info: %+v\n", connection)
-					if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{9, 9, 9, 9})) {
-						kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.Redirect{Id: connection.Id, RemoteAddress: []uint8{1, 1, 1, 1}, RemotePort: 53}))
-					} else
+					// if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{9, 9, 9, 9})) {
+					// kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.RedirectV4{Id: connection.Id, RemoteAddress: [4]uint8{1, 1, 1, 1}, RemotePort: 53}))
+					// } else
 					// } else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
 					// 	kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
 					// } else {
 					if connection.Direction == 1 {
-						kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
+						// kext_interface.WriteVerdictCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
+						kext_interface.WriteVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
 					} else {
-						kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
+						kext_interface.WriteVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
 					}
 					// }
 
 				}
-			case info.LogLines != nil:
-				{
-					for _, logline := range *info.LogLines {
-						log.Println(logline.Line)
-					}
-				}
+				// case info.LogLines != nil:
+				// {
+				// for _, logline := range *info.LogLines {
+				// log.Println(logline.Line)
+				// }
+				// }
 			}
 		}
 	}()
@@ -105,6 +108,5 @@ func main() {
 	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
-	kext_interface.WriteCommand(file, kext_interface.BuildShutdown())
-	file.Close()
+	kext_interface.WriteShutdownCommand(file)
 }

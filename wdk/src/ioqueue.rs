@@ -100,7 +100,7 @@ impl<T> IOQueue<T> {
     }
 
     /// Returns new queue object.
-    /// Make sure `rundown` is called on the end of the progrem, if `drop()` is not called for the object.
+    /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
     pub fn init(&self) {
         unsafe {
             let kqueue = self.kernel_queue.get();

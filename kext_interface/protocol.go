@@ -5,9 +5,10 @@ package kext_interface
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
+	"unsafe"
 
-	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/sys/windows"
 )
 
@@ -30,113 +31,108 @@ var (
 )
 
 // Driver structs
-type Connection struct {
-	Id          uint64  `json:"id"`
-	ProcessId   *uint64 `json:"process_id"`
-	ProcessPath *string `json:"process_path"`
-	Direction   byte    `json:"direction"`
-	IpV6        bool    `json:"ip_v6"`
-	Protocol    byte    `json:"protocol"`
-	LocalIp     []uint8 `json:"local_ip"`
-	RemoteIp    []uint8 `json:"remote_ip"`
-	LocalPort   uint16  `json:"local_port"`
-	RemotePort  uint16  `json:"remote_port"`
-}
 
-type LogLine struct {
-	Severity int    `json:"severity"`
-	Line     string `json:"line"`
+const (
+	InfoConnectionIPV4 = 0
+)
+
+type Connection struct {
+	Id         uint64
+	ProcessId  uint64
+	Direction  byte
+	Protocol   byte
+	LocalIp    [4]byte
+	RemoteIp   [4]byte
+	LocalPort  uint16
+	RemotePort uint16
 }
 
 type Info struct {
-	Connection *Connection `json:"Connection,omitempty"`
-	LogLines   *[]LogLine  `json:"LogLines,omitempty"`
+	Connection *Connection
 }
 
-func ParseInfo(data []byte) (*Info, error) {
-	var info Info
-	err := cbor.Unmarshal(data, &info)
-	return &info, err
-}
+const (
+	CommandShutdown   = 0
+	CommandVerdict    = 1
+	CommandRedirectV4 = 2
+	CommandUpdateV4   = 3
+	CommandClearCache = 4
+	CommandGetLogs    = 5
+)
 
 type Verdict struct {
-	Id      uint64 `json:"id"`
-	Verdict uint8  `json:"verdict"`
+	command uint8
+	Id      uint64
+	Verdict uint8
 }
 
-type Redirect struct {
-	Id            uint64  `json:"id"`
-	RemoteAddress []uint8 `json:"remote_address"`
-	RemotePort    uint16  `json:"remote_port"`
+type RedirectV4 struct {
+	command       uint8
+	Id            uint64
+	RemoteAddress [4]byte
+	RemotePort    uint16
 }
 
-type Update struct {
-	Protocol        uint8   `json:"protocol"`
-	LocalAddress    []uint8 `json:"local_address"`
-	LocalPort       uint16  `json:"local_port"`
-	RemoteAddress   []uint8 `json:"remote_address"`
-	RemotePort      uint16  `json:"remote_port"`
-	Verdict         uint8   `json:"verdict"`
-	RedirectAddress []uint8 `json:"redirect_address"`
-	RedirectPort    uint16  `json:"redirect_port"`
+type UpdateV4 struct {
+	command         uint8
+	Protocol        uint8
+	LocalAddress    [4]byte
+	LocalPort       uint16
+	RemoteAddress   [4]byte
+	RemotePort      uint16
+	Verdict         uint8
+	RedirectAddress [4]byte
+	RedirectPort    uint16
 }
 
-type Command struct {
-	Shutdown   *[]struct{} `json:"Shutdown,omitempty"`
-	Verdict    *Verdict    `json:"Verdict,omitempty"`
-	Redirect   *Redirect   `json:"Redirect,omitempty"`
-	Update     *Update     `json:"Update,omitempty"`
-	ClearCache *[]struct{} `json:"ClearCache,omitempty"`
-	GetLogs    *[]struct{} `json:"GetLogs,omitempty"`
+func WriteShutdownCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandShutdown})
+	return err
 }
 
-func BuildShutdown() Command {
-	return Command{Shutdown: &[]struct{}{}}
+func WriteVerdictCommand(verdict Verdict, writer io.Writer) error {
+	verdict.command = CommandVerdict
+	return binary.Write(writer, binary.LittleEndian, verdict)
 }
 
-func BuildVerdict(verdict Verdict) Command {
-	return Command{Verdict: &verdict}
+func WriteRedirectCommand(redirect RedirectV4, writer io.Writer) error {
+	redirect.command = CommandRedirectV4
+	return binary.Write(writer, binary.LittleEndian, redirect)
 }
 
-func BuildRedirect(redirect Redirect) Command {
-	return Command{Redirect: &redirect}
+func WriteUpdateCommand(update UpdateV4, writer io.Writer) error {
+	update.command = CommandUpdateV4
+	return binary.Write(writer, binary.LittleEndian, update)
 }
 
-func BuildUpdate(update Update) Command {
-	return Command{Update: &update}
+func WriteClearCacheCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandClearCache})
+	return err
 }
 
-func BuildClearCache() Command {
-	return Command{ClearCache: &[]struct{}{}}
-}
-
-func BuildGetLogs() Command {
-	return Command{GetLogs: &[]struct{}{}}
-}
-
-func WriteCommand(writer io.Writer, command Command) error {
-	data, err := cbor.Marshal(&command)
-	if err != nil {
-		return err
-	}
-	_, err = writer.Write(data)
+func WriteGetLogsCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandGetLogs})
 	return err
 }
 
 func ReadInfo(reader io.Reader) (*Info, error) {
-	var sizeBuffer [4]byte
-	_, err := reader.Read(sizeBuffer[:])
+	var infoType byte
+	_, err := reader.Read(asByteArray(&infoType))
 	if err != nil {
 		return nil, err
 	}
-	structSize := binary.LittleEndian.Uint32(sizeBuffer[:])
-	structBuffer := make([]byte, structSize)
-	_, err = reader.Read(structBuffer)
-	if err != nil {
-		return nil, err
+	switch infoType {
+	case InfoConnectionIPV4:
+		{
+			var new Connection
+			_, err = reader.Read(asByteArray(&new))
+			if err != nil {
+				return nil, err
+			}
+			return &Info{Connection: &new}, nil
+		}
 	}
-	info, err := ParseInfo(structBuffer)
-	return info, err
+	return nil, fmt.Errorf("unsupported info type: %d", infoType)
 }
 
 func ReadVersion(file *KextFile) ([]uint8, error) {
@@ -147,4 +143,8 @@ func ReadVersion(file *KextFile) ([]uint8, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+func asByteArray[T any](obj *T) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(obj)), unsafe.Sizeof(*obj))
 }

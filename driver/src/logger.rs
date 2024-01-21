@@ -1,12 +1,11 @@
+#![allow(dead_code)]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::{Deserialize, Serialize};
 
-pub const LOG_LEVEL: u8 = Severity::Debug as u8;
+pub const LOG_LEVEL: u8 = Severity::Critical as u8;
 
-#[derive(Serialize, Deserialize, Debug)]
 #[repr(u8)]
 pub enum Severity {
     Trace = 1,
@@ -17,7 +16,6 @@ pub enum Severity {
     Critical = 6,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct LogLine {
     severity: u8,
     line: String,
