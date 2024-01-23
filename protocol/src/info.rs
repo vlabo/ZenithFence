@@ -1,91 +1,109 @@
-use alloc::boxed::Box;
+use core::mem::size_of;
 
+use alloc::string::String;
+use alloc::vec::Vec;
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum InfoType {
-    ConnectionIPV4,
+    ConnectionIpv4 = 0,
+    LogLine = 1,
 }
 
+pub trait Info {
+    fn as_bytes(&mut self) -> &[u8];
+}
+// Fallow this pattern when adding new structs
 #[repr(C, packed)]
-pub struct Info {
+pub struct ConnectionInfoV4 {
     info_type: InfoType,
-    value: [u8; 0],
+    id: u64,
+    process_id: u64,
+    direction: u8,
+    protocol: u8,
+    local_ip: [u8; 4],
+    remote_ip: [u8; 4],
+    local_port: u16,
+    remote_port: u16,
 }
 
-impl Info {
-    pub fn get_info_type(&self) -> u8 {
-        self.info_type as u8
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        match self.info_type {
-            InfoType::ConnectionIPV4 => {
-                let info_ptr: *const Info = self as _;
-                let ptr: *const u8 = info_ptr as _;
-                unsafe {
-                    core::slice::from_raw_parts(
-                        ptr,
-                        core::mem::size_of::<InternalInfo<ConnectionInfoV4>>(),
-                    )
-                }
-            }
+impl ConnectionInfoV4 {
+    pub fn new(
+        id: u64,
+        process_id: u64,
+        direction: u8,
+        protocol: u8,
+        local_ip: [u8; 4],
+        remote_ip: [u8; 4],
+        local_port: u16,
+        remote_port: u16,
+    ) -> Self {
+        Self {
+            info_type: InfoType::ConnectionIpv4,
+            id,
+            process_id,
+            direction,
+            protocol,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
         }
     }
 }
 
-#[repr(C, packed)]
-struct InternalInfo<T> {
-    info_type: InfoType,
-    value: T,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct ConnectionInfoV4 {
-    pub id: u64,
-    pub process_id: u64,
-    pub direction: u8,
-    pub protocol: u8,
-    pub local_ip: [u8; 4],
-    pub remote_ip: [u8; 4],
-    pub local_port: u16,
-    pub remote_port: u16,
-}
-
-impl ConnectionInfoV4 {
-    pub fn as_info(self) -> Box<Info> {
-        let internal_info = Box::new(InternalInfo {
-            info_type: InfoType::ConnectionIPV4,
-            value: self,
-        });
-        unsafe { Box::from_raw(Box::into_raw(internal_info) as *mut Info) }
+impl Info for ConnectionInfoV4 {
+    fn as_bytes(&mut self) -> &[u8] {
+        as_bytes(self)
     }
 }
 
-#[test]
-fn connection_info() {
-    let conn_info = ConnectionInfoV4 {
-        id: 1,
-        process_id: 2,
-        direction: 3,
-        protocol: 4,
-        local_ip: [5, 6, 7, 8],
-        remote_ip: [9, 10, 11, 12],
-        local_port: 13,
-        remote_port: 14,
-    };
-    let info = conn_info.as_info();
-    let bytes = info.as_bytes();
-    assert_eq!(
-        bytes.len(),
-        core::mem::size_of::<InternalInfo<ConnectionInfoV4>>()
-    );
+fn as_bytes<T>(value: &T) -> &[u8] {
+    let info_ptr: *const T = value as _;
+    let ptr: *const u8 = info_ptr as _;
+    unsafe { core::slice::from_raw_parts(ptr, core::mem::size_of::<T>()) }
+}
 
-    assert_eq!(
-        bytes,
-        [
-            0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
-            0, 14, 0, 0, 0
-        ]
-    );
+// Special struct for logging
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum Severity {
+    Trace = 1,
+    Debug = 2,
+    Info = 3,
+    Warning = 4,
+    Error = 5,
+    Critical = 6,
+}
+
+pub struct LogLine {
+    severity: Severity,
+    prefix: String,
+    line: String,
+    combined: Vec<u8>,
+}
+
+impl LogLine {
+    pub fn new(severity: Severity, prefix: String, line: String) -> Self {
+        Self {
+            severity,
+            prefix,
+            line,
+            combined: Vec::new(),
+        }
+    }
+}
+
+impl Info for LogLine {
+    fn as_bytes(&mut self) -> &[u8] {
+        // Write [InfoType: u8, Severity: u8, size: u32, prefix+line: [u8; size]]
+        let size: u32 = (self.prefix.len() + self.line.len()) as u32;
+        self.combined = Vec::with_capacity(1 + 1 + size_of::<u32>() + size as usize);
+        self.combined.push(InfoType::LogLine as u8);
+        self.combined.push(self.severity as u8);
+        self.combined.extend_from_slice(&u32::to_le_bytes(size));
+        self.combined.extend_from_slice(self.prefix.as_bytes());
+        self.combined.extend_from_slice(self.line.as_bytes());
+
+        return &self.combined;
+    }
 }

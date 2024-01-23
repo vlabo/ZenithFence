@@ -40,12 +40,19 @@ pub enum ControlCode {
         METHOD_BUFFERED,
         FILE_READ_DATA | FILE_WRITE_DATA
     ),
+    ShutdownRequest = ctl_code!(
+        SIOCTL_TYPE,
+        0x801,
+        METHOD_BUFFERED,
+        FILE_READ_DATA | FILE_WRITE_DATA
+    ),
 }
 
 impl Display for ControlCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ControlCode::Version => _ = write!(f, "Version"),
+            ControlCode::ShutdownRequest => _ = write!(f, "Shutdown"),
         };
         return Ok(());
     }

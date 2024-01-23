@@ -118,10 +118,16 @@ unsafe extern "system" fn driver_write(
 
 /// device_control event triggered from user-space on file.deviceIOControl.
 unsafe extern "system" fn device_control(
-    _driver_object: &mut DEVICE_OBJECT,
+    device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
+    let Ok(device) =
+        interface::get_device_context_from_device_object::<device::Device>(device_object)
+    else {
+        control_request.complete();
+        return control_request.get_status();
+    };
 
     let Some(control_code): Option<ControlCode> =
         FromPrimitive::from_u32(control_request.get_control_code())
@@ -137,6 +143,7 @@ unsafe extern "system" fn device_control(
         ControlCode::Version => {
             control_request.write(&VERSION);
         }
+        ControlCode::ShutdownRequest => device.shutdown(),
     };
 
     control_request.complete();

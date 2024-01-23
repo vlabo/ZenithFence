@@ -1,5 +1,10 @@
+// Commands from user space
+
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+
 #[repr(u8)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, FromPrimitive)]
 pub enum CommandType {
     Shutdown,
     Verdict,
@@ -9,7 +14,6 @@ pub enum CommandType {
     GetLogs,
 }
 
-// Commands from user space
 #[repr(C, packed)]
 pub struct Command {
     pub command_type: CommandType,
@@ -41,26 +45,24 @@ pub struct UpdateV4 {
     pub redirect_port: u16,
 }
 
-pub fn parse_type(bytes: &[u8]) -> CommandType {
-    let ptr: *const u8 = &bytes[0];
-    let command_type: *const CommandType = ptr as _;
-    unsafe { *command_type.as_ref().unwrap() }
+pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
+    FromPrimitive::from_u8(bytes[0])
 }
 
 pub fn parse_verdict(bytes: &[u8]) -> &Verdict {
-    let ptr: *const u8 = &bytes[0];
-    let verdict_ptr: *const Verdict = ptr as _;
-    unsafe { verdict_ptr.as_ref().unwrap() }
+    as_type(bytes)
 }
 
 pub fn parse_redirect_v4(bytes: &[u8]) -> &RedirectV4 {
-    let ptr: *const u8 = &bytes[0];
-    let redirect_ptr: *const RedirectV4 = ptr as _;
-    unsafe { redirect_ptr.as_ref().unwrap() }
+    as_type(bytes)
 }
 
 pub fn parse_update_v4(bytes: &[u8]) -> &UpdateV4 {
+    as_type(bytes)
+}
+
+fn as_type<T>(bytes: &[u8]) -> &T {
     let ptr: *const u8 = &bytes[0];
-    let update_ptr: *const UpdateV4 = ptr as _;
-    unsafe { update_ptr.as_ref().unwrap() }
+    let t_ptr: *const T = ptr as _;
+    unsafe { t_ptr.as_ref().unwrap() }
 }

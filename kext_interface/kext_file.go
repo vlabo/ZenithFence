@@ -51,6 +51,10 @@ func (f *KextFile) refill_read_buffer() error {
 	return nil
 }
 
+func (f *KextFile) flush_buffer() {
+	f.read_slice = nil
+}
+
 func (f *KextFile) Write(buffer []byte) (int, error) {
 	var count uint32 = 0
 	overlapped := &windows.Overlapped{}

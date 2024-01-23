@@ -247,16 +247,16 @@ impl PacketInfo {
     }
 
     pub fn as_connection_info(&self, id: u64) -> ConnectionInfoV4 {
-        ConnectionInfoV4 {
+        ConnectionInfoV4::new(
             id,
-            process_id: self.process_id.unwrap_or(0),
-            direction: self.direction as u8,
-            protocol: self.protocol,
-            local_ip: self.local_ip,
-            remote_ip: self.remote_ip,
-            local_port: self.local_port,
-            remote_port: self.remote_port,
-        }
+            self.process_id.unwrap_or(0),
+            self.direction as u8,
+            self.protocol,
+            self.local_ip,
+            self.remote_ip,
+            self.local_port,
+            self.remote_port,
+        )
     }
 }
 

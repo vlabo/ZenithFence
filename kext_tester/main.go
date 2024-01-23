@@ -60,7 +60,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				err := kext_interface.WriteGetLogsCommand(file)
+				err := kext_interface.SendGetLogsCommand(file)
 				if err != nil {
 					return
 				}
@@ -70,7 +70,7 @@ func main() {
 
 	go func() {
 		for true {
-			info, err := kext_interface.ReadInfo(file)
+			info, err := kext_interface.RecvInfo(file)
 			if err != nil {
 				log.Printf("error reading from file %s", err)
 				return
@@ -88,19 +88,17 @@ func main() {
 					// } else {
 					if connection.Direction == 1 {
 						// kext_interface.WriteVerdictCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
-						kext_interface.WriteVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
+						kext_interface.SendVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
 					} else {
-						kext_interface.WriteVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
+						kext_interface.SendVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
 					}
 					// }
 
 				}
-				// case info.LogLines != nil:
-				// {
-				// for _, logline := range *info.LogLines {
-				// log.Println(logline.Line)
-				// }
-				// }
+			case info.LogLine != nil:
+				{
+					log.Println(info.LogLine.Line)
+				}
 			}
 		}
 	}()
@@ -108,5 +106,5 @@ func main() {
 	fmt.Print("Press enter to exit\n")
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
-	kext_interface.WriteShutdownCommand(file)
+	kext_interface.SendShutdownCommand(file)
 }

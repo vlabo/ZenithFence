@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use smoltcp::wire::{
@@ -114,7 +115,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
         let conn_info = packet.as_connection_info(id);
-        let _ = device.io_queue.push(conn_info.as_info());
+        let _ = device.io_queue.push(Box::new(conn_info));
 
         // Save the connection.
         let mut conn = packet.as_connection(
@@ -222,7 +223,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
         let conn_info = packet.as_connection_info(id);
-        let _ = device.io_queue.push(conn_info.as_info());
+        let _ = device.io_queue.push(Box::new(conn_info));
 
         // Save the connection.
         let mut conn = packet.as_connection(

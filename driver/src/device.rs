@@ -28,7 +28,7 @@ use crate::{
 pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
-    pub(crate) io_queue: IOQueue<Box<Info>>,
+    pub(crate) io_queue: IOQueue<Box<dyn Info>>,
     pub(crate) packet_cache: PacketCache,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
@@ -114,7 +114,7 @@ impl Device {
     /// Cleanup is called just before drop.
     pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&mut self, read_request: &mut ReadRequest, info: &Info) {
+    fn write_buffer(&mut self, read_request: &mut ReadRequest, mut info: Box<dyn Info>) {
         let bytes = info.as_bytes();
         let count = read_request.write(bytes);
 
@@ -142,7 +142,7 @@ impl Device {
                 Ok(info) => {
                     // Received new serialized object write it to the buffer.
                     // let bytes = info.as_bytes();
-                    self.write_buffer(read_request, &info);
+                    self.write_buffer(read_request, info);
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
@@ -158,14 +158,6 @@ impl Device {
             }
         }
 
-        // Try to write more.
-        while read_request.free_space() > 0 {
-            if let Ok(info) = self.io_queue.pop() {
-                self.write_buffer(read_request, &info);
-            } else {
-                break;
-            }
-        }
         read_request.complete();
     }
 
@@ -174,6 +166,10 @@ impl Device {
         // Try parsing the command.
         let mut buffer = write_request.get_buffer();
         let command = protocol::command::parse_type(buffer);
+        let Some(command) = command else {
+            err!(self.logger, "Unknown command number: {}", buffer[0]);
+            return;
+        };
         buffer = &buffer[1..];
 
         let mut classify_defer = None;
@@ -181,8 +177,7 @@ impl Device {
         match command {
             CommandType::Shutdown => {
                 wdk::dbg!("Shutdown command");
-                // End blocking operations from the queue. This will end pending read requests.
-                self.io_queue.rundown();
+                self.shutdown();
             }
             CommandType::Verdict => {
                 let verdict = protocol::command::parse_verdict(buffer);
@@ -270,15 +265,10 @@ impl Device {
             }
             CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");
-                // let lines_vec = self.logger.flush();
-                // if !lines_vec.is_empty() {
-                //     let lines = protocol::Info::LogLines(lines_vec);
-                //     if let Ok(bytes) = lines.serialize() {
-                //         let _ = self.io_queue.push(bytes);
-                //     } else {
-                //         wdk::err!("Failed parse logs");
-                //     }
-                // }
+                let lines_vec = self.logger.flush();
+                for line in lines_vec {
+                    let _ = self.io_queue.push(line);
+                }
             }
         }
 
@@ -299,6 +289,11 @@ impl Device {
                 }
             }
         }
+    }
+
+    pub fn shutdown(&self) {
+        // End blocking operations from the queue. This will end pending read requests.
+        self.io_queue.rundown();
     }
 }
 

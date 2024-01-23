@@ -1,91 +1,80 @@
-#![allow(dead_code)]
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use protocol::info::{LogLine, Severity};
 
-pub const LOG_LEVEL: u8 = Severity::Critical as u8;
-
-#[repr(u8)]
-pub enum Severity {
-    Trace = 1,
-    Debug = 2,
-    Info = 3,
-    Warning = 4,
-    Error = 5,
-    Critical = 6,
-}
-
-pub(crate) struct LogLine {
-    severity: u8,
-    line: String,
-}
-
-struct Synced {
-    value: Option<LogLine>,
-    processing: AtomicBool,
-}
+pub const LOG_LEVEL: u8 = Severity::Trace as u8;
 
 pub(crate) struct Logger {
-    log_lines: [Synced; 1024],
+    log_lines: [AtomicPtr<LogLine>; 1024],
     start_index: usize,
     end_index: AtomicUsize,
 }
 
 impl Logger {
     pub fn init(&mut self) {
-        for line in &mut self.log_lines {
-            line.value = None;
-            line.processing = AtomicBool::default();
+        for ptr in &mut self.log_lines {
+            ptr.store(core::ptr::null_mut(), Ordering::Relaxed);
         }
     }
 
-    pub fn add_line(&mut self, severity: Severity, line_str: String) {
+    pub fn add_line(&mut self, severity: Severity, prefix: String, line_str: String) {
         let mut index = self.end_index.fetch_add(1, Ordering::Acquire);
         index %= self.log_lines.len();
-        let line = &mut self.log_lines[index];
-        let result =
-            line.processing
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed);
-        if result.is_err() {
-            return;
+        let ptr = &mut self.log_lines[index];
+        let line = Box::new(LogLine::new(severity, prefix, line_str));
+        let old = ptr.swap(Box::into_raw(line), Ordering::Release);
+        if !old.is_null() {
+            unsafe {
+                _ = Box::from_raw(old);
+            }
         }
-
-        line.value = Some(LogLine {
-            severity: severity as u8,
-            line: line_str,
-        });
-        line.processing.store(false, Ordering::Release);
     }
 
-    pub fn flush(&mut self) -> Vec<LogLine> {
+    pub fn flush(&mut self) -> Vec<Box<LogLine>> {
         let mut vec = Vec::new();
-        loop {
-            if self.end_index.load(Ordering::Acquire) <= self.start_index {
-                break;
-            }
-            let index = self.start_index % self.log_lines.len();
-            let line = &mut self.log_lines[index];
-            if line.processing.load(Ordering::SeqCst) {
-                break;
-            }
-
-            if let Some(line) = line.value.take() {
-                vec.push(line);
-            }
-
-            self.start_index = self.start_index.wrapping_add(1);
+        let end_index = self.end_index.load(Ordering::Acquire);
+        if end_index <= self.start_index {
+            return vec;
         }
+        let start_index = self.start_index;
+        let count = end_index - start_index;
+        for i in start_index..start_index + count {
+            let index = i % self.log_lines.len();
+            let ptr = self.log_lines[index].swap(core::ptr::null_mut(), Ordering::Acquire);
+            unsafe {
+                if !ptr.is_null() {
+                    vec.push(Box::from_raw(ptr));
+                }
+            }
+        }
+
+        self.start_index = end_index;
         vec
+    }
+}
+
+impl Drop for Logger {
+    fn drop(&mut self) {
+        for line in &self.log_lines {
+            let ptr = line.load(Ordering::Relaxed);
+            if !ptr.is_null() {
+                unsafe {
+                    _ = Box::from_raw(ptr);
+                }
+            }
+        }
     }
 }
 
 #[macro_export]
 macro_rules! crit {
     ($log:expr, $($arg:tt)*) => ({
-        if $crate::logger::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line($crate::logger::Severity::Critical, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+            $log.add_line(protocol::info::Severity::Critical, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
         }
     });
 }
@@ -93,9 +82,9 @@ macro_rules! crit {
 #[macro_export]
 macro_rules! err {
     ($log:expr, $($arg:tt)*) => ({
-        if $crate::logger::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line($crate::logger::Severity::Error, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+            $log.add_line(protocol::info::Severity::Error, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
         }
     });
 }
@@ -103,9 +92,9 @@ macro_rules! err {
 #[macro_export]
 macro_rules! dbg {
     ($log:expr, $($arg:tt)*) => ({
-        if $crate::logger::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line($crate::logger::Severity::Debug, alloc::format!("{}:{} {}", core::module_path!(), line!(), message))
+            $log.add_line(protocol::info::Severity::Debug, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
         }
     });
 }
@@ -113,9 +102,9 @@ macro_rules! dbg {
 #[macro_export]
 macro_rules! warn {
     ($log:expr, $($arg:tt)*) => ({
-        if $crate::logger::Severity::Warning as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Warning as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line($crate::logger::Severity::Warning, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+            $log.add_line(protocol::info::Severity::Warning, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
         }
     });
 }
@@ -123,9 +112,9 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! info {
     ($log:expr, $($arg:tt)*) => ({
-        if $crate::logger::Severity::Info as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Info as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line($crate::logger::Severity::Info, alloc::format!( "{}:{} {}", core::module_path!(), line!(), message))
+            $log.add_line(protocol::info::Severity::Info, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
         }
     });
 }
