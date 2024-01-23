@@ -28,7 +28,8 @@ use crate::{
 pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
-    pub(crate) io_queue: IOQueue<Box<dyn Info>>,
+    pub(crate) primary_queue: IOQueue<Box<dyn Info>>,
+    pub(crate) secondary_queue: IOQueue<Box<dyn Info>>,
     pub(crate) packet_cache: PacketCache,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
@@ -41,7 +42,8 @@ impl Device {
     /// Make sure everything is initialized here.
     pub fn init(&mut self, driver: &Driver) {
         self.logger.init();
-        self.io_queue.init();
+        self.primary_queue.init();
+        self.secondary_queue.init();
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
         self.connection_cache.init();
@@ -146,7 +148,35 @@ impl Device {
             }
         } else {
             // Noting left from before. Wait for next commands.
-            match self.io_queue.wait_and_pop() {
+            match self.primary_queue.pop() {
+                Ok(info) => {
+                    self.write_buffer(read_request, info);
+                    read_request.complete();
+                    return;
+                }
+                Err(ioqueue::Status::Timeout) => {}
+                Err(err) => {
+                    // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
+                    err!(self.logger, "failed to pop value: {}", err);
+                    read_request.end_of_file();
+                    return;
+                }
+            }
+            match self.secondary_queue.pop() {
+                Ok(info) => {
+                    self.write_buffer(read_request, info);
+                    read_request.complete();
+                    return;
+                }
+                Err(ioqueue::Status::Timeout) => {}
+                Err(err) => {
+                    // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
+                    err!(self.logger, "failed to pop value: {}", err);
+                    read_request.end_of_file();
+                    return;
+                }
+            }
+            match self.primary_queue.pop_timeout(200) {
                 Ok(info) => {
                     // Received new serialized object write it to the buffer.
                     // let bytes = info.as_bytes();
@@ -275,7 +305,7 @@ impl Device {
                 wdk::dbg!("GetLogs command");
                 let lines_vec = self.logger.flush();
                 for line in lines_vec {
-                    let _ = self.io_queue.push(line);
+                    let _ = self.secondary_queue.push(line);
                 }
             }
         }
@@ -301,7 +331,7 @@ impl Device {
 
     pub fn shutdown(&self) {
         // End blocking operations from the queue. This will end pending read requests.
-        self.io_queue.rundown();
+        self.primary_queue.rundown();
     }
 }
 
