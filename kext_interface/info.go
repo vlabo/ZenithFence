@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	InfoConnectionIpv4 = 0
-	InfoLogLine        = 1
+	InfoLogLine              = 0
+	InfoConnectionIpv4       = 1
+	InfoConnectionIpv6       = 2
+	InfoConnectionEndEventV4 = 3
 )
 
 var ErrorUnknownInfoType = errors.New("unknown info type")
@@ -26,13 +28,25 @@ type Connection struct {
 	LocalPort  uint16
 	RemotePort uint16
 }
+
+type ConnectionEnd struct {
+	ProcessId  uint64
+	Direction  byte
+	Protocol   byte
+	LocalIp    [4]byte
+	RemoteIp   [4]byte
+	LocalPort  uint16
+	RemotePort uint16
+}
+
 type LogLine struct {
 	Severity byte
 	Line     string
 }
 type Info struct {
-	Connection *Connection
-	LogLine    *LogLine
+	Connection    *Connection
+	ConnectionEnd *ConnectionEnd
+	LogLine       *LogLine
 }
 
 func readInfo(reader io.Reader) (*Info, error) {
@@ -50,6 +64,15 @@ func readInfo(reader io.Reader) (*Info, error) {
 				return nil, err
 			}
 			return &Info{Connection: &new}, nil
+		}
+	case InfoConnectionEndEventV4:
+		{
+			var new ConnectionEnd
+			err = binary.Read(reader, binary.LittleEndian, &new)
+			if err != nil {
+				return nil, err
+			}
+			return &Info{ConnectionEnd: &new}, nil
 		}
 	case InfoLogLine:
 		{

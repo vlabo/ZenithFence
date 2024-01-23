@@ -79,7 +79,7 @@ func main() {
 			case info.Connection != nil:
 				{
 					connection := info.Connection
-					log.Printf("info: %+v\n", connection)
+					// log.Printf("info: %+v\n", connection)
 					// if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{9, 9, 9, 9})) {
 					// kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.RedirectV4{Id: connection.Id, RemoteAddress: [4]uint8{1, 1, 1, 1}, RemotePort: 53}))
 					// } else
@@ -94,6 +94,11 @@ func main() {
 					}
 					// }
 
+				}
+			case info.ConnectionEnd != nil:
+				{
+					// connection := info.ConnectionEnd
+					// log.Printf("Connection end: %+v\n", connection)
 				}
 			case info.LogLine != nil:
 				{

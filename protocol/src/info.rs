@@ -2,11 +2,14 @@ use core::mem::size_of;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum InfoType {
-    ConnectionIpv4 = 0,
-    LogLine = 1,
+    LogLine = 0,
+    ConnectionIpv4 = 1,
+    ConnectionIpv6 = 2,
+    ConnectionEndEventV4 = 3,
 }
 
 pub trait Info {
@@ -52,6 +55,91 @@ impl ConnectionInfoV4 {
 }
 
 impl Info for ConnectionInfoV4 {
+    fn as_bytes(&mut self) -> &[u8] {
+        as_bytes(self)
+    }
+}
+
+#[repr(C, packed)]
+pub struct ConnectionInfoV6 {
+    info_type: InfoType,
+    id: u64,
+    process_id: u64,
+    direction: u8,
+    protocol: u8,
+    local_ip: [u8; 16],
+    remote_ip: [u8; 16],
+    local_port: u16,
+    remote_port: u16,
+}
+
+impl ConnectionInfoV6 {
+    pub fn new(
+        id: u64,
+        process_id: u64,
+        direction: u8,
+        protocol: u8,
+        local_ip: [u8; 16],
+        remote_ip: [u8; 16],
+        local_port: u16,
+        remote_port: u16,
+    ) -> Self {
+        Self {
+            info_type: InfoType::ConnectionIpv6,
+            id,
+            process_id,
+            direction,
+            protocol,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
+        }
+    }
+}
+
+impl Info for ConnectionInfoV6 {
+    fn as_bytes(&mut self) -> &[u8] {
+        as_bytes(self)
+    }
+}
+
+#[repr(C, packed)]
+pub struct ConnectionEndEventV4Info {
+    info_type: InfoType,
+    process_id: u64,
+    direction: u8,
+    protocol: u8,
+    local_ip: [u8; 4],
+    remote_ip: [u8; 4],
+    local_port: u16,
+    remote_port: u16,
+}
+
+impl ConnectionEndEventV4Info {
+    pub fn new(
+        process_id: u64,
+        direction: u8,
+        protocol: u8,
+        local_ip: [u8; 4],
+        remote_ip: [u8; 4],
+        local_port: u16,
+        remote_port: u16,
+    ) -> Self {
+        Self {
+            info_type: InfoType::ConnectionEndEventV4,
+            process_id,
+            direction,
+            protocol,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
+        }
+    }
+}
+
+impl Info for ConnectionEndEventV4Info {
     fn as_bytes(&mut self) -> &[u8] {
         as_bytes(self)
     }

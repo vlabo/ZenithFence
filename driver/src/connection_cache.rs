@@ -1,6 +1,6 @@
 use core::fmt::Display;
 
-use crate::types::Verdict;
+use crate::types::{Direction, Verdict};
 use alloc::{collections::BTreeMap, vec::Vec};
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
@@ -31,11 +31,13 @@ impl Display for ConnectionAction {
 
 pub struct Connection {
     pub(crate) protocol: IpProtocol,
+    pub(crate) direction: Direction,
     pub(crate) local_address: Ipv4Address,
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
+    pub(crate) endpoint_handle: u64,
     pub(crate) packet_queue: Option<ClassifyDefer>,
     pub(crate) callout_id: usize,
 }
@@ -184,7 +186,38 @@ impl ConnectionCache {
         None
     }
 
-    pub fn unregister_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<Connection>> {
+    pub fn remove_connection(
+        &mut self,
+        key: (IpProtocol, u16),
+        endpoint_handle: u64,
+    ) -> Option<Connection> {
+        let _guard = self.lock.write_lock();
+        let mut index = None;
+        let mut conn = None;
+        let mut delete = false;
+        if let Some(conns) = self.connections.get_mut(&key) {
+            for (i, conn) in conns.iter().enumerate() {
+                if conn.endpoint_handle == endpoint_handle {
+                    index = Some(i);
+                    break;
+                }
+            }
+            if let Some(index) = index {
+                conn = Some(conns.remove(index));
+            }
+
+            if conns.is_empty() {
+                delete = true;
+            }
+        }
+        if delete {
+            self.connections.remove(&key);
+        }
+
+        return conn;
+    }
+
+    fn unregister_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<Connection>> {
         let _guard = self.lock.write_lock();
         self.connections.remove(&key)
     }

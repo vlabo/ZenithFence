@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
+use protocol::info::ConnectionEndEventV4Info;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket, UdpPacket, IPV4_HEADER_LEN,
 };
@@ -121,6 +122,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         let mut conn = packet.as_connection(
             ConnectionAction::Verdict(Verdict::Undecided),
             data.get_callout_id(),
+            data.get_transport_endpoint_handle().unwrap_or(0),
         );
         conn.packet_queue = Some(promise);
         device.connection_cache.add_connection(conn);
@@ -229,11 +231,41 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         let mut conn = packet.as_connection(
             ConnectionAction::Verdict(Verdict::Undecided),
             data.get_callout_id(),
+            data.get_transport_endpoint_handle().unwrap_or(0),
         );
         conn.packet_queue = Some(promise);
         device.connection_cache.add_connection(conn);
 
         data.block_and_absorb();
+    }
+}
+
+pub fn endpoint_closure(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    else {
+        return;
+    };
+
+    let packet = PacketInfo::from_callout_data(&data);
+    let conn = device.connection_cache.remove_connection(
+        (IpProtocol::from(packet.protocol), packet.local_port),
+        data.get_transport_endpoint_handle().unwrap_or(0),
+    );
+    if let Some(conn) = conn {
+        let mut local_ip: [u8; 4] = [0; 4];
+        local_ip.copy_from_slice(conn.local_address.as_bytes());
+        let mut remote_ip: [u8; 4] = [0; 4];
+        remote_ip.copy_from_slice(conn.remote_address.as_bytes());
+        let info = Box::new(ConnectionEndEventV4Info::new(
+            packet.process_id.unwrap_or(0),
+            conn.direction as u8,
+            packet.protocol,
+            local_ip,
+            remote_ip,
+            conn.local_port,
+            conn.remote_port,
+        ));
+        let _ = device.io_queue.push(info);
     }
 }
 
@@ -536,27 +568,13 @@ pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_O
             );
         }
         layer::Layer::FwpmLayerAleResourceReleaseV4 => {
-            if device
-                .connection_cache
-                .unregister_port((IpProtocol::from(packet.protocol), packet.local_port))
-                .is_some()
-            {
-                info!(
-                    device.logger,
-                    "Port {}/{} released pid={}",
-                    packet.local_port,
-                    packet.protocol,
-                    packet.process_id.unwrap_or(0)
-                );
-            } else {
-                info!(
-                    device.logger,
-                    "Port {}/{} released pid={} (was not in the cache)",
-                    packet.local_port,
-                    packet.protocol,
-                    packet.process_id.unwrap_or(0)
-                );
-            }
+            info!(
+                device.logger,
+                "Port {}/{} released pid={}",
+                packet.local_port,
+                packet.protocol,
+                packet.process_id.unwrap_or(0)
+            );
         }
         _ => {}
     }

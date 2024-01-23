@@ -77,19 +77,38 @@ pub struct PacketInfo {
 }
 
 impl PacketInfo {
-    pub fn as_connection(&self, action: ConnectionAction, callout_id: usize) -> Connection {
+    pub fn as_connection(
+        &self,
+        action: ConnectionAction,
+        callout_id: usize,
+        endpoint_handle: u64,
+    ) -> Connection {
         Connection {
             protocol: IpProtocol::from(self.protocol),
+            direction: self.direction,
             local_address: Ipv4Address::from_bytes(&self.local_ip),
             local_port: self.local_port,
             remote_address: Ipv4Address::from_bytes(&self.remote_ip),
             remote_port: self.remote_port,
+            endpoint_handle,
             action,
             packet_queue: None,
             callout_id,
         }
     }
 
+    pub fn as_connection_info(&self, id: u64) -> ConnectionInfoV4 {
+        ConnectionInfoV4::new(
+            id,
+            self.process_id.unwrap_or(0),
+            self.direction as u8,
+            self.protocol,
+            self.local_ip,
+            self.remote_ip,
+            self.local_port,
+            self.remote_port,
+        )
+    }
     pub fn get_key(&self) -> Key {
         Key {
             protocol: IpProtocol::from(self.protocol),
@@ -238,25 +257,30 @@ impl PacketInfo {
                     ..Default::default()
                 }
             }
+            Layer::FwpmLayerAleEndpointClosureV4 => {
+                type Field = layer::FwpsFieldsAleEndpointClosureV4;
+                Self {
+                    process_id: data.get_process_id(),
+                    direction: Direction::NotApplicable,
+                    ip_v6: false,
+                    protocol: data.get_value_u8(Field::IpProtocol as usize),
+                    local_ip: data
+                        .get_value_u32(Field::IpLocalAddress as usize)
+                        .to_be_bytes(),
+                    remote_ip: data
+                        .get_value_u32(Field::IpRemoteAddress as usize)
+                        .to_be_bytes(),
+                    local_port: data.get_value_u16(Field::IpLocalPort as usize),
+                    remote_port: data.get_value_u16(Field::IpRemotePort as usize),
+                    ..Default::default()
+                }
+            }
             _ => {
                 let guid = data.layer.get_guid();
                 err!("unsupported layer: {:#x}", guid.data1);
                 Self::default()
             }
         }
-    }
-
-    pub fn as_connection_info(&self, id: u64) -> ConnectionInfoV4 {
-        ConnectionInfoV4::new(
-            id,
-            self.process_id.unwrap_or(0),
-            self.direction as u8,
-            self.protocol,
-            self.local_ip,
-            self.remote_ip,
-            self.local_port,
-            self.remote_port,
-        )
     }
 }
 

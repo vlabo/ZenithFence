@@ -73,6 +73,14 @@ impl Device {
                 callouts::ale_layer_accept,
             ),
             Callout::new(
+                "AleEndpointClosure",
+                "ALE layer for indicating closing of connection",
+                0x58f02845_ace9_4455_ac80_8a84b86fe566,
+                Layer::FwpmLayerAleEndpointClosureV4,
+                consts::FWP_ACTION_CALLOUT_INSPECTION,
+                callouts::endpoint_closure,
+            ),
+            Callout::new(
                 "IPPacketOutbound",
                 "IP packet outbound network layer callout",
                 0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
