@@ -217,11 +217,6 @@ impl ConnectionCache {
         return conn;
     }
 
-    fn unregister_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<Connection>> {
-        let _guard = self.lock.write_lock();
-        self.connections.remove(&key)
-    }
-
     pub fn clear(&mut self) {
         let _guard = self.lock.write_lock();
         self.connections.clear();

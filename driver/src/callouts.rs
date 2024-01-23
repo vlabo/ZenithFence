@@ -13,6 +13,7 @@ use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::connection_cache::{Connection, Key};
+use crate::info;
 use crate::logger::Logger;
 use crate::types::Direction;
 use crate::{
@@ -22,7 +23,6 @@ use crate::{
     err,
     types::{PacketInfo, Verdict},
 };
-use crate::{info, warn};
 
 pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = FwpsFieldsAleAuthConnectV4;
@@ -44,6 +44,16 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
     let is_reauthorize = data.is_reauthorize(Fields::Flags as usize);
 
     let packet = PacketInfo::from_callout_data(&data);
+    match IpProtocol::from(packet.protocol) {
+        IpProtocol::Tcp | IpProtocol::Udp => {}
+        _ => {
+            let conn_info = packet.as_connection_info(0);
+            let _ = device.primary_queue.push(Box::new(conn_info));
+            data.action_permit();
+            return;
+        }
+    }
+
     info!(device.logger, "Connect callout: {:?}", packet);
     if let Some(action) = device.connection_cache.get_connection_action(
         &packet.get_key(),
@@ -116,7 +126,7 @@ pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJEC
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
         let conn_info = packet.as_connection_info(id);
-        let _ = device.io_queue.push(Box::new(conn_info));
+        let _ = device.primary_queue.push(Box::new(conn_info));
 
         // Save the connection.
         let mut conn = packet.as_connection(
@@ -153,6 +163,17 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
     let is_reauthorize = data.is_reauthorize(Fields::Flags as usize);
 
     let packet = PacketInfo::from_callout_data(&data);
+
+    match IpProtocol::from(packet.protocol) {
+        IpProtocol::Tcp | IpProtocol::Udp => {}
+        _ => {
+            let conn_info = packet.as_connection_info(0);
+            let _ = device.primary_queue.push(Box::new(conn_info));
+            data.action_permit();
+            return;
+        }
+    }
+
     info!(device.logger, "Accept callout: {:?}", packet);
     if let Some(action) = device.connection_cache.get_connection_action(
         &packet.get_key(),
@@ -225,7 +246,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
         let conn_info = packet.as_connection_info(id);
-        let _ = device.io_queue.push(Box::new(conn_info));
+        let _ = device.primary_queue.push(Box::new(conn_info));
 
         // Save the connection.
         let mut conn = packet.as_connection(
@@ -265,7 +286,7 @@ pub fn endpoint_closure(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
             conn.local_port,
             conn.remote_port,
         ));
-        let _ = device.io_queue.push(info);
+        let _ = device.primary_queue.push(info);
     }
 }
 
@@ -459,10 +480,8 @@ fn network_layer(
         // Get key from packet.
         let key = match get_key_from_nbl(&nbl, direction) {
             Ok(key) => key,
-            Err(err) => {
-                let packet = PacketInfo::from_callout_data(&data);
-                warn!(device.logger, "error reading key: {}", err);
-                warn!(device.logger, "             data: {:?}", packet);
+            Err(_) => {
+                // Protocol not supported.
                 continue;
             }
         };
