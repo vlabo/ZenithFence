@@ -7,12 +7,13 @@ mod array_holder;
 mod callouts;
 mod common;
 mod connection_cache;
+mod connection_members;
 mod device;
 mod entry;
 mod id_cache;
 pub mod logger;
+mod packet_info_v4;
 mod packet_util;
-mod types;
 
 use wdk::allocator::WindowsAllocator;
 

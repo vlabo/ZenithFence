@@ -1,6 +1,6 @@
 use core::fmt::Display;
 
-use crate::types::{Direction, Verdict};
+use crate::{connection_members::Direction, connection_members::Verdict};
 use alloc::{collections::BTreeMap, vec::Vec};
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
@@ -215,6 +215,11 @@ impl ConnectionCache {
         }
 
         return conn;
+    }
+
+    pub fn unregister_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<Connection>> {
+        let _guard = self.lock.write_lock();
+        self.connections.remove(&key)
     }
 
     pub fn clear(&mut self) {

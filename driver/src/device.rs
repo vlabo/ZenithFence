@@ -18,10 +18,12 @@ use crate::{
     array_holder::ArrayHolder,
     callouts,
     connection_cache::{ConnectionAction, ConnectionCache, Key},
+    connection_members::Verdict,
     dbg, err,
-    id_cache::PacketCache,
+    id_cache::IdCache,
     logger::Logger,
-    types::Verdict,
+    packet_info_v4::PacketInfoV4,
+    packet_util::packet_info_as_key,
 };
 
 // Device Context
@@ -30,7 +32,7 @@ pub struct Device {
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) primary_queue: IOQueue<Box<dyn Info>>,
     pub(crate) secondary_queue: IOQueue<Box<dyn Info>>,
-    pub(crate) packet_cache: PacketCache,
+    pub(crate) packet_cache: IdCache<PacketInfoV4>,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
@@ -97,6 +99,22 @@ impl Device {
                 Layer::FwpmLayerInboundIppacketV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
                 callouts::ip_packet_layer_inbound,
+            ),
+            Callout::new(
+                "AleResourceAssignment",
+                "Port release monitor",
+                0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
+                Layer::FwpmLayerAleResourceAssignmentV4,
+                consts::FWP_ACTION_CALLOUT_INSPECTION,
+                callouts::ale_resource_monitor_ipv4,
+            ),
+            Callout::new(
+                "AleResourceRelease",
+                "Port release monitor",
+                0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
+                Layer::FwpmLayerAleResourceReleaseV4,
+                consts::FWP_ACTION_CALLOUT_INSPECTION,
+                callouts::ale_resource_monitor_ipv4,
             ),
         ];
 
@@ -207,11 +225,11 @@ impl Device {
                 // Received verdict decision for a specific connection.
                 if let Some(packet) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        dbg!(self.logger, "Packet: {:?}", packet);
+                        dbg!(self.logger, "Packet: {}", packet);
                         dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        let key = packet.get_key();
+                        let key = packet_info_as_key(&packet);
                         classify_defer = self
                             .connection_cache
                             .update_connection(key, ConnectionAction::Verdict(verdict));
@@ -226,7 +244,7 @@ impl Device {
             CommandType::RedirectV4 => {
                 let redirect = protocol::command::parse_redirect_v4(buffer);
                 if let Some(packet) = self.packet_cache.pop_id(redirect.id) {
-                    dbg!(self.logger, "packet: {:?}", packet);
+                    dbg!(self.logger, "packet: {}", packet);
                     let remote_address = redirect.remote_address;
                     let remote_port = redirect.remote_port;
                     dbg!(
@@ -236,7 +254,7 @@ impl Device {
                         remote_port
                     );
 
-                    let key = packet.get_key();
+                    let key = packet_info_as_key(&packet);
                     classify_defer = self.connection_cache.update_connection(
                         key,
                         ConnectionAction::RedirectIP {

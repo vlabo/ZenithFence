@@ -9,15 +9,14 @@ use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::connection_cache::Connection;
-use crate::packet_util::{get_key_from_nbl, redirect_inbound_packet, redirect_outbound_packet};
-use crate::types::Direction;
-use crate::{
-    connection_cache::ConnectionAction,
-    dbg,
-    device::Device,
-    err,
-    types::{PacketInfo, Verdict},
+use crate::connection_members::{Direction, Verdict};
+use crate::info;
+use crate::packet_info_v4::PacketInfoV4;
+use crate::packet_util::{
+    get_key_from_nbl, packet_info_as_connection, packet_info_as_connection_info_v4,
+    packet_info_as_key, redirect_inbound_packet, redirect_outbound_packet,
 };
+use crate::{connection_cache::ConnectionAction, dbg, device::Device, err};
 
 // ALE Layers
 
@@ -70,21 +69,21 @@ pub fn ale_layer_auth(
         return;
     }
 
-    let packet = PacketInfo::from_callout_data(&data);
+    let packet = PacketInfoV4::from_callout_data(&data);
 
     // Check if protocol is supported
     match IpProtocol::from(packet.protocol) {
         IpProtocol::Tcp | IpProtocol::Udp => {}
         _ => {
             // Not supported. Send event and permit.
-            let conn_info = packet.as_connection_info(0);
+            let conn_info = packet_info_as_connection_info_v4(&packet, 0);
             let _ = device.primary_queue.push(Box::new(conn_info));
             data.action_permit();
             return;
         }
     }
     if let Some(action) = device.connection_cache.get_connection_action(
-        &packet.get_key(),
+        &packet_info_as_key(&packet),
         |conn| -> Option<ConnectionAction> {
             // Is behind spin lock, just copy and return.
             Some(conn.action.clone())
@@ -102,13 +101,13 @@ pub fn ale_layer_auth(
                     data.block_and_absorb();
                 }
                 Verdict::Undecided => {
-                    if packet.protocol == u8::from(IpProtocol::Udp) || reauthorize {
+                    if packet.protocol == IpProtocol::Udp || reauthorize {
                         let mut nbl = NetBufferList::new(data.get_layer_data() as _);
                         nbl.retreat(IPV4_HEADER_LEN as u32, true);
                         if let Ok(clone) = nbl.clone(&device.network_allocator) {
                             device
                                 .connection_cache
-                                .push_packet_to_connection(packet.get_key(), clone);
+                                .push_packet_to_connection(packet_info_as_key(&packet), clone);
                         }
                     }
                     data.block_and_absorb();
@@ -124,14 +123,14 @@ pub fn ale_layer_auth(
     } else {
         // Pend decision of connection.
         let mut packet_list = None;
-        if packet.protocol == u8::from(IpProtocol::Udp) || reauthorize {
+        if packet.protocol == IpProtocol::Udp || reauthorize {
             let mut nbl = NetBufferList::new(data.get_layer_data() as _);
             nbl.retreat(IPV4_HEADER_LEN as u32, true);
             if let Ok(clone) = nbl.clone(&device.network_allocator) {
                 packet_list = Some(Injector::from_ale_callout(
                     &data,
                     clone,
-                    packet.remote_ip,
+                    packet.remote_ip.0,
                     true,
                     interface_index,
                     sub_interface_index,
@@ -153,11 +152,12 @@ pub fn ale_layer_auth(
 
         // Send request to user-space.
         let id = device.packet_cache.push(packet.clone());
-        let conn_info = packet.as_connection_info(id);
+        let conn_info = packet_info_as_connection_info_v4(&packet, id);
         let _ = device.primary_queue.push(Box::new(conn_info));
 
         // Save the connection.
-        let mut conn = packet.as_connection(
+        let mut conn = packet_info_as_connection(
+            &packet,
             ConnectionAction::Verdict(Verdict::Undecided),
             data.get_callout_id(),
             data.get_transport_endpoint_handle().unwrap_or(0),
@@ -175,31 +175,74 @@ pub fn endpoint_closure(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
         return;
     };
 
-    let packet = PacketInfo::from_callout_data(&data);
+    let packet = PacketInfoV4::from_callout_data(&data);
     let conn = device.connection_cache.remove_connection(
-        (IpProtocol::from(packet.protocol), packet.local_port),
+        (packet.protocol, packet.local_port),
         data.get_transport_endpoint_handle().unwrap_or(0),
     );
     if let Some(conn) = conn {
-        let mut local_ip: [u8; 4] = [0; 4];
-        local_ip.copy_from_slice(conn.local_address.as_bytes());
-        let mut remote_ip: [u8; 4] = [0; 4];
-        remote_ip.copy_from_slice(conn.remote_address.as_bytes());
         let info = Box::new(ConnectionEndEventV4Info::new(
             packet.process_id.unwrap_or(0),
             conn.direction as u8,
-            packet.protocol,
-            local_ip,
-            remote_ip,
+            u8::from(packet.protocol),
+            conn.local_address.0,
+            conn.remote_address.0,
             conn.local_port,
             conn.remote_port,
         ));
         let _ = device.primary_queue.push(info);
+    } else {
+        err!(device.logger, "connection not found in cache: {}", packet);
     }
 }
 
-// IP packet layer
+pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
+    else {
+        return;
+    };
+    let packet = PacketInfoV4::from_callout_data(&data);
+    match data.layer {
+        layer::Layer::FwpmLayerAleResourceAssignmentV4 => {
+            info!(
+                device.logger,
+                "Port {}/{} assigned pid={}",
+                packet.local_port,
+                packet.protocol,
+                packet.process_id.unwrap_or(0)
+            );
+        }
+        layer::Layer::FwpmLayerAleResourceReleaseV4 => {
+            if let Some(conns) = device
+                .connection_cache
+                .unregister_port((IpProtocol::from(packet.protocol), packet.local_port))
+            {
+                info!(
+                    device.logger,
+                    "Port {}/{} released pid={}",
+                    packet.local_port,
+                    packet.protocol,
+                    packet.process_id.unwrap_or(0)
+                );
+                for conn in conns {
+                    let info = Box::new(ConnectionEndEventV4Info::new(
+                        packet.process_id.unwrap_or(0),
+                        conn.direction as u8,
+                        u8::from(packet.protocol),
+                        conn.local_address.0,
+                        conn.remote_address.0,
+                        conn.local_port,
+                        conn.remote_port,
+                    ));
+                    let _ = device.primary_queue.push(info);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
+// IP packet layers
 pub fn ip_packet_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FwpsFieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);

@@ -81,6 +81,12 @@ impl<'a> CalloutData<'a> {
         };
     }
 
+    pub fn get_value_byte_array16(&'a self, index: usize) -> &[u8; 16] {
+        unsafe {
+            return self.values[index].value.byte_array16.as_ref().unwrap();
+        };
+    }
+
     pub fn get_process_id(&self) -> Option<u64> {
         unsafe { (*self.metadata).get_process_id() }
     }
