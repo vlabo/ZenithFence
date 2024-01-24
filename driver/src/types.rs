@@ -98,6 +98,15 @@ impl PacketInfo {
     }
 
     pub fn as_connection_info(&self, id: u64) -> ConnectionInfoV4 {
+        let mut local_port = 0;
+        let mut remote_port = 0;
+        match IpProtocol::from(self.protocol) {
+            IpProtocol::Tcp | IpProtocol::Udp => {
+                local_port = self.local_port;
+                remote_port = self.remote_port;
+            }
+            _ => {}
+        }
         ConnectionInfoV4::new(
             id,
             self.process_id.unwrap_or(0),
@@ -105,10 +114,11 @@ impl PacketInfo {
             self.protocol,
             self.local_ip,
             self.remote_ip,
-            self.local_port,
-            self.remote_port,
+            local_port,
+            remote_port,
         )
     }
+
     pub fn get_key(&self) -> Key {
         Key {
             protocol: IpProtocol::from(self.protocol),

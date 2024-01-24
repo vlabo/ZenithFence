@@ -1,10 +1,6 @@
 use alloc::boxed::Box;
-use alloc::format;
-use alloc::string::{String, ToString};
 use protocol::info::ConnectionEndEventV4Info;
-use smoltcp::wire::{
-    IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket, UdpPacket, IPV4_HEADER_LEN,
-};
+use smoltcp::wire::{IpProtocol, Ipv4Address, IPV4_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{self, FwpsFieldsAleAuthConnectV4, FwpsFieldsAleAuthRecvAcceptV4};
 use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
@@ -12,9 +8,8 @@ use wdk::filter_engine::packet::{InjectInfo, Injector};
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::connection_cache::{Connection, Key};
-use crate::info;
-use crate::logger::Logger;
+use crate::connection_cache::Connection;
+use crate::packet_util::{get_key_from_nbl, redirect_inbound_packet, redirect_outbound_packet};
 use crate::types::Direction;
 use crate::{
     connection_cache::ConnectionAction,
@@ -24,128 +19,43 @@ use crate::{
     types::{PacketInfo, Verdict},
 };
 
-pub fn ale_layer_connect(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+// ALE Layers
+
+pub fn ale_layer_connect(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = FwpsFieldsAleAuthConnectV4;
-
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
-        return;
-    };
-
-    // Check if packet was previously injected from the packet layer.
-    if device
-        .injector
-        .was_network_packet_injected_by_self(data.get_layer_data() as _)
-    {
-        data.action_permit();
-        return;
-    }
-
-    let is_reauthorize = data.is_reauthorize(Fields::Flags as usize);
-
-    let packet = PacketInfo::from_callout_data(&data);
-    match IpProtocol::from(packet.protocol) {
-        IpProtocol::Tcp | IpProtocol::Udp => {}
-        _ => {
-            let conn_info = packet.as_connection_info(0);
-            let _ = device.primary_queue.push(Box::new(conn_info));
-            data.action_permit();
-            return;
-        }
-    }
-
-    info!(device.logger, "Connect callout: {:?}", packet);
-    if let Some(action) = device.connection_cache.get_connection_action(
-        &packet.get_key(),
-        |conn| -> Option<ConnectionAction> {
-            // Function is is behind spin lock. Just copy and return.
-            Some(conn.action.clone())
-        },
-    ) {
-        // We already have a verdict for it.
-        dbg!(device.logger, "Verdict: {}", action);
-        match action {
-            ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept | Verdict::Redirect | Verdict::RedirectTunnel => {
-                    data.action_permit()
-                }
-                Verdict::Block => data.action_block(),
-                Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
-                    data.block_and_absorb();
-                }
-                Verdict::Undecided => {
-                    if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
-                        if let Ok(clone) = NetBufferList::new(data.get_layer_data() as _)
-                            .clone(&device.network_allocator)
-                        {
-                            device
-                                .connection_cache
-                                .push_packet_to_connection(packet.get_key(), clone);
-                        }
-                    }
-                    data.block_and_absorb();
-                }
-            },
-            ConnectionAction::RedirectIP {
-                redirect_address: _,
-                redirect_port: _,
-            } => {
-                data.action_permit();
-            }
-        }
-    } else {
-        // Pend decision of connection.
-        let mut packet_list = None;
-        if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
-            if let Ok(clone) =
-                NetBufferList::new(data.get_layer_data() as _).clone(&device.network_allocator)
-            {
-                packet_list = Some(Injector::from_ale_callout(
-                    &data,
-                    clone,
-                    packet.remote_ip,
-                    false,
-                    0, // TODO: remove argument for outbound
-                    0, // TODO: remove argument for outbound
-                ));
-            }
-        }
-        let promise = if is_reauthorize {
-            data.pend_filter_rest(packet_list)
-        } else {
-            match data.pend_operation(packet_list) {
-                Ok(cc) => cc,
-                Err(error) => {
-                    err!(device.logger, "failed to postpone decision: {}", error);
-                    data.action_permit(); // TODO: should error action be permit?
-                    return;
-                }
-            }
-        };
-
-        // Send request to user-space.
-        let id = device.packet_cache.push(packet.clone());
-        let conn_info = packet.as_connection_info(id);
-        let _ = device.primary_queue.push(Box::new(conn_info));
-
-        // Save the connection.
-        let mut conn = packet.as_connection(
-            ConnectionAction::Verdict(Verdict::Undecided),
-            data.get_callout_id(),
-            data.get_transport_endpoint_handle().unwrap_or(0),
-        );
-        conn.packet_queue = Some(promise);
-        device.connection_cache.add_connection(conn);
-
-        data.block_and_absorb();
-    }
-}
-
-pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    type Fields = FwpsFieldsAleAuthRecvAcceptV4;
+    let reauthorize = data.is_reauthorize(Fields::Flags as usize);
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    ale_layer_auth(
+        data,
+        device_object,
+        reauthorize,
+        interface_index,
+        sub_interface_index,
+    );
+}
 
+pub fn ale_layer_accept(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    type Fields = FwpsFieldsAleAuthRecvAcceptV4;
+    let reauthorize = data.is_reauthorize(Fields::Flags as usize);
+    let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
+    let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    ale_layer_auth(
+        data,
+        device_object,
+        reauthorize,
+        interface_index,
+        sub_interface_index,
+    );
+}
+
+pub fn ale_layer_auth(
+    mut data: CalloutData,
+    device_object: &mut DEVICE_OBJECT,
+    reauthorize: bool,
+    interface_index: u32,
+    sub_interface_index: u32,
+) {
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
     else {
         return;
@@ -160,21 +70,19 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
         return;
     }
 
-    let is_reauthorize = data.is_reauthorize(Fields::Flags as usize);
-
     let packet = PacketInfo::from_callout_data(&data);
 
+    // Check if protocol is supported
     match IpProtocol::from(packet.protocol) {
         IpProtocol::Tcp | IpProtocol::Udp => {}
         _ => {
+            // Not supported. Send event and permit.
             let conn_info = packet.as_connection_info(0);
             let _ = device.primary_queue.push(Box::new(conn_info));
             data.action_permit();
             return;
         }
     }
-
-    info!(device.logger, "Accept callout: {:?}", packet);
     if let Some(action) = device.connection_cache.get_connection_action(
         &packet.get_key(),
         |conn| -> Option<ConnectionAction> {
@@ -194,7 +102,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
                     data.block_and_absorb();
                 }
                 Verdict::Undecided => {
-                    if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
+                    if packet.protocol == u8::from(IpProtocol::Udp) || reauthorize {
                         let mut nbl = NetBufferList::new(data.get_layer_data() as _);
                         nbl.retreat(IPV4_HEADER_LEN as u32, true);
                         if let Ok(clone) = nbl.clone(&device.network_allocator) {
@@ -216,7 +124,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
     } else {
         // Pend decision of connection.
         let mut packet_list = None;
-        if packet.protocol == u8::from(IpProtocol::Udp) || is_reauthorize {
+        if packet.protocol == u8::from(IpProtocol::Udp) || reauthorize {
             let mut nbl = NetBufferList::new(data.get_layer_data() as _);
             nbl.retreat(IPV4_HEADER_LEN as u32, true);
             if let Ok(clone) = nbl.clone(&device.network_allocator) {
@@ -230,7 +138,7 @@ pub fn ale_layer_accept(mut data: CalloutData, device_object: &mut DEVICE_OBJECT
                 ));
             }
         }
-        let promise = if is_reauthorize {
+        let promise = if reauthorize {
             data.pend_filter_rest(packet_list)
         } else {
             match data.pend_operation(packet_list) {
@@ -290,144 +198,14 @@ pub fn endpoint_closure(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     }
 }
 
-// TODO: move this to util file.
-fn redirect_outbound_packet(packet: &mut [u8], remote_address: Ipv4Address, remote_port: u16) {
-    if let Ok(mut ip_packet) = Ipv4Packet::new_checked(packet) {
-        ip_packet.set_dst_addr(remote_address);
-        if remote_address.is_loopback() {
-            ip_packet.set_src_addr(Ipv4Address::new(127, 0, 0, 1));
-        }
-        ip_packet.fill_checksum();
-        let src_addr = ip_packet.src_addr();
-        let dst_addr = ip_packet.dst_addr();
-        if ip_packet.next_header() == IpProtocol::Udp {
-            if let Ok(mut udp_packet) = UdpPacket::new_checked(ip_packet.payload_mut()) {
-                udp_packet.set_dst_port(remote_port);
-                udp_packet.fill_checksum(&IpAddress::Ipv4(src_addr), &IpAddress::Ipv4(dst_addr));
-            }
-        }
-        if ip_packet.next_header() == IpProtocol::Tcp {
-            if let Ok(mut tcp_packet) = TcpPacket::new_checked(ip_packet.payload_mut()) {
-                tcp_packet.set_dst_port(remote_port);
-                tcp_packet.fill_checksum(&IpAddress::Ipv4(src_addr), &IpAddress::Ipv4(dst_addr));
-            }
-        }
-    }
-}
+// IP packet layer
 
-// TODO: move this to util file.
-fn redirect_inbound_packet(
-    packet: &mut [u8],
-    local_address: Ipv4Address,
-    original_remote_address: Ipv4Address,
-    original_remote_port: u16,
-) {
-    if let Ok(mut ip_packet) = Ipv4Packet::new_checked(packet) {
-        ip_packet.set_dst_addr(local_address);
-        ip_packet.set_src_addr(original_remote_address);
-        ip_packet.fill_checksum();
-        let src_addr = ip_packet.src_addr();
-        let dst_addr = ip_packet.dst_addr();
-        if ip_packet.next_header() == IpProtocol::Udp {
-            if let Ok(mut udp_packet) = UdpPacket::new_checked(ip_packet.payload_mut()) {
-                udp_packet.set_src_port(original_remote_port);
-                udp_packet.fill_checksum(&IpAddress::Ipv4(src_addr), &IpAddress::Ipv4(dst_addr));
-            }
-        }
-        if ip_packet.next_header() == IpProtocol::Tcp {
-            if let Ok(mut tcp_packet) = TcpPacket::new_checked(ip_packet.payload_mut()) {
-                tcp_packet.set_src_port(original_remote_port);
-                tcp_packet.fill_checksum(&IpAddress::Ipv4(src_addr), &IpAddress::Ipv4(dst_addr));
-            }
-        }
-    }
-}
-
-// TODO: move this to util file.
-#[allow(dead_code)]
-fn print_packet(logger: &mut Logger, packet: &[u8]) {
-    if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
-        if ip_packet.next_header() == IpProtocol::Udp {
-            if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                dbg!(logger, "packet {} {}", ip_packet, udp_packet);
-            }
-        }
-        if ip_packet.next_header() == IpProtocol::Tcp {
-            if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                dbg!(logger, "packet {} {}", ip_packet, tcp_packet);
-            }
-        }
-    } else {
-        err!(
-            logger,
-            "failed to print packet: invalid ip header: {:?}",
-            packet
-        );
-    }
-}
-
-// TODO: Move this to util file?
-fn get_key_from_nbl(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
-    // Get bytes
-    let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
-    let Ok(()) = nbl.read_bytes(&mut headers) else {
-        return Err("failed to get net_buffer data".to_string());
-    };
-
-    // Parse packet
-    let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let protocol;
-    let src_port;
-    let dst_port;
-    match ip_packet.next_header() {
-        smoltcp::wire::IpProtocol::Tcp => {
-            let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Tcp;
-            src_port = tcp_packet.src_port();
-            dst_port = tcp_packet.dst_port();
-        }
-        smoltcp::wire::IpProtocol::Udp => {
-            let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Udp;
-            src_port = udp_packet.src_port();
-            dst_port = udp_packet.dst_port();
-        }
-        protocol => {
-            return Err(format!(
-                "unsupported protocol: {} {} {}",
-                ip_packet.src_addr(),
-                ip_packet.dst_addr(),
-                protocol
-            ));
-        }
-    };
-
-    // Build key
-    match direction {
-        Direction::Outbound => Ok(Key {
-            protocol,
-            local_address: ip_packet.src_addr(),
-            local_port: src_port,
-            remote_address: ip_packet.dst_addr(),
-            remote_port: dst_port,
-        }),
-        Direction::Inbound => Ok(Key {
-            protocol,
-            local_address: ip_packet.dst_addr(),
-            local_port: dst_port,
-            remote_address: ip_packet.src_addr(),
-            remote_port: src_port,
-        }),
-        Direction::NotApplicable => Err("invalid direction".to_string()),
-    }
-}
-
-pub fn network_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FwpsFieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
-    network_layer(
+    ip_packet_layer(
         data,
         device_object,
         Direction::Outbound,
@@ -436,12 +214,12 @@ pub fn network_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJE
     );
 }
 
-pub fn network_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FwpsFieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
-    network_layer(
+    ip_packet_layer(
         data,
         device_object,
         Direction::Inbound,
@@ -450,7 +228,7 @@ pub fn network_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJEC
     );
 }
 
-fn network_layer(
+fn ip_packet_layer(
     mut data: CalloutData,
     device_object: &mut DEVICE_OBJECT,
     direction: Direction,
@@ -566,35 +344,5 @@ fn network_layer(
             // TODO: should it block on failed inject?
             data.block_and_absorb();
         }
-    }
-}
-
-pub fn ale_resource_monitor_ipv4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
-        return;
-    };
-
-    let packet = PacketInfo::from_callout_data(&data);
-    match data.layer {
-        layer::Layer::FwpmLayerAleResourceAssignmentV4 => {
-            info!(
-                device.logger,
-                "Port {}/{} assigned pid={}",
-                packet.local_port,
-                packet.protocol,
-                packet.process_id.unwrap_or(0)
-            );
-        }
-        layer::Layer::FwpmLayerAleResourceReleaseV4 => {
-            info!(
-                device.logger,
-                "Port {}/{} released pid={}",
-                packet.local_port,
-                packet.protocol,
-                packet.process_id.unwrap_or(0)
-            );
-        }
-        _ => {}
     }
 }

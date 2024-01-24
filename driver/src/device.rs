@@ -88,7 +88,7 @@ impl Device {
                 0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
                 Layer::FwpmLayerOutboundIppacketV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::network_layer_outbound,
+                callouts::ip_packet_layer_outbound,
             ),
             Callout::new(
                 "IPPacketInbound",
@@ -96,23 +96,7 @@ impl Device {
                 0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
                 Layer::FwpmLayerInboundIppacketV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::network_layer_inbound,
-            ),
-            Callout::new(
-                "AleResourceAssignment",
-                "Port release monitor",
-                0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
-                Layer::FwpmLayerAleResourceAssignmentV4,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                callouts::ale_resource_monitor_ipv4,
-            ),
-            Callout::new(
-                "AleResourceRelease",
-                "Port release monitor",
-                0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
-                Layer::FwpmLayerAleResourceReleaseV4,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                callouts::ale_resource_monitor_ipv4,
+                callouts::ip_packet_layer_inbound,
             ),
         ];
 

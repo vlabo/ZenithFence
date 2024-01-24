@@ -60,8 +60,8 @@ impl Drop for Logger {
     fn drop(&mut self) {
         for line in &self.log_lines {
             let ptr = line.load(Ordering::Relaxed);
-            if !ptr.is_null() {
-                unsafe {
+            unsafe {
+                if !ptr.is_null() {
                     _ = Box::from_raw(ptr);
                 }
             }

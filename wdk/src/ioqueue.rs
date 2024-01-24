@@ -173,7 +173,7 @@ impl<T> IOQueue<T> {
         self.pop_internal(&timeout)
     }
 
-    /// Returns element or a status. Does not wait.
+    /// Returns element or a status. Waits the specified timeout.
     pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status> {
         let timeout_ptr: i64 = timeout * -10000;
         self.pop_internal(&timeout_ptr)

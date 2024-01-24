@@ -11,6 +11,7 @@ mod device;
 mod entry;
 mod id_cache;
 pub mod logger;
+mod packet_util;
 mod types;
 
 use wdk::allocator::WindowsAllocator;

@@ -18,7 +18,7 @@ impl PacketCache {
     pub fn init(&mut self) {
         self.values = VecDeque::with_capacity(1000);
         self.lock.init();
-        self.next_id = 0;
+        self.next_id = 1; // 0 is invalid id
     }
 
     pub fn push(&mut self, value: PacketInfo) -> u64 {
@@ -26,7 +26,7 @@ impl PacketCache {
 
         let id = self.next_id;
         self.values.push_back(PacketEntry { value, id });
-        self.next_id += 1; // Assuming this will not overflow.
+        self.next_id = self.next_id.wrapping_add(1); // Assuming this will not overflow.
         id
     }
 
