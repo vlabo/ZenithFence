@@ -1,7 +1,7 @@
-use core::fmt::Display;
-
 use crate::{connection_members::Direction, connection_members::Verdict};
+use alloc::boxed::Box;
 use alloc::{collections::BTreeMap, vec::Vec};
+use core::fmt::Display;
 use smoltcp::wire::{IpProtocol, Ipv4Address};
 use wdk::{
     filter_engine::{callout_data::ClassifyDefer, net_buffer::NetBufferList},
@@ -31,13 +31,18 @@ impl Display for ConnectionAction {
 
 pub struct Connection {
     pub(crate) protocol: IpProtocol,
-    pub(crate) direction: Direction,
     pub(crate) local_address: Ipv4Address,
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) action: ConnectionAction,
+    // Less frequently used data
+    pub(crate) extra: Box<ConnectionExtra>,
+}
+
+pub struct ConnectionExtra {
     pub(crate) endpoint_handle: u64,
+    pub(crate) direction: Direction,
     pub(crate) packet_queue: Option<ClassifyDefer>,
     pub(crate) callout_id: usize,
 }
@@ -134,7 +139,7 @@ impl ConnectionCache {
         if let Some(conns) = self.connections.get_mut(&key.small()) {
             for conn in conns {
                 if conn.remote_equals(&key) {
-                    if let Some(classify_defer) = &mut conn.packet_queue {
+                    if let Some(classify_defer) = &mut conn.extra.packet_queue {
                         classify_defer.add_net_buffer(packet);
                         return;
                     }
@@ -153,11 +158,11 @@ impl ConnectionCache {
             for conn in conns {
                 if conn.remote_equals(&key) {
                     conn.action = action;
-                    let classify_defer = conn.packet_queue.take();
+                    let classify_defer = conn.extra.packet_queue.take();
                     if classify_defer.is_some() {
                         return classify_defer;
                     } else {
-                        return Some(ClassifyDefer::Reauthorization(conn.callout_id, None));
+                        return Some(ClassifyDefer::Reauthorization(conn.extra.callout_id, None));
                     }
                 }
             }
@@ -197,7 +202,7 @@ impl ConnectionCache {
         let mut delete = false;
         if let Some(conns) = self.connections.get_mut(&key) {
             for (i, conn) in conns.iter().enumerate() {
-                if conn.endpoint_handle == endpoint_handle {
+                if conn.extra.endpoint_handle == endpoint_handle {
                     index = Some(i);
                     break;
                 }

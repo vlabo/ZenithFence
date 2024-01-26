@@ -15,15 +15,14 @@ use wdk::{
 };
 
 use crate::{
+    ale_callouts,
     array_holder::ArrayHolder,
-    callouts,
     connection_cache::{ConnectionAction, ConnectionCache, Key},
     connection_members::Verdict,
     dbg, err,
     id_cache::IdCache,
     logger::Logger,
-    packet_info_v4::PacketInfoV4,
-    packet_util::packet_info_as_key,
+    packet_callouts,
 };
 
 // Device Context
@@ -32,7 +31,7 @@ pub struct Device {
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) primary_queue: IOQueue<Box<dyn Info>>,
     pub(crate) secondary_queue: IOQueue<Box<dyn Info>>,
-    pub(crate) packet_cache: IdCache<PacketInfoV4>,
+    pub(crate) packet_cache: IdCache<Key>,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
@@ -64,57 +63,57 @@ impl Device {
                 "AleLayerOutbound",
                 "ALE layer for outbound connections",
                 0x58545073_f893_454c_bbea_a57bc964f46d,
-                Layer::FwpmLayerAleAuthConnectV4,
+                Layer::AleAuthConnectV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::ale_layer_connect,
+                ale_callouts::ale_layer_connect,
             ),
             Callout::new(
                 "AleLayerInbound",
                 "ALE layer for inbound connections",
                 0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
-                Layer::FwpmLayerAleAuthRecvAcceptV4,
+                Layer::AleAuthRecvAcceptV4,
                 consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::ale_layer_accept,
+                ale_callouts::ale_layer_accept,
             ),
             Callout::new(
                 "AleEndpointClosure",
                 "ALE layer for indicating closing of connection",
                 0x58f02845_ace9_4455_ac80_8a84b86fe566,
-                Layer::FwpmLayerAleEndpointClosureV4,
+                Layer::AleEndpointClosureV4,
                 consts::FWP_ACTION_CALLOUT_INSPECTION,
-                callouts::endpoint_closure,
-            ),
-            Callout::new(
-                "IPPacketOutbound",
-                "IP packet outbound network layer callout",
-                0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
-                Layer::FwpmLayerOutboundIppacketV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::ip_packet_layer_outbound,
-            ),
-            Callout::new(
-                "IPPacketInbound",
-                "IP packet inbound network layer callout",
-                0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
-                Layer::FwpmLayerInboundIppacketV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                callouts::ip_packet_layer_inbound,
+                ale_callouts::endpoint_closure,
             ),
             Callout::new(
                 "AleResourceAssignment",
                 "Port release monitor",
                 0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
-                Layer::FwpmLayerAleResourceAssignmentV4,
+                Layer::AleResourceAssignmentV4,
                 consts::FWP_ACTION_CALLOUT_INSPECTION,
-                callouts::ale_resource_monitor_ipv4,
+                ale_callouts::ale_resource_monitor_ipv4,
             ),
             Callout::new(
                 "AleResourceRelease",
                 "Port release monitor",
                 0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
-                Layer::FwpmLayerAleResourceReleaseV4,
+                Layer::AleResourceReleaseV4,
                 consts::FWP_ACTION_CALLOUT_INSPECTION,
-                callouts::ale_resource_monitor_ipv4,
+                ale_callouts::ale_resource_monitor_ipv4,
+            ),
+            Callout::new(
+                "IPPacketOutbound",
+                "IP packet outbound network layer callout",
+                0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
+                Layer::OutboundIppacketV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                packet_callouts::ip_packet_layer_outbound,
+            ),
+            Callout::new(
+                "IPPacketInbound",
+                "IP packet inbound network layer callout",
+                0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
+                Layer::InboundIppacketV4,
+                consts::FWP_ACTION_CALLOUT_TERMINATING,
+                packet_callouts::ip_packet_layer_inbound,
             ),
         ];
 
@@ -223,13 +222,13 @@ impl Device {
                 let verdict = protocol::command::parse_verdict(buffer);
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
-                if let Some(packet) = self.packet_cache.pop_id(verdict.id) {
+                if let Some(key) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        dbg!(self.logger, "Packet: {}", packet);
-                        dbg!(self.logger, "Verdict response: {}", verdict);
+                        // dbg!(self.logger, "Packet: {}", packet);
+                        // dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        let key = packet_info_as_key(&packet);
+                        // let key = packet_info_as_key(&packet);
                         classify_defer = self
                             .connection_cache
                             .update_connection(key, ConnectionAction::Verdict(verdict));
@@ -243,8 +242,8 @@ impl Device {
             }
             CommandType::RedirectV4 => {
                 let redirect = protocol::command::parse_redirect_v4(buffer);
-                if let Some(packet) = self.packet_cache.pop_id(redirect.id) {
-                    dbg!(self.logger, "packet: {}", packet);
+                if let Some(key) = self.packet_cache.pop_id(redirect.id) {
+                    dbg!(self.logger, "packet: {}", key);
                     let remote_address = redirect.remote_address;
                     let remote_port = redirect.remote_port;
                     dbg!(
@@ -254,7 +253,6 @@ impl Device {
                         remote_port
                     );
 
-                    let key = packet_info_as_key(&packet);
                     classify_defer = self.connection_cache.update_connection(
                         key,
                         ConnectionAction::RedirectIP {

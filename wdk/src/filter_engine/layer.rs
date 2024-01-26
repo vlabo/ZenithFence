@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+use core::fmt::Debug;
 
 use windows_sys::{
     core::GUID,
@@ -44,7 +44,7 @@ pub(crate) struct Value {
 }
 
 #[repr(C)]
-pub(crate) struct FwpsIncomingValues {
+pub(crate) struct IncomingValues {
     pub(crate) layer_id: u16,
     pub(crate) value_count: u32,
     pub(crate) incoming_value_array: *const Value,
@@ -88,158 +88,147 @@ pub enum ValueType {
     FwpDataTypeMax = 0xff + 4,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Layer {
-    FwpmLayerInboundIppacketV4,
-    FwpmLayerInboundIppacketV4Discard,
-    FwpmLayerInboundIppacketV6,
-    FwpmLayerInboundIppacketV6Discard,
-    FwpmLayerOutboundIppacketV4,
-    FwpmLayerOutboundIppacketV4Discard,
-    FwpmLayerOutboundIppacketV6,
-    FwpmLayerOutboundIppacketV6Discard,
-    FwpmLayerIpforwardV4,
-    FwpmLayerIpforwardV4Discard,
-    FwpmLayerIpforwardV6,
-    FwpmLayerIpforwardV6Discard,
-    FwpmLayerInboundTransportV4,
-    FwpmLayerInboundTransportV4Discard,
-    FwpmLayerInboundTransportV6,
-    FwpmLayerInboundTransportV6Discard,
-    FwpmLayerOutboundTransportV4,
-    FwpmLayerOutboundTransportV4Discard,
-    FwpmLayerOutboundTransportV6,
-    FwpmLayerOutboundTransportV6Discard,
-    FwpmLayerStreamV4,
-    FwpmLayerStreamV4Discard,
-    FwpmLayerStreamV6,
-    FwpmLayerStreamV6Discard,
-    FwpmLayerDatagramDataV4,
-    FwpmLayerDatagramDataV4Discard,
-    FwpmLayerDatagramDataV6,
-    FwpmLayerDatagramDataV6Discard,
-    FwpmLayerInboundIcmpErrorV4,
-    FwpmLayerInboundIcmpErrorV4Discard,
-    FwpmLayerInboundIcmpErrorV6,
-    FwpmLayerInboundIcmpErrorV6Discard,
-    FwpmLayerOutboundIcmpErrorV4,
-    FwpmLayerOutboundIcmpErrorV4Discard,
-    FwpmLayerOutboundIcmpErrorV6,
-    FwpmLayerOutboundIcmpErrorV6Discard,
-    FwpmLayerAleResourceAssignmentV4,
-    FwpmLayerAleResourceAssignmentV4Discard,
-    FwpmLayerAleResourceAssignmentV6,
-    FwpmLayerAleResourceAssignmentV6Discard,
-    FwpmLayerAleAuthListenV4,
-    FwpmLayerAleAuthListenV4Discard,
-    FwpmLayerAleAuthListenV6,
-    FwpmLayerAleAuthListenV6Discard,
-    FwpmLayerAleAuthRecvAcceptV4,
-    FwpmLayerAleAuthRecvAcceptV4Discard,
-    FwpmLayerAleAuthRecvAcceptV6,
-    FwpmLayerAleAuthRecvAcceptV6Discard,
-    FwpmLayerAleAuthConnectV4,
-    FwpmLayerAleAuthConnectV4Discard,
-    FwpmLayerAleAuthConnectV6,
-    FwpmLayerAleAuthConnectV6Discard,
-    FwpmLayerAleFlowEstablishedV4,
-    FwpmLayerAleFlowEstablishedV4Discard,
-    FwpmLayerAleFlowEstablishedV6,
-    FwpmLayerAleFlowEstablishedV6Discard,
-    FwpmLayerAleConnectRedirectV4,
-    FwpmLayerAleConnectRedirectV6,
-    FwpmLayerAleBindRedirectV4,
-    FwpmLayerAleBindRedirectV6,
-    FwpmLayerAleResourceReleaseV4,
-    FwpmLayerAleResourceReleaseV6,
-    FwpmLayerAleEndpointClosureV4,
-    FwpmLayerAleEndpointClosureV6,
+    InboundIppacketV4,
+    InboundIppacketV4Discard,
+    InboundIppacketV6,
+    InboundIppacketV6Discard,
+    OutboundIppacketV4,
+    OutboundIppacketV4Discard,
+    OutboundIppacketV6,
+    OutboundIppacketV6Discard,
+    IpforwardV4,
+    IpforwardV4Discard,
+    IpforwardV6,
+    IpforwardV6Discard,
+    InboundTransportV4,
+    InboundTransportV4Discard,
+    InboundTransportV6,
+    InboundTransportV6Discard,
+    OutboundTransportV4,
+    OutboundTransportV4Discard,
+    OutboundTransportV6,
+    OutboundTransportV6Discard,
+    StreamV4,
+    StreamV4Discard,
+    StreamV6,
+    StreamV6Discard,
+    DatagramDataV4,
+    DatagramDataV4Discard,
+    DatagramDataV6,
+    DatagramDataV6Discard,
+    InboundIcmpErrorV4,
+    InboundIcmpErrorV4Discard,
+    InboundIcmpErrorV6,
+    InboundIcmpErrorV6Discard,
+    OutboundIcmpErrorV4,
+    OutboundIcmpErrorV4Discard,
+    OutboundIcmpErrorV6,
+    OutboundIcmpErrorV6Discard,
+    AleResourceAssignmentV4,
+    AleResourceAssignmentV4Discard,
+    AleResourceAssignmentV6,
+    AleResourceAssignmentV6Discard,
+    AleAuthListenV4,
+    AleAuthListenV4Discard,
+    AleAuthListenV6,
+    AleAuthListenV6Discard,
+    AleAuthRecvAcceptV4,
+    AleAuthRecvAcceptV4Discard,
+    AleAuthRecvAcceptV6,
+    AleAuthRecvAcceptV6Discard,
+    AleAuthConnectV4,
+    AleAuthConnectV4Discard,
+    AleAuthConnectV6,
+    AleAuthConnectV6Discard,
+    AleFlowEstablishedV4,
+    AleFlowEstablishedV4Discard,
+    AleFlowEstablishedV6,
+    AleFlowEstablishedV6Discard,
+    AleConnectRedirectV4,
+    AleConnectRedirectV6,
+    AleBindRedirectV4,
+    AleBindRedirectV6,
+    AleResourceReleaseV4,
+    AleResourceReleaseV6,
+    AleEndpointClosureV4,
+    AleEndpointClosureV6,
 }
+
 impl Layer {
     pub fn get_guid(&self) -> GUID {
         match self {
-            Layer::FwpmLayerInboundIppacketV4 => FWPM_LAYER_INBOUND_IPPACKET_V4,
-            Layer::FwpmLayerInboundIppacketV4Discard => FWPM_LAYER_INBOUND_IPPACKET_V4_DISCARD,
-            Layer::FwpmLayerInboundIppacketV6 => FWPM_LAYER_INBOUND_IPPACKET_V6,
-            Layer::FwpmLayerInboundIppacketV6Discard => FWPM_LAYER_INBOUND_IPPACKET_V6_DISCARD,
-            Layer::FwpmLayerOutboundIppacketV4 => FWPM_LAYER_OUTBOUND_IPPACKET_V4,
-            Layer::FwpmLayerOutboundIppacketV4Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V4_DISCARD,
-            Layer::FwpmLayerOutboundIppacketV6 => FWPM_LAYER_OUTBOUND_IPPACKET_V6,
-            Layer::FwpmLayerOutboundIppacketV6Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V6_DISCARD,
-            Layer::FwpmLayerIpforwardV4 => FWPM_LAYER_IPFORWARD_V4,
-            Layer::FwpmLayerIpforwardV4Discard => FWPM_LAYER_IPFORWARD_V4_DISCARD,
-            Layer::FwpmLayerIpforwardV6 => FWPM_LAYER_IPFORWARD_V6,
-            Layer::FwpmLayerIpforwardV6Discard => FWPM_LAYER_IPFORWARD_V6_DISCARD,
-            Layer::FwpmLayerInboundTransportV4 => FWPM_LAYER_INBOUND_TRANSPORT_V4,
-            Layer::FwpmLayerInboundTransportV4Discard => FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD,
-            Layer::FwpmLayerInboundTransportV6 => FWPM_LAYER_INBOUND_TRANSPORT_V6,
-            Layer::FwpmLayerInboundTransportV6Discard => FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD,
-            Layer::FwpmLayerOutboundTransportV4 => FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
-            Layer::FwpmLayerOutboundTransportV4Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V4_DISCARD,
-            Layer::FwpmLayerOutboundTransportV6 => FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
-            Layer::FwpmLayerOutboundTransportV6Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V6_DISCARD,
-            Layer::FwpmLayerStreamV4 => FWPM_LAYER_STREAM_V4,
-            Layer::FwpmLayerStreamV4Discard => FWPM_LAYER_STREAM_V4_DISCARD,
-            Layer::FwpmLayerStreamV6 => FWPM_LAYER_STREAM_V6,
-            Layer::FwpmLayerStreamV6Discard => FWPM_LAYER_STREAM_V6_DISCARD,
-            Layer::FwpmLayerDatagramDataV4 => FWPM_LAYER_DATAGRAM_DATA_V4,
-            Layer::FwpmLayerDatagramDataV4Discard => FWPM_LAYER_DATAGRAM_DATA_V4_DISCARD,
-            Layer::FwpmLayerDatagramDataV6 => FWPM_LAYER_DATAGRAM_DATA_V6,
-            Layer::FwpmLayerDatagramDataV6Discard => FWPM_LAYER_DATAGRAM_DATA_V6_DISCARD,
-            Layer::FwpmLayerInboundIcmpErrorV4 => FWPM_LAYER_INBOUND_ICMP_ERROR_V4,
-            Layer::FwpmLayerInboundIcmpErrorV4Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V4_DISCARD,
-            Layer::FwpmLayerInboundIcmpErrorV6 => FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
-            Layer::FwpmLayerInboundIcmpErrorV6Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V6_DISCARD,
-            Layer::FwpmLayerOutboundIcmpErrorV4 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
-            Layer::FwpmLayerOutboundIcmpErrorV4Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4_DISCARD,
-            Layer::FwpmLayerOutboundIcmpErrorV6 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
-            Layer::FwpmLayerOutboundIcmpErrorV6Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6_DISCARD,
-            Layer::FwpmLayerAleResourceAssignmentV4 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
-            Layer::FwpmLayerAleResourceAssignmentV4Discard => {
-                FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4_DISCARD
-            }
-            Layer::FwpmLayerAleResourceAssignmentV6 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-            Layer::FwpmLayerAleResourceAssignmentV6Discard => {
-                FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6_DISCARD
-            }
-            Layer::FwpmLayerAleAuthListenV4 => FWPM_LAYER_ALE_AUTH_LISTEN_V4,
-            Layer::FwpmLayerAleAuthListenV4Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V4_DISCARD,
-            Layer::FwpmLayerAleAuthListenV6 => FWPM_LAYER_ALE_AUTH_LISTEN_V6,
-            Layer::FwpmLayerAleAuthListenV6Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V6_DISCARD,
-            Layer::FwpmLayerAleAuthRecvAcceptV4 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
-            Layer::FwpmLayerAleAuthRecvAcceptV4Discard => {
-                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4_DISCARD
-            }
-            Layer::FwpmLayerAleAuthRecvAcceptV6 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
-            Layer::FwpmLayerAleAuthRecvAcceptV6Discard => {
-                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6_DISCARD
-            }
-            Layer::FwpmLayerAleAuthConnectV4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            Layer::FwpmLayerAleAuthConnectV4Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V4_DISCARD,
-            Layer::FwpmLayerAleAuthConnectV6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            Layer::FwpmLayerAleAuthConnectV6Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V6_DISCARD,
-            Layer::FwpmLayerAleFlowEstablishedV4 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4,
-            Layer::FwpmLayerAleFlowEstablishedV4Discard => {
-                FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4_DISCARD
-            }
-            Layer::FwpmLayerAleFlowEstablishedV6 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6,
-            Layer::FwpmLayerAleFlowEstablishedV6Discard => {
-                FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6_DISCARD
-            }
-            Layer::FwpmLayerAleConnectRedirectV4 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V4,
-            Layer::FwpmLayerAleConnectRedirectV6 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V6,
-            Layer::FwpmLayerAleBindRedirectV4 => FWPM_LAYER_ALE_BIND_REDIRECT_V4,
-            Layer::FwpmLayerAleBindRedirectV6 => FWPM_LAYER_ALE_BIND_REDIRECT_V6,
-            Layer::FwpmLayerAleResourceReleaseV4 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V4,
-            Layer::FwpmLayerAleResourceReleaseV6 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
-            Layer::FwpmLayerAleEndpointClosureV4 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V4,
-            Layer::FwpmLayerAleEndpointClosureV6 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V6,
+            Layer::InboundIppacketV4 => FWPM_LAYER_INBOUND_IPPACKET_V4,
+            Layer::InboundIppacketV4Discard => FWPM_LAYER_INBOUND_IPPACKET_V4_DISCARD,
+            Layer::InboundIppacketV6 => FWPM_LAYER_INBOUND_IPPACKET_V6,
+            Layer::InboundIppacketV6Discard => FWPM_LAYER_INBOUND_IPPACKET_V6_DISCARD,
+            Layer::OutboundIppacketV4 => FWPM_LAYER_OUTBOUND_IPPACKET_V4,
+            Layer::OutboundIppacketV4Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V4_DISCARD,
+            Layer::OutboundIppacketV6 => FWPM_LAYER_OUTBOUND_IPPACKET_V6,
+            Layer::OutboundIppacketV6Discard => FWPM_LAYER_OUTBOUND_IPPACKET_V6_DISCARD,
+            Layer::IpforwardV4 => FWPM_LAYER_IPFORWARD_V4,
+            Layer::IpforwardV4Discard => FWPM_LAYER_IPFORWARD_V4_DISCARD,
+            Layer::IpforwardV6 => FWPM_LAYER_IPFORWARD_V6,
+            Layer::IpforwardV6Discard => FWPM_LAYER_IPFORWARD_V6_DISCARD,
+            Layer::InboundTransportV4 => FWPM_LAYER_INBOUND_TRANSPORT_V4,
+            Layer::InboundTransportV4Discard => FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD,
+            Layer::InboundTransportV6 => FWPM_LAYER_INBOUND_TRANSPORT_V6,
+            Layer::InboundTransportV6Discard => FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD,
+            Layer::OutboundTransportV4 => FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
+            Layer::OutboundTransportV4Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V4_DISCARD,
+            Layer::OutboundTransportV6 => FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
+            Layer::OutboundTransportV6Discard => FWPM_LAYER_OUTBOUND_TRANSPORT_V6_DISCARD,
+            Layer::StreamV4 => FWPM_LAYER_STREAM_V4,
+            Layer::StreamV4Discard => FWPM_LAYER_STREAM_V4_DISCARD,
+            Layer::StreamV6 => FWPM_LAYER_STREAM_V6,
+            Layer::StreamV6Discard => FWPM_LAYER_STREAM_V6_DISCARD,
+            Layer::DatagramDataV4 => FWPM_LAYER_DATAGRAM_DATA_V4,
+            Layer::DatagramDataV4Discard => FWPM_LAYER_DATAGRAM_DATA_V4_DISCARD,
+            Layer::DatagramDataV6 => FWPM_LAYER_DATAGRAM_DATA_V6,
+            Layer::DatagramDataV6Discard => FWPM_LAYER_DATAGRAM_DATA_V6_DISCARD,
+            Layer::InboundIcmpErrorV4 => FWPM_LAYER_INBOUND_ICMP_ERROR_V4,
+            Layer::InboundIcmpErrorV4Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V4_DISCARD,
+            Layer::InboundIcmpErrorV6 => FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
+            Layer::InboundIcmpErrorV6Discard => FWPM_LAYER_INBOUND_ICMP_ERROR_V6_DISCARD,
+            Layer::OutboundIcmpErrorV4 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+            Layer::OutboundIcmpErrorV4Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4_DISCARD,
+            Layer::OutboundIcmpErrorV6 => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
+            Layer::OutboundIcmpErrorV6Discard => FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6_DISCARD,
+            Layer::AleResourceAssignmentV4 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
+            Layer::AleResourceAssignmentV4Discard => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4_DISCARD,
+            Layer::AleResourceAssignmentV6 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+            Layer::AleResourceAssignmentV6Discard => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6_DISCARD,
+            Layer::AleAuthListenV4 => FWPM_LAYER_ALE_AUTH_LISTEN_V4,
+            Layer::AleAuthListenV4Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V4_DISCARD,
+            Layer::AleAuthListenV6 => FWPM_LAYER_ALE_AUTH_LISTEN_V6,
+            Layer::AleAuthListenV6Discard => FWPM_LAYER_ALE_AUTH_LISTEN_V6_DISCARD,
+            Layer::AleAuthRecvAcceptV4 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+            Layer::AleAuthRecvAcceptV4Discard => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4_DISCARD,
+            Layer::AleAuthRecvAcceptV6 => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+            Layer::AleAuthRecvAcceptV6Discard => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6_DISCARD,
+            Layer::AleAuthConnectV4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            Layer::AleAuthConnectV4Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V4_DISCARD,
+            Layer::AleAuthConnectV6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            Layer::AleAuthConnectV6Discard => FWPM_LAYER_ALE_AUTH_CONNECT_V6_DISCARD,
+            Layer::AleFlowEstablishedV4 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4,
+            Layer::AleFlowEstablishedV4Discard => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4_DISCARD,
+            Layer::AleFlowEstablishedV6 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6,
+            Layer::AleFlowEstablishedV6Discard => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6_DISCARD,
+            Layer::AleConnectRedirectV4 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V4,
+            Layer::AleConnectRedirectV6 => FWPM_LAYER_ALE_CONNECT_REDIRECT_V6,
+            Layer::AleBindRedirectV4 => FWPM_LAYER_ALE_BIND_REDIRECT_V4,
+            Layer::AleBindRedirectV6 => FWPM_LAYER_ALE_BIND_REDIRECT_V6,
+            Layer::AleResourceReleaseV4 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V4,
+            Layer::AleResourceReleaseV6 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
+            Layer::AleEndpointClosureV4 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V4,
+            Layer::AleEndpointClosureV6 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V6,
         }
     }
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundIppacketV4 {
+pub enum FieldsInboundIppacketV4 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalAddressType,
@@ -254,7 +243,7 @@ pub enum FwpsFieldsInboundIppacketV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundIppacketV6 {
+pub enum FieldsInboundIppacketV6 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalAddressType,
@@ -269,7 +258,7 @@ pub enum FwpsFieldsInboundIppacketV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundIppacketV4 {
+pub enum FieldsOutboundIppacketV4 {
     IpLocalAddress,
     IpLocalAddressType,
     IpRemoteAddress,
@@ -284,7 +273,7 @@ pub enum FwpsFieldsOutboundIppacketV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundIppacketV6 {
+pub enum FieldsOutboundIppacketV6 {
     IpLocalAddress,
     IpLocalAddressType,
     IpRemoteAddress,
@@ -299,7 +288,7 @@ pub enum FwpsFieldsOutboundIppacketV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIpforwardV4 {
+pub enum FieldsIpforwardV4 {
     IpSourceAddress,
     IpDestinationAddress,
     IpDestinationAddressType,
@@ -319,7 +308,7 @@ pub enum FwpsFieldsIpforwardV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIpforwardV6 {
+pub enum FieldsIpforwardV6 {
     IpSourceAddress,
     IpDestinationAddress,
     IpDestinationAddressType,
@@ -339,7 +328,7 @@ pub enum FwpsFieldsIpforwardV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundTransportV4 {
+pub enum FieldsInboundTransportV4 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -359,23 +348,17 @@ pub enum FwpsFieldsInboundTransportV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundTransportFas {
-    FwpsFieldInboundTransportFastMax,
+pub enum FieldsInboundTransportFas {
+    FieldInboundTransportFastMax,
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundTransportFas {
-    FwpsFieldOutboundTransportFastMax,
+pub enum FieldsOutboundTransportFas {
+    FieldOutboundTransportFastMax,
 }
 
-// #define FWPS_FIELD_INBOUND_TRANSPORT_V4_ICMP_TYPE \
-//         FWPS_FIELD_INBOUND_TRANSPORT_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_INBOUND_TRANSPORT_V4_ICMP_CODE \
-//         FWPS_FIELD_INBOUND_TRANSPORT_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsInboundTransportV6 {
+pub enum FieldsInboundTransportV6 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -394,14 +377,8 @@ pub enum FwpsFieldsInboundTransportV6 {
     Max,
 }
 
-// #define FWPS_FIELD_INBOUND_TRANSPORT_V6_ICMP_TYPE \
-//         FWPS_FIELD_INBOUND_TRANSPORT_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_INBOUND_TRANSPORT_V6_ICMP_CODE \
-//         FWPS_FIELD_INBOUND_TRANSPORT_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsOutboundTransportV4 {
+pub enum FieldsOutboundTransportV4 {
     IpProtocol,
     IpLocalAddress,
     IpLocalAddressType,
@@ -421,14 +398,8 @@ pub enum FwpsFieldsOutboundTransportV4 {
     Max,
 }
 
-// #define FWPS_FIELD_OUTBOUND_TRANSPORT_V4_ICMP_TYPE \
-//         FWPS_FIELD_OUTBOUND_TRANSPORT_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_OUTBOUND_TRANSPORT_V4_ICMP_CODE \
-//         FWPS_FIELD_OUTBOUND_TRANSPORT_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsOutboundTransportV6 {
+pub enum FieldsOutboundTransportV6 {
     IpProtocol,
     IpLocalAddress,
     IpLocalAddressType,
@@ -448,14 +419,8 @@ pub enum FwpsFieldsOutboundTransportV6 {
     Max,
 }
 
-// #define FWPS_FIELD_OUTBOUND_TRANSPORT_V6_ICMP_TYPE \
-//         FWPS_FIELD_OUTBOUND_TRANSPORT_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_OUTBOUND_TRANSPORT_V6_ICMP_CODE \
-//         FWPS_FIELD_OUTBOUND_TRANSPORT_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsStreamV4 {
+pub enum FieldsStreamV4 {
     IpLocalAddress,
     IpLocalAddressType,
     IpRemoteAddress,
@@ -468,7 +433,7 @@ pub enum FwpsFieldsStreamV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsStreamV6 {
+pub enum FieldsStreamV6 {
     IpLocalAddress,
     IpLocalAddressType,
     IpRemoteAddress,
@@ -481,7 +446,7 @@ pub enum FwpsFieldsStreamV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsDatagramDataV4 {
+pub enum FieldsDatagramDataV4 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -499,14 +464,8 @@ pub enum FwpsFieldsDatagramDataV4 {
     Max,
 }
 
-// #define FWPS_FIELD_DATAGRAM_DATA_V4_ICMP_TYPE \
-//         FWPS_FIELD_DATAGRAM_DATA_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_DATAGRAM_DATA_V4_ICMP_CODE \
-//         FWPS_FIELD_DATAGRAM_DATA_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsDatagramDataV6 {
+pub enum FieldsDatagramDataV6 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -524,14 +483,8 @@ pub enum FwpsFieldsDatagramDataV6 {
     Max,
 }
 
-// #define FWPS_FIELD_DATAGRAM_DATA_V6_ICMP_TYPE \
-//         FWPS_FIELD_DATAGRAM_DATA_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_DATAGRAM_DATA_V6_ICMP_CODE \
-//         FWPS_FIELD_DATAGRAM_DATA_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsStreamPacketV4 {
+pub enum FieldsStreamPacketV4 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalPort,
@@ -548,7 +501,7 @@ pub enum FwpsFieldsStreamPacketV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsStreamPacketV6 {
+pub enum FieldsStreamPacketV6 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalPort,
@@ -565,7 +518,7 @@ pub enum FwpsFieldsStreamPacketV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundIcmpErrorV4 {
+pub enum FieldsInboundIcmpErrorV4 {
     EmbeddedProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -591,20 +544,8 @@ pub enum FwpsFieldsInboundIcmpErrorV4 {
     Max,
 }
 
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V4_LOCAL_INTERFACE_INDEX \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V4_INTERFACE_INDEX
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V4_ARRIVAL_SUB_INTERFACE_INDEX \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V4_SUB_INTERFACE_INDEX
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V4_LOCAL_INTERFACE_TYPE \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V4_INTERFACE_TYPE
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V4_LOCAL_TUNNEL_TYPE \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V4_TUNNEL_TYPE
-
 #[repr(usize)]
-pub enum FwpsFieldsInboundIcmpErrorV6 {
+pub enum FieldsInboundIcmpErrorV6 {
     EmbeddedProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -630,20 +571,8 @@ pub enum FwpsFieldsInboundIcmpErrorV6 {
     Max,
 }
 
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V6_LOCAL_INTERFACE_INDEX \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V6_INTERFACE_INDEX
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V6_ARRIVAL_SUB_INTERFACE_INDEX \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V6_SUB_INTERFACE_INDEX
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V6_LOCAL_INTERFACE_TYPE \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V6_INTERFACE_TYPE
-
-// #define FWPS_FIELD_INBOUND_ICMP_ERROR_V6_LOCAL_TUNNEL_TYPE \
-//         FWPS_FIELD_INBOUND_ICMP_ERROR_V6_TUNNEL_TYPE
-
 #[repr(usize)]
-pub enum FwpsFieldsOutboundIcmpErrorV4 {
+pub enum FieldsOutboundIcmpErrorV4 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalAddressType,
@@ -662,7 +591,7 @@ pub enum FwpsFieldsOutboundIcmpErrorV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundIcmpErrorV6 {
+pub enum FieldsOutboundIcmpErrorV6 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalAddressType,
@@ -680,14 +609,8 @@ pub enum FwpsFieldsOutboundIcmpErrorV6 {
     Max,
 }
 
-// #define FWPS_FIELD_OUTBOUND_ICMP_ERROR_V6_ICMP_TYPE \
-//         FWPS_FIELD_OUTBOUND_ICMP_ERROR_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_OUTBOUND_ICMP_ERROR_V6_ICMP_CODE \
-//         FWPS_FIELD_OUTBOUND_ICMP_ERROR_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleResourceAssignmentV4 {
+pub enum FieldsAleResourceAssignmentV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -713,7 +636,7 @@ pub enum FwpsFieldsAleResourceAssignmentV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleResourceAssignmentV6 {
+pub enum FieldsAleResourceAssignmentV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -739,7 +662,7 @@ pub enum FwpsFieldsAleResourceAssignmentV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleResourceReleaseV4 {
+pub enum FieldsAleResourceReleaseV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -755,7 +678,7 @@ pub enum FwpsFieldsAleResourceReleaseV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleResourceReleaseV6 {
+pub enum FieldsAleResourceReleaseV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -771,25 +694,7 @@ pub enum FwpsFieldsAleResourceReleaseV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleEndpointClosureV4 {
-    AleAppId,
-    AleUserId,
-    IpLocalAddress,
-    IpLocalAddressType,
-    IpLocalPort,
-    IpProtocol,
-    IpRemoteAddress,
-    IpRemotePort,
-    IpLocalInterface,
-    Flags,
-    AlePackageId,
-    AleSecurityAttributeFqbnValue,
-    CompartmentId,
-    Max,
-}
-
-#[repr(usize)]
-pub enum FwpsFieldsAleEndpointClosureV6 {
+pub enum FieldsAleEndpointClosureV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -807,7 +712,25 @@ pub enum FwpsFieldsAleEndpointClosureV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthListenV4 {
+pub enum FieldsAleEndpointClosureV6 {
+    AleAppId,
+    AleUserId,
+    IpLocalAddress,
+    IpLocalAddressType,
+    IpLocalPort,
+    IpProtocol,
+    IpRemoteAddress,
+    IpRemotePort,
+    IpLocalInterface,
+    Flags,
+    AlePackageId,
+    AleSecurityAttributeFqbnValue,
+    CompartmentId,
+    Max,
+}
+
+#[repr(usize)]
+pub enum FieldsAleAuthListenV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -826,7 +749,7 @@ pub enum FwpsFieldsAleAuthListenV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthListenV6 {
+pub enum FieldsAleAuthListenV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -845,7 +768,7 @@ pub enum FwpsFieldsAleAuthListenV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthRecvAcceptV4 {
+pub enum FieldsAleAuthRecvAcceptV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -891,29 +814,8 @@ pub enum FwpsFieldsAleAuthRecvAcceptV4 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_ICMP_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_ICMP_CODE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_IP_REMOTE_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_LOCAL_INTERFACE_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_INTERFACE_TYPE
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_LOCAL_TUNNEL_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_TUNNEL_TYPE
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_LOCAL_INTERFACE_INDEX \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_INTERFACE_INDEX
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_ARRIVAL_SUB_INTERFACE_INDEX \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_SUB_INTERFACE_INDEX
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_SIO_FIREWALL_SOCKET_PROPERTY \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V4_SIO_FIREWALL_SYSTEM_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthRecvAcceptV6 {
+pub enum FieldsAleAuthRecvAcceptV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -959,29 +861,8 @@ pub enum FwpsFieldsAleAuthRecvAcceptV6 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_ICMP_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_ICMP_CODE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_IP_REMOTE_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_LOCAL_INTERFACE_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_INTERFACE_TYPE
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_LOCAL_TUNNEL_TYPE \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_TUNNEL_TYPE
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_LOCAL_INTERFACE_INDEX \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_INTERFACE_INDEX
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_ARRIVAL_SUB_INTERFACE_INDEX \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_SUB_INTERFACE_INDEX
-
-// #define FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_SIO_FIREWALL_SOCKET_PROPERTY \
-//         FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_SIO_FIREWALL_SYSTEM_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleBindRedirectV4 {
+pub enum FieldsAleBindRedirectV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -996,7 +877,7 @@ pub enum FwpsFieldsAleBindRedirectV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleBindRedirectV6 {
+pub enum FieldsAleBindRedirectV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1011,7 +892,7 @@ pub enum FwpsFieldsAleBindRedirectV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsAleConnectRedirectV4 {
+pub enum FieldsAleConnectRedirectV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1029,14 +910,8 @@ pub enum FwpsFieldsAleConnectRedirectV4 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_ICMP_TYPE \
-//         FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_ICMP_CODE \
-//         FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleConnectRedirectV6 {
+pub enum FieldsAleConnectRedirectV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1054,14 +929,8 @@ pub enum FwpsFieldsAleConnectRedirectV6 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_CONNECT_REDIRECT_V6_ICMP_TYPE \
-//         FWPS_FIELD_ALE_CONNECT_REDIRECT_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_CONNECT_REDIRECT_V6_ICMP_CODE \
-//         FWPS_FIELD_ALE_CONNECT_REDIRECT_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthConnectV4 {
+pub enum FieldsAleAuthConnectV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1109,14 +978,8 @@ pub enum FwpsFieldsAleAuthConnectV4 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_AUTH_CONNECT_V4_ICMP_TYPE \
-//         FWPS_FIELD_ALE_AUTH_CONNECT_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_CONNECT_V4_ICMP_CODE \
-//         FWPS_FIELD_ALE_AUTH_CONNECT_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleAuthConnectV6 {
+pub enum FieldsAleAuthConnectV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1164,14 +1027,8 @@ pub enum FwpsFieldsAleAuthConnectV6 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_AUTH_CONNECT_V6_ICMP_TYPE \
-//         FWPS_FIELD_ALE_AUTH_CONNECT_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_AUTH_CONNECT_V6_ICMP_CODE \
-//         FWPS_FIELD_ALE_AUTH_CONNECT_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleFlowEstablishedV4 {
+pub enum FieldsAleFlowEstablishedV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1202,14 +1059,8 @@ pub enum FwpsFieldsAleFlowEstablishedV4 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_ICMP_TYPE \
-//         FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_ICMP_CODE \
-//         FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsAleFlowEstablishedV6 {
+pub enum FieldsAleFlowEstablishedV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1240,14 +1091,8 @@ pub enum FwpsFieldsAleFlowEstablishedV6 {
     Max,
 }
 
-// #define FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_ICMP_TYPE \
-//         FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_ICMP_CODE \
-//         FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsNameResolutionCacheV4 {
+pub enum FieldsNameResolutionCacheV4 {
     AleUserId,
     AleAppId,
     IpRemoteAddress,
@@ -1257,7 +1102,7 @@ pub enum FwpsFieldsNameResolutionCacheV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsNameResolutionCacheV6 {
+pub enum FieldsNameResolutionCacheV6 {
     AleUserId,
     AleAppId,
     IpRemoteAddress,
@@ -1267,7 +1112,7 @@ pub enum FwpsFieldsNameResolutionCacheV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundMacFrameEthernet {
+pub enum FieldsInboundMacFrameEthernet {
     InterfaceMacAddress,
     MacLocalAddress,
     MacRemoteAddress,
@@ -1284,7 +1129,7 @@ pub enum FwpsFieldsInboundMacFrameEthernet {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundMacFrameEthernet {
+pub enum FieldsOutboundMacFrameEthernet {
     InterfaceMacAddress,
     MacLocalAddress,
     MacRemoteAddress,
@@ -1301,7 +1146,7 @@ pub enum FwpsFieldsOutboundMacFrameEthernet {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundMacFrameNative {
+pub enum FieldsInboundMacFrameNative {
     NdisMediaType,
     NdisPhysicalMediaType,
     Interface,
@@ -1314,12 +1159,12 @@ pub enum FwpsFieldsInboundMacFrameNative {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundMacFrameNativeFast {
+pub enum FieldsInboundMacFrameNativeFast {
     FastMax,
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundMacFrameNative {
+pub enum FieldsOutboundMacFrameNative {
     NdisMediaType,
     NdisPhysicalMediaType,
     Interface,
@@ -1332,12 +1177,12 @@ pub enum FwpsFieldsOutboundMacFrameNative {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundMacFrameNativeFast {
+pub enum FieldsOutboundMacFrameNativeFast {
     Max,
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIngressVswitchEthernet {
+pub enum FieldsIngressVswitchEthernet {
     MacSourceAddress,
     MacSourceAddressType,
     MacDestinationAddress,
@@ -1356,7 +1201,7 @@ pub enum FwpsFieldsIngressVswitchEthernet {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsEgressVswitchEthernet {
+pub enum FieldsEgressVswitchEthernet {
     MacSourceAddress,
     MacSourceAddressType,
     MacDestinationAddress,
@@ -1378,7 +1223,7 @@ pub enum FwpsFieldsEgressVswitchEthernet {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIngressVswitchTransportV4 {
+pub enum FieldsIngressVswitchTransportV4 {
     IpSourceAddress,
     IpDestinationAddress,
     IpProtocol,
@@ -1396,14 +1241,8 @@ pub enum FwpsFieldsIngressVswitchTransportV4 {
     Max,
 }
 
-// #define FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V4_ICMP_TYPE \
-//         FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V4_IP_SOURCE_PORT
-
-// #define FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V4_ICMP_CODE \
-//         FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V4_IP_DESTINATION_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsIngressVswitchTransportV6 {
+pub enum FieldsIngressVswitchTransportV6 {
     IpSourceAddress,
     IpDestinationAddress,
     IpProtocol,
@@ -1421,42 +1260,8 @@ pub enum FwpsFieldsIngressVswitchTransportV6 {
     Max,
 }
 
-// #define FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V6_ICMP_TYPE \
-//         FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V6_IP_SOURCE_PORT
-
-// #define FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V6_ICMP_CODE \
-//         FWPS_FIELD_INGRESS_VSWITCH_TRANSPORT_V6_IP_DESTINATION_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsEgressVswitchTransportV4 {
-    IpSourceAddress,
-    IpDestinationAddress,
-    IpProtocol,
-    IpSourcePort,
-    IpDestinationPort,
-    VlanId,
-    VswitchTenantNetworkId,
-    VswitchId,
-    VswitchNetworkType,
-    VswitchSourceInterfaceId,
-    VswitchSourceInterfaceType,
-    VswitchSourceVmId,
-    VswitchDestinationInterfaceId,
-    VswitchDestinationInterfaceType,
-    VswitchDestinationVmId,
-    L2Flags,
-    CompartmentId,
-    Max,
-}
-
-// #define FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V4_ICMP_TYPE \
-//         FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V4_IP_SOURCE_PORT
-
-// #define FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V4_ICMP_CODE \
-//         FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V4_IP_DESTINATION_PORT
-
-#[repr(usize)]
-pub enum FwpsFieldsEgressVswitchTransportV6 {
+pub enum FieldsEgressVswitchTransportV4 {
     IpSourceAddress,
     IpDestinationAddress,
     IpProtocol,
@@ -1477,14 +1282,30 @@ pub enum FwpsFieldsEgressVswitchTransportV6 {
     Max,
 }
 
-// #define FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V6_ICMP_TYPE \
-//         FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V6_IP_SOURCE_PORT
-
-// #define FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V6_ICMP_CODE \
-//         FWPS_FIELD_EGRESS_VSWITCH_TRANSPORT_V6_IP_DESTINATION_PORT
+#[repr(usize)]
+pub enum FieldsEgressVswitchTransportV6 {
+    IpSourceAddress,
+    IpDestinationAddress,
+    IpProtocol,
+    IpSourcePort,
+    IpDestinationPort,
+    VlanId,
+    VswitchTenantNetworkId,
+    VswitchId,
+    VswitchNetworkType,
+    VswitchSourceInterfaceId,
+    VswitchSourceInterfaceType,
+    VswitchSourceVmId,
+    VswitchDestinationInterfaceId,
+    VswitchDestinationInterfaceType,
+    VswitchDestinationVmId,
+    L2Flags,
+    CompartmentId,
+    Max,
+}
 
 #[repr(usize)]
-pub enum FwpsFieldsIpsecKmDemuxV4 {
+pub enum FieldsIpsecKmDemuxV4 {
     IpLocalAddress,
     IpRemoteAddress,
     QmMode,
@@ -1495,7 +1316,7 @@ pub enum FwpsFieldsIpsecKmDemuxV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIpsecKmDemuxV6 {
+pub enum FieldsIpsecKmDemuxV6 {
     IpLocalAddress,
     IpRemoteAddress,
     QmMode,
@@ -1506,7 +1327,7 @@ pub enum FwpsFieldsIpsecKmDemuxV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIpsecV4 {
+pub enum FieldsIpsecV4 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -1519,7 +1340,7 @@ pub enum FwpsFieldsIpsecV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIpsecV6 {
+pub enum FieldsIpsecV6 {
     IpProtocol,
     IpLocalAddress,
     IpRemoteAddress,
@@ -1532,7 +1353,7 @@ pub enum FwpsFieldsIpsecV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIkeextV4 {
+pub enum FieldsIkeextV4 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalInterface,
@@ -1542,7 +1363,7 @@ pub enum FwpsFieldsIkeextV4 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsIkeextV6 {
+pub enum FieldsIkeextV6 {
     IpLocalAddress,
     IpRemoteAddress,
     IpLocalInterface,
@@ -1552,7 +1373,7 @@ pub enum FwpsFieldsIkeextV6 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsRpcUm {
+pub enum FieldsRpcUm {
     RemoteUserToken,
     AuthLevel,
     AuthType,
@@ -1574,7 +1395,7 @@ pub enum FwpsFieldsRpcUm {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsRpcEpmap {
+pub enum FieldsRpcEpmap {
     RemoteUserToken,
     IfUuid,
     IfVersion,
@@ -1593,7 +1414,7 @@ pub enum FwpsFieldsRpcEpmap {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsRpcEpAdd {
+pub enum FieldsRpcEpAdd {
     ProcessWithRpcIfUuid,
     Protocol,
     EpValue,
@@ -1602,7 +1423,7 @@ pub enum FwpsFieldsRpcEpAdd {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsRpcProxyConn {
+pub enum FieldsRpcProxyConn {
     ClientToken,
     ServerName,
     ServerPort,
@@ -1613,7 +1434,7 @@ pub enum FwpsFieldsRpcProxyConn {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsRpcProxyIf {
+pub enum FieldsRpcProxyIf {
     ClientToken,
     IfUuid,
     IfVersion,
@@ -1626,7 +1447,7 @@ pub enum FwpsFieldsRpcProxyIf {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsKmAuthorization {
+pub enum FieldsKmAuthorization {
     RemoteId,
     AuthenticationType,
     KmType,
@@ -1638,7 +1459,7 @@ pub enum FwpsFieldsKmAuthorization {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsInboundReserved2 {
+pub enum FieldsInboundReserved2 {
     Reserved0,
     Reserved1,
     Reserved2,
@@ -1659,7 +1480,7 @@ pub enum FwpsFieldsInboundReserved2 {
 }
 
 #[repr(usize)]
-pub enum FwpsFieldsOutboundNetworkConnectionPolicyV4 {
+pub enum FieldsOutboundNetworkConnectionPolicyV4 {
     AleAppId,
     AleUserId,
     IpLocalAddress,
@@ -1677,14 +1498,8 @@ pub enum FwpsFieldsOutboundNetworkConnectionPolicyV4 {
     Max,
 }
 
-// #define FWPS_FIELD_OUTBOUND_NETWORK_CONNECTION_POLICY_V4_ICMP_TYPE \
-//         FWPS_FIELD_OUTBOUND_NETWORK_CONNECTION_POLICY_V4_IP_LOCAL_PORT
-
-// #define FWPS_FIELD_OUTBOUND_NETWORK_CONNECTION_POLICY_V4_ICMP_CODE \
-//         FWPS_FIELD_OUTBOUND_NETWORK_CONNECTION_POLICY_V4_IP_REMOTE_PORT
-
 #[repr(usize)]
-pub enum FwpsFieldsOutboundNetworkConnectionPolicyV6 {
+pub enum FieldsOutboundNetworkConnectionPolicyV6 {
     AleAppId,
     AleUserId,
     IpLocalAddress,

@@ -14,7 +14,7 @@ use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use self::callout::Callout;
 use self::callout_data::CalloutData;
 use self::classify::ClassifyOut;
-use self::layer::FwpsIncomingValues;
+use self::layer::IncomingValues;
 use self::metadata::FwpsIncomingMetadataValues;
 
 pub mod callout;
@@ -220,7 +220,7 @@ impl Drop for FilterEngine {
 
 #[no_mangle]
 unsafe extern "C" fn catch_all_callout(
-    fixed_values: *const FwpsIncomingValues,
+    fixed_values: *const IncomingValues,
     meta_values: *const FwpsIncomingMetadataValues,
     layer_data: *mut c_void,
     context: *mut c_void,

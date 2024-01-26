@@ -35,7 +35,6 @@ impl Display for Verdict {
 pub enum Direction {
     Outbound = 0,
     Inbound = 1,
-    NotApplicable = 0xFF,
 }
 
 impl Display for Direction {
@@ -43,7 +42,6 @@ impl Display for Direction {
         match self {
             Direction::Outbound => write!(f, "Outbound"),
             Direction::Inbound => write!(f, "Inbound"),
-            Direction::NotApplicable => write!(f, "NotApplicable"),
         }
     }
 }

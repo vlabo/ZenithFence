@@ -76,6 +76,7 @@ impl Injector {
         }
     }
 
+    // TODO: pick a better name
     pub fn from_ale_callout(
         callout_data: &CalloutData,
         net_buffer_list: NetBufferList,
@@ -103,6 +104,7 @@ impl Injector {
         }
     }
 
+    // TODO: pick a better name. This is not transport
     pub fn inject_packet_list_transport(
         &self,
         packet_list: TransportPacketList,

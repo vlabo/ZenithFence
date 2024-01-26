@@ -14,11 +14,11 @@ use windows_sys::{
 };
 
 use crate::filter_engine::{
-    classify::ClassifyOut, layer::FwpsIncomingValues, metadata::FwpsIncomingMetadataValues,
+    classify::ClassifyOut, layer::IncomingValues, metadata::FwpsIncomingMetadataValues,
 };
 
 pub(crate) type FwpsCalloutClassifyFn = unsafe extern "C" fn(
-    inFixedValues: *const FwpsIncomingValues,
+    inFixedValues: *const IncomingValues,
     inMetaValues: *const FwpsIncomingMetadataValues,
     layerData: *mut c_void,
     classifyContext: *mut c_void,
