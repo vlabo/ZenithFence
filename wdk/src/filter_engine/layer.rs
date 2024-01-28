@@ -39,7 +39,7 @@ use windows_sys::{
 
 #[repr(C)]
 pub(crate) struct Value {
-    value_type: ValueType,
+    pub(crate) value_type: ValueType,
     pub(crate) value: ValueData,
 }
 
@@ -61,26 +61,27 @@ pub(crate) union ValueData {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug)]
 pub enum ValueType {
     FwpEmpty = 0,
-    FwpUint8 = 2,
-    FwpUint16 = 3,
-    FwpUint32 = 4,
-    FwpUint64 = 5,
-    FwpInt8 = 6,
-    FwpInt16 = 8,
-    FwpInt32 = 9,
-    FwpInt64 = 10,
-    FwpFloat = 11,
-    FwpDouble = 12,
-    FwpByteArray16Type = 13,
-    FwpByteBlobType = 14,
-    FwpSid = 15,
-    FwpSecurityDescriptorType = 16,
-    FwpTokenInformationType = 17,
-    FwpTokenAccessInformationType = 18,
-    FwpUnicodeStringType = 19,
-    FwpByteArray6Type = 20,
+    FwpUint8 = 1,
+    FwpUint16 = 2,
+    FwpUint32 = 3,
+    FwpUint64 = 4,
+    FwpInt8 = 5,
+    FwpInt16 = 6,
+    FwpInt32 = 7,
+    FwpInt64 = 8,
+    FwpFloat = 9,
+    FwpDouble = 10,
+    FwpByteArray16Type = 11,
+    FwpByteBlobType = 12,
+    FwpSid = 13,
+    FwpSecurityDescriptorType = 14,
+    FwpTokenInformationType = 15,
+    FwpTokenAccessInformationType = 16,
+    FwpUnicodeStringType = 17,
+    FwpByteArray6Type = 18,
     FwpSingleDataTypeMax = 0xff,
     FwpV4AddrMask = 0xff + 1,
     FwpV6AddrMask = 0xff + 2,

@@ -15,6 +15,14 @@ import (
 
 type Verdict int8
 
+var protocols = map[int]string{
+	1:  "icmp",
+	2:  "igmp",
+	6:  "tcp",
+	17: "udp",
+	58: "ipv6-icmp",
+}
+
 const (
 	// VerdictUndecided is the default status of new connections.
 	VerdictUndecided           Verdict = 0
@@ -76,29 +84,50 @@ func main() {
 				return
 			}
 			switch {
-			case info.Connection != nil:
+			case info.ConnectionV4 != nil:
 				{
-					connection := info.Connection
-					// log.Printf("info: %+v\n", connection)
-					// if net.IP(connection.RemoteIp).Equal(net.IP([]uint8{9, 9, 9, 9})) {
-					// kext_interface.WriteCommand(file, kext_interface.BuildRedirect(kext_interface.RedirectV4{Id: connection.Id, RemoteAddress: [4]uint8{1, 1, 1, 1}, RemotePort: 53}))
-					// } else
-					// } else if strings.HasSuffix(*connection.ProcessPath, "brave.exe") {
-					// 	kext_interface.WriteCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}))
-					// } else {
-					if connection.Direction == 1 {
+					conn := info.ConnectionV4
+					// direction := "->"
+					if conn.Direction == 1 {
+						// direction = "<-"
 						// kext_interface.WriteVerdictCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
-						kext_interface.SendVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
 					} else {
-						kext_interface.SendVerdictCommand(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictAccept)}, file)
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
 					}
-					// }
+					// log.Printf("infov4: %d pid=%d %+v:%d %s %+v:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 
 				}
-			case info.ConnectionEnd != nil:
+			case info.ConnectionV6 != nil:
 				{
-					// connection := info.ConnectionEnd
-					// log.Printf("Connection end: %+v\n", connection)
+					conn := info.ConnectionV6
+					// direction := "->"
+					if conn.Direction == 1 {
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+						// direction = "<-"
+					} else {
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+					}
+					// log.Printf("infov6: %d pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
+
+				}
+			case info.ConnectionEndV4 != nil:
+				{
+					// conn := info.ConnectionEndV4
+					// direction := "->"
+					// if conn.Direction == 1 {
+					// direction = "<-"
+					// }
+					// log.Printf("conn end v4: pid=%d %+v:%d %s %+v:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
+				}
+			case info.ConnectionEndV6 != nil:
+				{
+					// conn := info.ConnectionEndV6
+					// direction := "->"
+					// if conn.Direction == 1 {
+					// 	direction = "<-"
+					// }
+					// log.Printf("conn end v6: pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 				}
 			case info.LogLine != nil:
 				{

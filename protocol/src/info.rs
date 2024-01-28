@@ -10,6 +10,7 @@ enum InfoType {
     ConnectionIpv4 = 1,
     ConnectionIpv6 = 2,
     ConnectionEndEventV4 = 3,
+    ConnectionEndEventV6 = 4,
 }
 
 pub trait Info {
@@ -140,6 +141,46 @@ impl ConnectionEndEventV4Info {
 }
 
 impl Info for ConnectionEndEventV4Info {
+    fn as_bytes(&mut self) -> &[u8] {
+        as_bytes(self)
+    }
+}
+#[repr(C, packed)]
+pub struct ConnectionEndEventV6Info {
+    info_type: InfoType,
+    process_id: u64,
+    direction: u8,
+    protocol: u8,
+    local_ip: [u8; 16],
+    remote_ip: [u8; 16],
+    local_port: u16,
+    remote_port: u16,
+}
+
+impl ConnectionEndEventV6Info {
+    pub fn new(
+        process_id: u64,
+        direction: u8,
+        protocol: u8,
+        local_ip: [u8; 16],
+        remote_ip: [u8; 16],
+        local_port: u16,
+        remote_port: u16,
+    ) -> Self {
+        Self {
+            info_type: InfoType::ConnectionEndEventV6,
+            process_id,
+            direction,
+            protocol,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
+        }
+    }
+}
+
+impl Info for ConnectionEndEventV6Info {
     fn as_bytes(&mut self) -> &[u8] {
         as_bytes(self)
     }

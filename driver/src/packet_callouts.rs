@@ -1,4 +1,4 @@
-use smoltcp::wire::{Ipv4Address, IPV4_HEADER_LEN};
+use smoltcp::wire::{IpAddress, IPV4_HEADER_LEN, IPV6_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
 use wdk::filter_engine::net_buffer::NetBufferListIter;
@@ -6,13 +6,14 @@ use wdk::filter_engine::packet::InjectInfo;
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::connection_cache::Connection;
-use crate::connection_members::Direction;
-use crate::packet_util::{get_key_from_nbl, redirect_inbound_packet, redirect_outbound_packet};
-use crate::{connection_cache::ConnectionAction, device::Device, err};
+use crate::connection::{ConnectionAction, ConnectionV4, ConnectionV6, Direction};
+use crate::packet_util::{
+    get_key_from_nbl_v4, get_key_from_nbl_v6, redirect_inbound_packet, redirect_outbound_packet,
+};
+use crate::{device::Device, err};
 
 // IP packet layers
-pub fn ip_packet_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_outbound_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
@@ -20,13 +21,14 @@ pub fn ip_packet_layer_outbound(data: CalloutData, device_object: &mut DEVICE_OB
     ip_packet_layer(
         data,
         device_object,
+        false,
         Direction::Outbound,
         interface_index,
         sub_interface_index,
     );
 }
 
-pub fn ip_packet_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_inbound_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
     type Fields = layer::FieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
@@ -34,6 +36,37 @@ pub fn ip_packet_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJ
     ip_packet_layer(
         data,
         device_object,
+        false,
+        Direction::Inbound,
+        interface_index,
+        sub_interface_index,
+    );
+}
+
+pub fn ip_packet_layer_outbound_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    type Fields = layer::FieldsOutboundIppacketV6;
+    let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
+    let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+
+    ip_packet_layer(
+        data,
+        device_object,
+        true,
+        Direction::Outbound,
+        interface_index,
+        sub_interface_index,
+    );
+}
+
+pub fn ip_packet_layer_inbound_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+    type Fields = layer::FieldsInboundIppacketV6;
+    let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
+    let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+
+    ip_packet_layer(
+        data,
+        device_object,
+        true,
         Direction::Inbound,
         interface_index,
         sub_interface_index,
@@ -43,6 +76,7 @@ pub fn ip_packet_layer_inbound(data: CalloutData, device_object: &mut DEVICE_OBJ
 fn ip_packet_layer(
     mut data: CalloutData,
     device_object: &mut DEVICE_OBJECT,
+    ipv6: bool,
     direction: Direction,
     interface_index: u32,
     sub_interface_index: u32,
@@ -55,7 +89,7 @@ fn ip_packet_layer(
     };
     if device
         .injector
-        .was_network_packet_injected_by_self(data.get_layer_data() as _)
+        .was_network_packet_injected_by_self(data.get_layer_data() as _, ipv6)
     {
         return;
     }
@@ -63,46 +97,78 @@ fn ip_packet_layer(
     for mut nbl in NetBufferListIter::new(data.get_layer_data() as _) {
         if let Direction::Inbound = direction {
             // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
-            // The net buffer list will auto advance after it loses scope.
-            nbl.retreat(IPV4_HEADER_LEN as u32, true);
+            // The NBL will auto advance after it loses scope.
+            if ipv6 {
+                nbl.retreat(IPV6_HEADER_LEN as u32, true);
+            } else {
+                nbl.retreat(IPV4_HEADER_LEN as u32, true);
+            }
         }
 
         // Get key from packet.
-        let key = match get_key_from_nbl(&nbl, direction) {
+        let key = match if ipv6 {
+            get_key_from_nbl_v6(&nbl, direction)
+        } else {
+            get_key_from_nbl_v4(&nbl, direction)
+        } {
             Ok(key) => key,
             Err(_) => {
                 // Protocol not supported.
                 continue;
             }
         };
+        // crit!(device.logger, "Packet: {}", key);
         struct ConnectionInfo {
-            local_address: Ipv4Address,
-            remote_address: Ipv4Address,
+            local_address: IpAddress,
+            remote_address: IpAddress,
             remote_port: u16,
-            redirect_address: Ipv4Address,
+            redirect_address: IpAddress,
             redirect_port: u16,
         }
         // Check if packet should be redirected.
-        let conn_info = device.connection_cache.get_connection_action(
-            &key,
-            |conn: &Connection| -> Option<ConnectionInfo> {
-                // Function is is behind spin lock. Just copy and return.
-                if let ConnectionAction::RedirectIP {
-                    redirect_address,
-                    redirect_port,
-                } = conn.action
-                {
-                    return Some(ConnectionInfo {
-                        local_address: conn.local_address,
-                        remote_address: conn.remote_address,
-                        remote_port: conn.remote_port,
+        let conn_info = if ipv6 {
+            device.connection_cache.get_connection_action_v6(
+                &key,
+                |conn: &ConnectionV6| -> Option<ConnectionInfo> {
+                    // Function is is behind spin lock. Just copy and return.
+                    if let ConnectionAction::RedirectIP {
                         redirect_address,
                         redirect_port,
-                    });
-                }
-                None
-            },
-        );
+                    } = conn.action
+                    {
+                        return Some(ConnectionInfo {
+                            local_address: IpAddress::Ipv6(conn.local_address),
+                            remote_address: IpAddress::Ipv6(conn.remote_address),
+                            remote_port: conn.remote_port,
+                            redirect_address,
+                            redirect_port,
+                        });
+                    }
+                    None
+                },
+            )
+        } else {
+            device.connection_cache.get_connection_action_v4(
+                &key,
+                |conn: &ConnectionV4| -> Option<ConnectionInfo> {
+                    // Function is is behind spin lock. Just copy and return.
+                    if let ConnectionAction::RedirectIP {
+                        redirect_address,
+                        redirect_port,
+                    } = conn.action
+                    {
+                        return Some(ConnectionInfo {
+                            local_address: IpAddress::Ipv4(conn.local_address),
+                            remote_address: IpAddress::Ipv4(conn.remote_address),
+                            remote_port: conn.remote_port,
+                            redirect_address,
+                            redirect_port,
+                        });
+                    }
+                    None
+                },
+            )
+        };
 
         // Check if there is action for this connection.
         if let Some(conn) = conn_info {
@@ -137,12 +203,17 @@ fn ip_packet_layer(
                     inbound = true;
                 }
             }
+            let loopback = match conn.redirect_address {
+                IpAddress::Ipv4(addr) => addr.is_loopback(),
+                IpAddress::Ipv6(addr) => addr.is_loopback(),
+            };
 
             let result = device.injector.inject_net_buffer_list(
                 clone,
                 InjectInfo {
+                    ipv6,
                     inbound,
-                    loopback: conn.redirect_address.is_loopback(),
+                    loopback,
                     interface_index,
                     sub_interface_index,
                 },

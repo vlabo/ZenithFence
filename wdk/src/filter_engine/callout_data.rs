@@ -5,7 +5,7 @@ use crate::{
 
 use super::{
     classify::ClassifyOut,
-    layer::{Layer, Value},
+    layer::{Layer, Value, ValueType},
     metadata::FwpsIncomingMetadataValues,
     net_buffer::NetBufferList,
     packet::TransportPacketList,
@@ -63,6 +63,10 @@ pub struct CalloutData<'a> {
 }
 
 impl<'a> CalloutData<'a> {
+    pub fn get_value_type(&self, index: usize) -> ValueType {
+        return self.values[index].value_type;
+    }
+
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
         unsafe {
             return self.values[index].value.uint8;

@@ -74,7 +74,7 @@ macro_rules! crit {
     ($log:expr, $($arg:tt)*) => ({
         if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line(protocol::info::Severity::Critical, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
+            $log.add_line(protocol::info::Severity::Critical, alloc::format!("{}:{} ", file!(), line!()), message)
         }
     });
 }
@@ -84,7 +84,7 @@ macro_rules! err {
     ($log:expr, $($arg:tt)*) => ({
         if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line(protocol::info::Severity::Error, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
+            $log.add_line(protocol::info::Severity::Error, alloc::format!("{}:{} ", file!(), line!()), message)
         }
     });
 }
@@ -94,7 +94,7 @@ macro_rules! dbg {
     ($log:expr, $($arg:tt)*) => ({
         if protocol::info::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line(protocol::info::Severity::Debug, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
+            $log.add_line(protocol::info::Severity::Debug, alloc::format!("{}:{} ", file!(), line!()), message)
         }
     });
 }
@@ -104,7 +104,7 @@ macro_rules! warn {
     ($log:expr, $($arg:tt)*) => ({
         if protocol::info::Severity::Warning as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line(protocol::info::Severity::Warning, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
+            $log.add_line(protocol::info::Severity::Warning, alloc::format!("{}:{} ", file!(), line!()), message)
         }
     });
 }
@@ -114,7 +114,7 @@ macro_rules! info {
     ($log:expr, $($arg:tt)*) => ({
         if protocol::info::Severity::Info as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
-            $log.add_line(protocol::info::Severity::Info, alloc::format!("{}:{} ", core::module_path!(), line!()), message)
+            $log.add_line(protocol::info::Severity::Info, alloc::format!("{}:{} ", file!(), line!()), message)
         }
     });
 }

@@ -6,7 +6,7 @@ use alloc::{
 use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
-    Networking::WinSock::{AF_INET, AF_UNSPEC, SCOPE_ID},
+    Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SCOPE_ID},
     System::Kernel::UNSPECIFIED_COMPARTMENT_ID,
 };
 
@@ -24,8 +24,9 @@ use crate::{
 use super::{callout_data::CalloutData, net_buffer::NetBufferList};
 
 pub struct TransportPacketList {
+    ipv6: bool,
     pub net_buffer_list_queue: Vec<NetBufferList>,
-    remote_ip: [u8; 4],
+    remote_ip: [u8; 16],
     endpoint_handle: u64,
     remote_scope_id: SCOPE_ID,
     control_data: Option<NonNull<[u8]>>,
@@ -35,6 +36,7 @@ pub struct TransportPacketList {
 }
 
 pub struct InjectInfo {
+    pub ipv6: bool,
     pub inbound: bool,
     pub loopback: bool,
     pub interface_index: u32,
@@ -43,14 +45,16 @@ pub struct InjectInfo {
 
 pub struct Injector {
     transport_inject_handle: HANDLE,
-    network_inject_handle: HANDLE,
+    packet_inject_handle_v4: HANDLE,
+    packet_inject_handle_v6: HANDLE,
 }
 
 // TODO: Implement custom allocator for the packet buffers for reusing memory and reducing allocations. This should improve latency.
 impl Injector {
     pub fn new() -> Self {
         let mut transport_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
-        let mut network_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
+        let mut packet_inject_handle_v4: HANDLE = INVALID_HANDLE_VALUE;
+        let mut packet_inject_handle_v6: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
             let status = FwpsInjectionHandleCreate0(
                 AF_UNSPEC,
@@ -63,7 +67,16 @@ impl Injector {
             let status = FwpsInjectionHandleCreate0(
                 AF_INET,
                 FWPS_INJECTION_TYPE_NETWORK,
-                &mut network_inject_handle,
+                &mut packet_inject_handle_v4,
+            );
+
+            if let Err(err) = check_ntstatus(status) {
+                crate::err!("error allocating network inject handle: {}", err);
+            }
+            let status = FwpsInjectionHandleCreate0(
+                AF_INET6,
+                FWPS_INJECTION_TYPE_NETWORK,
+                &mut packet_inject_handle_v6,
             );
 
             if let Err(err) = check_ntstatus(status) {
@@ -72,15 +85,17 @@ impl Injector {
         }
         Self {
             transport_inject_handle,
-            network_inject_handle,
+            packet_inject_handle_v4,
+            packet_inject_handle_v6,
         }
     }
 
     // TODO: pick a better name
     pub fn from_ale_callout(
+        ipv6: bool,
         callout_data: &CalloutData,
         net_buffer_list: NetBufferList,
-        remote_ip: [u8; 4],
+        remote_ip_slice: &[u8],
         inbound: bool,
         interface_index: u32,
         sub_interface_index: u32,
@@ -89,8 +104,15 @@ impl Injector {
         if let Some(cd) = callout_data.get_control_data() {
             control_data = Some(cd);
         }
+        let mut remote_ip: [u8; 16] = [0; 16];
+        if remote_ip_slice.len() == 4 {
+            remote_ip[0..4].copy_from_slice(&remote_ip_slice);
+        } else if remote_ip_slice.len() == 16 {
+            remote_ip[0..16].copy_from_slice(&remote_ip_slice);
+        }
 
         TransportPacketList {
+            ipv6,
             net_buffer_list_queue: alloc::vec![net_buffer_list],
             remote_ip,
             endpoint_handle: callout_data.get_transport_endpoint_handle().unwrap_or(0),
@@ -122,6 +144,8 @@ impl Injector {
                 None => core::ptr::null_mut(),
             };
 
+            crate::info!("inject ip: {:?}", packet_list.remote_ip);
+
             let mut send_params = FWPS_TRANSPORT_SEND_PARAMS1 {
                 remote_address: &packet_list.remote_ip as _,
                 remote_scope_id: packet_list.remote_scope_id,
@@ -130,6 +154,7 @@ impl Injector {
                 header_include_header: core::ptr::null_mut(),
                 header_include_header_length: 0,
             };
+            let address_family = if packet_list.ipv6 { AF_INET6 } else { AF_INET };
 
             for net_buffer_list in packet_list.net_buffer_list_queue {
                 // Escape the stack. Packet buffer should be valid until the packet is injected.
@@ -144,7 +169,7 @@ impl Injector {
                         0,
                         core::ptr::null_mut(),
                         0,
-                        AF_INET,
+                        address_family,
                         UNSPECIFIED_COMPARTMENT_ID,
                         packet_list.interface_index,
                         packet_list.sub_interface_index,
@@ -159,7 +184,7 @@ impl Injector {
                         packet_list.endpoint_handle,
                         0,
                         &mut send_params,
-                        AF_INET,
+                        address_family,
                         UNSPECIFIED_COMPARTMENT_ID,
                         raw_nbl,
                         free_packet,
@@ -182,7 +207,7 @@ impl Injector {
         net_buffer_list: NetBufferList,
         inject_info: InjectInfo,
     ) -> Result<(), String> {
-        if self.network_inject_handle == INVALID_HANDLE_VALUE {
+        if self.packet_inject_handle_v4 == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
         // Escape the stack, so the data can be freed after inject is complete.
@@ -190,11 +215,17 @@ impl Injector {
         let nbl = packet_boxed.nbl;
         let packet_pointer = Box::into_raw(packet_boxed);
 
+        let inject_handle = if inject_info.ipv6 {
+            self.packet_inject_handle_v6
+        } else {
+            self.packet_inject_handle_v4
+        };
+
         let status = if inject_info.inbound && !inject_info.loopback {
             // Inject inbound.
             unsafe {
                 FwpsInjectNetworkReceiveAsync0(
-                    self.network_inject_handle,
+                    inject_handle,
                     0,
                     0,
                     UNSPECIFIED_COMPARTMENT_ID,
@@ -209,7 +240,7 @@ impl Injector {
             // Inject outbound.
             unsafe {
                 FwpsInjectNetworkSendAsync0(
-                    self.network_inject_handle,
+                    inject_handle,
                     0,
                     0,
                     UNSPECIFIED_COMPARTMENT_ID,
@@ -232,17 +263,22 @@ impl Injector {
         return Ok(());
     }
 
-    pub fn was_network_packet_injected_by_self(&self, nbl: *const NET_BUFFER_LIST) -> bool {
-        if self.network_inject_handle == INVALID_HANDLE_VALUE || self.network_inject_handle == 0 {
+    pub fn was_network_packet_injected_by_self(
+        &self,
+        nbl: *const NET_BUFFER_LIST,
+        ipv6: bool,
+    ) -> bool {
+        let inject_handle = if ipv6 {
+            self.packet_inject_handle_v6
+        } else {
+            self.packet_inject_handle_v4
+        };
+        if inject_handle == INVALID_HANDLE_VALUE || inject_handle == 0 {
             return false;
         }
 
         unsafe {
-            let state = FwpsQueryPacketInjectionState0(
-                self.network_inject_handle,
-                nbl,
-                core::ptr::null_mut(),
-            );
+            let state = FwpsQueryPacketInjectionState0(inject_handle, nbl, core::ptr::null_mut());
 
             match state {
                 FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_NOT_INJECTED => false,
@@ -264,10 +300,17 @@ impl Drop for Injector {
                 FwpsInjectionHandleDestroy0(self.transport_inject_handle);
                 self.transport_inject_handle = INVALID_HANDLE_VALUE;
             }
-            if self.network_inject_handle != INVALID_HANDLE_VALUE && self.network_inject_handle != 0
+            if self.packet_inject_handle_v4 != INVALID_HANDLE_VALUE
+                && self.packet_inject_handle_v4 != 0
             {
-                FwpsInjectionHandleDestroy0(self.network_inject_handle);
-                self.network_inject_handle = INVALID_HANDLE_VALUE;
+                FwpsInjectionHandleDestroy0(self.packet_inject_handle_v4);
+                self.packet_inject_handle_v4 = INVALID_HANDLE_VALUE;
+            }
+            if self.packet_inject_handle_v6 != INVALID_HANDLE_VALUE
+                && self.packet_inject_handle_v6 != 0
+            {
+                FwpsInjectionHandleDestroy0(self.packet_inject_handle_v6);
+                self.packet_inject_handle_v6 = INVALID_HANDLE_VALUE;
             }
         }
     }
