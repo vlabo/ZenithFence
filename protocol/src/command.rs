@@ -14,6 +14,7 @@ pub enum CommandType {
     UpdateV6,
     ClearCache,
     GetLogs,
+    GetBandwidthStats,
 }
 
 #[repr(C, packed)]

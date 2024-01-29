@@ -170,6 +170,13 @@ pub struct NET_BUFFER_LIST {
     pub(crate) NetBufferListInfo: [*mut c_void; 20], // Extra data at the end of the struct. The size of the array is not fixed.
 }
 
+#[allow(non_camel_case_types, non_snake_case)]
+#[repr(C)]
+pub union NBSize {
+    pub DataLength: u32,
+    pub stDataLength: u64,
+}
+
 /// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 /// The NET_BUFFER structure specifies data that is transmitted or received over the network.
 #[allow(non_camel_case_types, non_snake_case)]
@@ -178,7 +185,7 @@ pub struct NET_BUFFER {
     pub(crate) Next: *mut NET_BUFFER,
     pub(crate) CurrentMdl: *mut MDL,
     pub(crate) CurrentMdlOffset: u32,
-    pub(crate) stDataLength: u64, // Use as u32 value. Check the original struct. TODO: Handle this in a better way.
+    pub(crate) nbSize: NBSize,
     pub(crate) MdlChain: *mut MDL,
     pub(crate) DataOffset: u32,
     pub(crate) ChecksumBias: u16,

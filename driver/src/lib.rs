@@ -5,15 +5,19 @@ extern crate alloc;
 
 mod ale_callouts;
 mod array_holder;
+mod bandwidth;
+mod callouts;
 mod common;
 mod connection;
 mod connection_cache;
 mod device;
+mod driver_hashmap;
 mod entry;
 mod id_cache;
 pub mod logger;
 mod packet_callouts;
 mod packet_util;
+mod stream_callouts;
 
 use wdk::allocator::WindowsAllocator;
 

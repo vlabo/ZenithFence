@@ -48,7 +48,7 @@ impl NetBufferList {
             };
             let nb = nbl.Header.first_net_buffer;
             if let Some(nb) = nb.as_ref() {
-                let data_length = nb.stDataLength as u32;
+                let data_length = nb.nbSize.DataLength;
                 if data_length == 0 {
                     return Err(());
                 }
@@ -81,7 +81,7 @@ impl NetBufferList {
 
             let nb = nbl.Header.first_net_buffer;
             if let Some(nb) = nb.as_ref() {
-                let data_length = nb.stDataLength as u32;
+                let data_length = nb.nbSize.DataLength;
                 if data_length == 0 {
                     return Err("can't clone empty packet".to_string());
                 }
@@ -130,6 +130,27 @@ impl NetBufferList {
             }
         }
         return None;
+    }
+
+    pub fn get_data_length(&self) -> u32 {
+        unsafe {
+            if let Some(nbl) = self.nbl.as_ref() {
+                let mut nb = nbl.Header.first_net_buffer;
+                let mut data_length = 0;
+                while !nb.is_null() {
+                    let mut next = core::ptr::null_mut();
+                    if let Some(nb) = nb.as_ref() {
+                        data_length += nb.nbSize.DataLength;
+                        next = nb.Next;
+                    }
+                    nb = next;
+                }
+
+                data_length
+            } else {
+                0
+            }
+        }
     }
 
     /// Retreats the mnl of the buffer. Does not auto advance multiple retreats.
@@ -203,7 +224,7 @@ pub fn read_packet_partial<'a>(nbl: *mut NET_BUFFER_LIST, buffer: &'a mut [u8]) 
         };
         let nb = nbl.Header.first_net_buffer;
         if let Some(nb) = nb.as_ref() {
-            let data_length = nb.stDataLength as u32;
+            let data_length = nb.nbSize.DataLength;
             if data_length == 0 {
                 return Err(());
             }

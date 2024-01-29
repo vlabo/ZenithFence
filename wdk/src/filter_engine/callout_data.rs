@@ -9,6 +9,7 @@ use super::{
     metadata::FwpsIncomingMetadataValues,
     net_buffer::NetBufferList,
     packet::TransportPacketList,
+    stream_data::StreamCalloutIoPacket,
     FilterEngine,
 };
 use alloc::string::{String, ToString};
@@ -121,6 +122,15 @@ impl<'a> CalloutData<'a> {
 
     pub fn get_layer_data(&self) -> *mut c_void {
         return self.layer_data;
+    }
+
+    pub fn get_stream_callout_packet(&self) -> Option<&mut StreamCalloutIoPacket> {
+        match self.layer {
+            Layer::StreamV4 | Layer::StreamV4Discard | Layer::StreamV6 | Layer::StreamV6Discard => unsafe {
+                (self.layer_data as *mut StreamCalloutIoPacket).as_mut()
+            },
+            _ => None,
+        }
     }
 
     pub fn pend_operation(

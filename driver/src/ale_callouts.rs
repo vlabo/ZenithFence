@@ -206,7 +206,6 @@ fn ale_layer_auth(
     else {
         return;
     };
-
     // Check if packet was previously injected from the packet layer.
     if device
         .injector

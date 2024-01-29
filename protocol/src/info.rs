@@ -11,6 +11,8 @@ enum InfoType {
     ConnectionIpv6 = 2,
     ConnectionEndEventV4 = 3,
     ConnectionEndEventV6 = 4,
+    BandwidthStatsV4 = 5,
+    BandwidthStatsV6 = 6,
 }
 
 pub trait Info {
@@ -234,5 +236,78 @@ impl Info for LogLine {
         self.combined.extend_from_slice(self.line.as_bytes());
 
         return &self.combined;
+    }
+}
+
+// Special struct for Bandwidth stats
+#[repr(C, packed)]
+pub struct BandwidthValueV4 {
+    pub local_ip: [u8; 4],
+    pub local_port: u16,
+    pub remote_ip: [u8; 4],
+    pub remote_port: u16,
+    pub transmitted_bytes: u64,
+    pub received_bytes: u64,
+}
+
+#[repr(C, packed)]
+pub struct BandwidthValueV6 {
+    pub local_ip: [u8; 16],
+    pub local_port: u16,
+    pub remote_ip: [u8; 16],
+    pub remote_port: u16,
+    pub transmitted_bytes: u64,
+    pub received_bytes: u64,
+}
+
+pub struct BandwidthStatArray<Value> {
+    info_type: InfoType,
+    protocol: u8,
+    array: Vec<Value>,
+    bytes: Vec<u8>,
+}
+
+impl BandwidthStatArray<BandwidthValueV4> {
+    pub fn new_v4(size: usize, protocol: u8) -> Self {
+        Self {
+            info_type: InfoType::BandwidthStatsV4,
+            protocol,
+            array: Vec::with_capacity(size),
+            bytes: Vec::new(),
+        }
+    }
+}
+impl BandwidthStatArray<BandwidthValueV6> {
+    pub fn new_v6(size: usize, protocol: u8) -> Self {
+        Self {
+            info_type: InfoType::BandwidthStatsV6,
+            protocol,
+            array: Vec::with_capacity(size),
+            bytes: Vec::new(),
+        }
+    }
+}
+impl<Value> BandwidthStatArray<Value> {
+    pub fn push_value(&mut self, value: Value) {
+        self.array.push(value);
+    }
+}
+
+impl<Value> Info for BandwidthStatArray<Value> {
+    fn as_bytes(&mut self) -> &[u8] {
+        // Write [InfoType: u8, protocol: u8, ArraySize: u64, stats_array: [BandwidthValueTcpV4; ArraySize]]
+        self.bytes
+            .reserve(1 + 1 + size_of::<u64>() + self.array.len() * size_of::<Value>());
+
+        self.bytes.push(self.info_type as u8);
+        self.bytes.push(self.protocol as u8);
+
+        let size: u64 = self.array.len() as _;
+        self.bytes.extend_from_slice(&size.to_ne_bytes());
+
+        for value in &self.array {
+            self.bytes.extend_from_slice(as_bytes(value));
+        }
+        return &self.bytes;
     }
 }

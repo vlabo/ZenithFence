@@ -15,6 +15,8 @@ const (
 	InfoConnectionIpv6       = 2
 	InfoConnectionEndEventV4 = 3
 	InfoConnectionEndEventV6 = 4
+	InfoBandwidthStatsV4     = 5
+	InfoBandwidthStatsV6     = 6
 )
 
 var ErrorUnknownInfoType = errors.New("unknown info type")
@@ -66,12 +68,37 @@ type LogLine struct {
 	Line     string
 }
 
+type BandwidthValueV4 struct {
+	LocalIP          [4]byte
+	LocalPort        uint16
+	RemoteIP         [4]byte
+	RemotePort       uint16
+	TransmittedBytes uint64
+	ReceivedBytes    uint64
+}
+
+type BandwidthValueV6 struct {
+	LocalIP          [4]byte
+	LocalPort        uint16
+	RemoteIP         [4]byte
+	RemotePort       uint16
+	TransmittedBytes uint64
+	ReceivedBytes    uint64
+}
+
+type BandwidthStatsArray struct {
+	Protocol uint8
+	ValuesV4 []BandwidthValueV4
+	ValuesV6 []BandwidthValueV6
+}
+
 type Info struct {
 	ConnectionV4    *ConnectionV4
 	ConnectionV6    *ConnectionV6
 	ConnectionEndV4 *ConnectionEndV4
 	ConnectionEndV6 *ConnectionEndV6
 	LogLine         *LogLine
+	BandwidthStats  *BandwidthStatsArray
 }
 
 func readInfo(reader io.Reader) (*Info, error) {
@@ -136,6 +163,50 @@ func readInfo(reader io.Reader) (*Info, error) {
 			err = binary.Read(reader, binary.LittleEndian, &line)
 			logLine.Line = string(line)
 			return &Info{LogLine: &logLine}, nil
+		}
+	case InfoBandwidthStatsV4:
+		{
+			// Read Protocol
+			var protocol uint8
+			err = binary.Read(reader, binary.LittleEndian, &protocol)
+			if err != nil {
+				return nil, err
+			}
+			// Read size of array
+			var size uint64
+			err = binary.Read(reader, binary.LittleEndian, &size)
+			if err != nil {
+				return nil, err
+			}
+			// Read array
+			var stats_array = make([]BandwidthValueV4, size)
+			for i := 0; i < int(size); i++ {
+				binary.Read(reader, binary.LittleEndian, &stats_array[i])
+			}
+
+			return &Info{BandwidthStats: &BandwidthStatsArray{Protocol: protocol, ValuesV4: stats_array}}, nil
+		}
+	case InfoBandwidthStatsV6:
+		{
+			// Read Protocol
+			var protocol uint8
+			err = binary.Read(reader, binary.LittleEndian, &protocol)
+			if err != nil {
+				return nil, err
+			}
+			// Read size of array
+			var size uint64
+			err = binary.Read(reader, binary.LittleEndian, &size)
+			if err != nil {
+				return nil, err
+			}
+			// Read array
+			var stats_array = make([]BandwidthValueV6, size)
+			for i := 0; i < int(size); i++ {
+				binary.Read(reader, binary.LittleEndian, &stats_array[i])
+			}
+
+			return &Info{BandwidthStats: &BandwidthStatsArray{Protocol: protocol, ValuesV6: stats_array}}, nil
 		}
 	}
 	return nil, ErrorUnknownInfoType

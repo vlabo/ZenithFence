@@ -26,8 +26,8 @@ pub mod layer;
 pub(crate) mod metadata;
 pub mod net_buffer;
 pub mod packet;
+pub mod stream_data;
 pub mod transaction;
-
 // Helper functions for ALE Readirect layers. Not needed for the current implementation.
 // pub mod connect_request;
 
@@ -223,13 +223,11 @@ unsafe extern "C" fn catch_all_callout(
     fixed_values: *const IncomingValues,
     meta_values: *const FwpsIncomingMetadataValues,
     layer_data: *mut c_void,
-    context: *mut c_void,
+    _context: *mut c_void,
     filter: *const FWPS_FILTER2,
     _flow_context: u64,
     classify_out: *mut ClassifyOut,
 ) {
-    let _ = context; // Unused
-
     let filter = &(*filter);
     // Filter context is the address of the callout.
     let callout = filter.context as *mut Callout;
@@ -241,8 +239,8 @@ unsafe extern "C" fn catch_all_callout(
             (*fixed_values).value_count as usize,
         );
         let data = CalloutData {
-            callout_id: filter.context as usize,
             layer: callout.layer,
+            callout_id: filter.context as usize,
             values: array,
             metadata: meta_values,
             classify_out,

@@ -1,28 +1,23 @@
 use alloc::boxed::Box;
-use alloc::vec;
 use num_traits::FromPrimitive;
 use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::{
-    consts,
     driver::Driver,
-    filter_engine::{
-        callout::Callout, layer::Layer, net_buffer::NetworkAllocator, packet::Injector,
-        FilterEngine,
-    },
+    filter_engine::{net_buffer::NetworkAllocator, packet::Injector, FilterEngine},
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
 };
 
 use crate::{
-    ale_callouts,
     array_holder::ArrayHolder,
+    bandwidth::Bandwidth,
+    callouts,
     connection::{ConnectionAction, Verdict},
     connection_cache::{ConnectionCache, Key},
     dbg, err,
     id_cache::IdCache,
     logger::Logger,
-    packet_callouts,
 };
 
 // Device Context
@@ -34,6 +29,7 @@ pub struct Device {
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
+    pub(crate) bandwidth_stats: Bandwidth,
     pub(crate) logger: Logger,
 }
 
@@ -45,9 +41,10 @@ impl Device {
         self.event_queue.init();
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
-        self.connection_cache.init();
+        self.connection_cache = ConnectionCache::new();
         self.injector = Injector::new();
         self.network_allocator = NetworkAllocator::new();
+        self.bandwidth_stats = Bandwidth::new();
 
         if let Err(err) = self
             .filter_engine
@@ -56,122 +53,7 @@ impl Device {
             err!(self.logger, "filter engine error: {}", err);
         }
 
-        let callouts = vec![
-            Callout::new(
-                "AleLayerOutboundV4",
-                "ALE layer for outbound connection for ipv4",
-                0x58545073_f893_454c_bbea_a57bc964f46d,
-                Layer::AleAuthConnectV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                ale_callouts::ale_layer_connect_v4,
-            ),
-            Callout::new(
-                "AleLayerInboundV4",
-                "ALE layer for inbound connections for ipv4",
-                0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
-                Layer::AleAuthRecvAcceptV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                ale_callouts::ale_layer_accept_v4,
-            ),
-            Callout::new(
-                "AleLayerOutboundV6",
-                "ALE layer for outbound connections for ipv6",
-                0x4bd2a080_2585_478d_977c_7f340c6bc3d4,
-                Layer::AleAuthConnectV6,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                ale_callouts::ale_layer_connect_v6,
-            ),
-            Callout::new(
-                "AleLayerInboundV6",
-                "ALE layer for inbound connections for ipv6",
-                0xd24480da_38fa_4099_9383_b5c83b69e4f2,
-                Layer::AleAuthRecvAcceptV6,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                ale_callouts::ale_layer_accept_v6,
-            ),
-            Callout::new(
-                "AleEndpointClosureV4",
-                "ALE layer for indicating closing of connection for ipv4",
-                0x58f02845_ace9_4455_ac80_8a84b86fe566,
-                Layer::AleEndpointClosureV4,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::endpoint_closure_v4,
-            ),
-            Callout::new(
-                "AleEndpointClosureV6",
-                "ALE layer for indicating closing of connection for ipv6",
-                0x2bc82359_9dc5_4315_9c93_c89467e283ce,
-                Layer::AleEndpointClosureV6,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::endpoint_closure_v6,
-            ),
-            Callout::new(
-                "AleResourceAssignmentV4",
-                "Port release monitor",
-                0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
-                Layer::AleResourceAssignmentV4,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::ale_resource_monitor,
-            ),
-            Callout::new(
-                "AleResourceReleaseV4",
-                "Port release monitor",
-                0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
-                Layer::AleResourceReleaseV4,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::ale_resource_monitor,
-            ),
-            Callout::new(
-                "AleResourceAssignmentV6",
-                "Port release monitor",
-                0xb0d02299_3d3e_437d_916a_f0e96a60cc18,
-                Layer::AleResourceAssignmentV6,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::ale_resource_monitor,
-            ),
-            Callout::new(
-                "AleResourceReleaseV6",
-                "Port release monitor",
-                0x6cf36e04_e656_42c3_8cac_a1ce05328bd1,
-                Layer::AleResourceReleaseV6,
-                consts::FWP_ACTION_CALLOUT_INSPECTION,
-                ale_callouts::ale_resource_monitor,
-            ),
-            Callout::new(
-                "IPPacketOutboundV4",
-                "IP packet outbound network layer callout for Ipv4",
-                0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
-                Layer::OutboundIppacketV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                packet_callouts::ip_packet_layer_outbound_v4,
-            ),
-            Callout::new(
-                "IPPacketInboundV4",
-                "IP packet inbound network layer callout for Ipv4",
-                0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
-                Layer::InboundIppacketV4,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                packet_callouts::ip_packet_layer_inbound_v4,
-            ),
-            Callout::new(
-                "IPPacketOutboundV6",
-                "IP packet outbound network layer callout for Ipv6",
-                0x91daf8bc_0908_4bf8_9f81_2c538ab8f25a,
-                Layer::OutboundIppacketV6,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                packet_callouts::ip_packet_layer_outbound_v6,
-            ),
-            Callout::new(
-                "IPPacketInboundV6",
-                "IP packet inbound network layer callout for Ipv6",
-                0xfe9faf5f_ceb2_4cd9_9995_f2f2b4f5fcc0,
-                Layer::InboundIppacketV6,
-                consts::FWP_ACTION_CALLOUT_TERMINATING,
-                packet_callouts::ip_packet_layer_inbound_v6,
-            ),
-        ];
-
-        if let Err(err) = self.filter_engine.commit(callouts) {
+        if let Err(err) = self.filter_engine.commit(callouts::get_callout_vec()) {
             err!(self.logger, "{}", err);
         }
     }
@@ -400,6 +282,28 @@ impl Device {
                 let lines_vec = self.logger.flush();
                 for line in lines_vec {
                     let _ = self.event_queue.push(line);
+                }
+            }
+            CommandType::GetBandwidthStats => {
+                wdk::dbg!("GetBandwidthStats command");
+                let stats = self.bandwidth_stats.get_all_updates_tcp_v4();
+                if let Some(stats) = stats {
+                    _ = self.event_queue.push(stats);
+                }
+
+                let stats = self.bandwidth_stats.get_all_updates_tcp_v6();
+                if let Some(stats) = stats {
+                    _ = self.event_queue.push(stats);
+                }
+
+                let stats = self.bandwidth_stats.get_all_updates_udp_v4();
+                if let Some(stats) = stats {
+                    _ = self.event_queue.push(stats);
+                }
+
+                let stats = self.bandwidth_stats.get_all_updates_udp_v6();
+                if let Some(stats) = stats {
+                    _ = self.event_queue.push(stats);
                 }
             }
         }

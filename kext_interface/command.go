@@ -9,14 +9,15 @@ import (
 )
 
 const (
-	CommandShutdown   = 0
-	CommandVerdict    = 1
-	CommandRedirectV4 = 2
-	CommandRedirectV6 = 3
-	CommandUpdateV4   = 4
-	CommandUpdateV6   = 5
-	CommandClearCache = 6
-	CommandGetLogs    = 7
+	CommandShutdown       = 0
+	CommandVerdict        = 1
+	CommandRedirectV4     = 2
+	CommandRedirectV6     = 3
+	CommandUpdateV4       = 4
+	CommandUpdateV6       = 5
+	CommandClearCache     = 6
+	CommandGetLogs        = 7
+	CommandBandwidthStats = 8
 )
 
 type Verdict struct {
@@ -100,5 +101,10 @@ func SendClearCacheCommand(writer io.Writer) error {
 
 func SendGetLogsCommand(writer io.Writer) error {
 	_, err := writer.Write([]byte{CommandGetLogs})
+	return err
+}
+
+func SendGetBandwidthStatsCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandBandwidthStats})
 	return err
 }
