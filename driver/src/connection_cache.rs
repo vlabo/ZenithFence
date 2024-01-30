@@ -1,5 +1,5 @@
 use crate::{
-    connection::{ConnectionAction, ConnectionV4, ConnectionV6},
+    connection::{ConnectionV4, ConnectionV6, Verdict},
     driver_hashmap::DeviceHashMap,
 };
 use alloc::vec::Vec;
@@ -114,17 +114,13 @@ impl ConnectionCache {
         }
     }
 
-    pub fn update_connection(
-        &mut self,
-        key: Key,
-        action: ConnectionAction,
-    ) -> Option<ClassifyDefer> {
+    pub fn update_connection(&mut self, key: Key, verdict: Verdict) -> Option<ClassifyDefer> {
         if key.is_ipv6() {
             let _guard = self.lock_v6.write_lock();
             if let Some(conns) = self.connections_v6.get_mut(&key.small()) {
                 for conn in conns {
                     if conn.remote_equals(&key) {
-                        conn.action = action;
+                        conn.verdict = verdict;
                         let classify_defer = conn.extra.packet_queue.take();
                         if classify_defer.is_some() {
                             return classify_defer;
@@ -142,7 +138,7 @@ impl ConnectionCache {
             if let Some(conns) = self.connections_v4.get_mut(&key.small()) {
                 for conn in conns {
                     if conn.remote_equals(&key) {
-                        conn.action = action;
+                        conn.verdict = verdict;
                         let classify_defer = conn.extra.packet_queue.take();
                         if classify_defer.is_some() {
                             return classify_defer;

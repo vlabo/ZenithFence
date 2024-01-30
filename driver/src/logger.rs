@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use protocol::info::{LogLine, Severity};
 
-pub const LOG_LEVEL: u8 = Severity::Error as u8;
+pub const LOG_LEVEL: u8 = Severity::Debug as u8;
 
 pub(crate) struct Logger {
     log_lines: [AtomicPtr<LogLine>; 1024],

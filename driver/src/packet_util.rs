@@ -9,13 +9,22 @@ use wdk::filter_engine::net_buffer::NetBufferList;
 
 use crate::{connection::Direction, connection_cache::Key, dbg, err, logger::Logger};
 
-pub fn redirect_outbound_packet(packet: &mut [u8], remote_address: IpAddress, remote_port: u16) {
+pub fn redirect_outbound_packet(
+    packet: &mut [u8],
+    remote_address: IpAddress,
+    remote_port: u16,
+    unify: bool,
+) {
     match remote_address {
         IpAddress::Ipv4(remote_address) => {
             if let Ok(mut ip_packet) = Ipv4Packet::new_checked(packet) {
-                ip_packet.set_dst_addr(remote_address);
-                if remote_address.is_loopback() {
-                    ip_packet.set_src_addr(Ipv4Address::new(127, 0, 0, 1));
+                if unify {
+                    ip_packet.set_dst_addr(ip_packet.src_addr());
+                } else {
+                    ip_packet.set_dst_addr(remote_address);
+                    if remote_address.is_loopback() {
+                        ip_packet.set_src_addr(Ipv4Address::new(127, 0, 0, 1));
+                    }
                 }
                 ip_packet.fill_checksum();
                 let src_addr = ip_packet.src_addr();

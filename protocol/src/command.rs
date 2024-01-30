@@ -8,8 +8,6 @@ use num_traits::FromPrimitive;
 pub enum CommandType {
     Shutdown,
     Verdict,
-    RedirectV4,
-    RedirectV6,
     UpdateV4,
     UpdateV6,
     ClearCache,
@@ -30,20 +28,6 @@ pub struct Verdict {
 }
 
 #[repr(C, packed)]
-pub struct RedirectV4 {
-    pub id: u64,
-    pub remote_address: [u8; 4],
-    pub remote_port: u16,
-}
-
-#[repr(C, packed)]
-pub struct RedirectV6 {
-    pub id: u64,
-    pub remote_address: [u8; 16],
-    pub remote_port: u16,
-}
-
-#[repr(C, packed)]
 pub struct UpdateV4 {
     pub protocol: u8,
     pub local_address: [u8; 4],
@@ -51,8 +35,6 @@ pub struct UpdateV4 {
     pub remote_address: [u8; 4],
     pub remote_port: u16,
     pub verdict: u8,
-    pub redirect_address: [u8; 4],
-    pub redirect_port: u16,
 }
 
 #[repr(C, packed)]
@@ -63,8 +45,6 @@ pub struct UpdateV6 {
     pub remote_address: [u8; 16],
     pub remote_port: u16,
     pub verdict: u8,
-    pub redirect_address: [u8; 16],
-    pub redirect_port: u16,
 }
 
 pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
@@ -72,14 +52,6 @@ pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
 }
 
 pub fn parse_verdict(bytes: &[u8]) -> &Verdict {
-    as_type(bytes)
-}
-
-pub fn parse_redirect_v4(bytes: &[u8]) -> &RedirectV4 {
-    as_type(bytes)
-}
-
-pub fn parse_redirect_v6(bytes: &[u8]) -> &RedirectV6 {
     as_type(bytes)
 }
 

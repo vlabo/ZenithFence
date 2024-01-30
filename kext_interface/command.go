@@ -11,13 +11,11 @@ import (
 const (
 	CommandShutdown       = 0
 	CommandVerdict        = 1
-	CommandRedirectV4     = 2
-	CommandRedirectV6     = 3
-	CommandUpdateV4       = 4
-	CommandUpdateV6       = 5
-	CommandClearCache     = 6
-	CommandGetLogs        = 7
-	CommandBandwidthStats = 8
+	CommandUpdateV4       = 2
+	CommandUpdateV6       = 3
+	CommandClearCache     = 4
+	CommandGetLogs        = 5
+	CommandBandwidthStats = 6
 )
 
 type Verdict struct {
@@ -41,27 +39,23 @@ type RedirectV6 struct {
 }
 
 type UpdateV4 struct {
-	command         uint8
-	Protocol        uint8
-	LocalAddress    [4]byte
-	LocalPort       uint16
-	RemoteAddress   [4]byte
-	RemotePort      uint16
-	Verdict         uint8
-	RedirectAddress [4]byte
-	RedirectPort    uint16
+	command       uint8
+	Protocol      uint8
+	LocalAddress  [4]byte
+	LocalPort     uint16
+	RemoteAddress [4]byte
+	RemotePort    uint16
+	Verdict       uint8
 }
 
 type UpdateV6 struct {
-	command         uint8
-	Protocol        uint8
-	LocalAddress    [16]byte
-	LocalPort       uint16
-	RemoteAddress   [16]byte
-	RemotePort      uint16
-	Verdict         uint8
-	RedirectAddress [16]byte
-	RedirectPort    uint16
+	command       uint8
+	Protocol      uint8
+	LocalAddress  [16]byte
+	LocalPort     uint16
+	RemoteAddress [16]byte
+	RemotePort    uint16
+	Verdict       uint8
 }
 
 func SendShutdownCommand(writer io.Writer) error {
@@ -72,16 +66,6 @@ func SendShutdownCommand(writer io.Writer) error {
 func SendVerdictCommand(writer io.Writer, verdict Verdict) error {
 	verdict.command = CommandVerdict
 	return binary.Write(writer, binary.LittleEndian, verdict)
-}
-
-func SendRedirectV4Command(writer io.Writer, redirect RedirectV4) error {
-	redirect.command = CommandRedirectV4
-	return binary.Write(writer, binary.LittleEndian, redirect)
-}
-
-func SendRedirectV6Command(writer io.Writer, redirect RedirectV6) error {
-	redirect.command = CommandRedirectV6
-	return binary.Write(writer, binary.LittleEndian, redirect)
 }
 
 func SendUpdateV4Command(writer io.Writer, update UpdateV4) error {

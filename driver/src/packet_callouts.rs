@@ -1,4 +1,4 @@
-use smoltcp::wire::{IpAddress, IPV4_HEADER_LEN, IPV6_HEADER_LEN};
+use smoltcp::wire::{IpAddress, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
 use wdk::filter_engine::net_buffer::NetBufferListIter;
@@ -6,7 +6,7 @@ use wdk::filter_engine::packet::InjectInfo;
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::connection::{ConnectionAction, ConnectionV4, ConnectionV6, Direction};
+use crate::connection::{ConnectionV4, ConnectionV6, Direction, PM_DNS_PORT, PM_SPN_PORT};
 use crate::packet_util::{
     get_key_from_nbl_v4, get_key_from_nbl_v6, redirect_inbound_packet, redirect_outbound_packet,
 };
@@ -122,50 +122,59 @@ fn ip_packet_layer(
             local_address: IpAddress,
             remote_address: IpAddress,
             remote_port: u16,
-            redirect_address: IpAddress,
             redirect_port: u16,
+            unify: bool,
         }
+        let redirect_address;
         // Check if packet should be redirected.
         let conn_info = if ipv6 {
+            redirect_address = IpAddress::Ipv6(Ipv6Address::LOOPBACK);
             device.connection_cache.get_connection_action_v6(
                 &key,
                 |conn: &ConnectionV6| -> Option<ConnectionInfo> {
                     // Function is is behind spin lock. Just copy and return.
-                    if let ConnectionAction::RedirectIP {
-                        redirect_address,
-                        redirect_port,
-                    } = conn.action
-                    {
-                        return Some(ConnectionInfo {
+                    match conn.verdict {
+                        crate::connection::Verdict::RedirectNameServer => Some(ConnectionInfo {
                             local_address: IpAddress::Ipv6(conn.local_address),
                             remote_address: IpAddress::Ipv6(conn.remote_address),
                             remote_port: conn.remote_port,
-                            redirect_address,
-                            redirect_port,
-                        });
+                            redirect_port: PM_DNS_PORT,
+                            unify: false,
+                        }),
+                        crate::connection::Verdict::RedirectTunnel => Some(ConnectionInfo {
+                            local_address: IpAddress::Ipv6(conn.local_address),
+                            remote_address: IpAddress::Ipv6(conn.remote_address),
+                            remote_port: conn.remote_port,
+                            redirect_port: PM_SPN_PORT,
+                            unify: true,
+                        }),
+                        _ => None,
                     }
-                    None
                 },
             )
         } else {
+            redirect_address = IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1));
             device.connection_cache.get_connection_action_v4(
                 &key,
                 |conn: &ConnectionV4| -> Option<ConnectionInfo> {
                     // Function is is behind spin lock. Just copy and return.
-                    if let ConnectionAction::RedirectIP {
-                        redirect_address,
-                        redirect_port,
-                    } = conn.action
-                    {
-                        return Some(ConnectionInfo {
+                    match conn.verdict {
+                        crate::connection::Verdict::RedirectNameServer => Some(ConnectionInfo {
                             local_address: IpAddress::Ipv4(conn.local_address),
                             remote_address: IpAddress::Ipv4(conn.remote_address),
                             remote_port: conn.remote_port,
-                            redirect_address,
-                            redirect_port,
-                        });
+                            redirect_port: PM_DNS_PORT,
+                            unify: false,
+                        }),
+                        crate::connection::Verdict::RedirectTunnel => Some(ConnectionInfo {
+                            local_address: IpAddress::Ipv4(conn.local_address),
+                            remote_address: IpAddress::Ipv4(conn.remote_address),
+                            remote_port: conn.remote_port,
+                            redirect_port: PM_SPN_PORT,
+                            unify: true,
+                        }),
+                        _ => None,
                     }
-                    None
                 },
             )
         };
@@ -189,8 +198,9 @@ fn ip_packet_layer(
                 Direction::Outbound => {
                     redirect_outbound_packet(
                         clone.get_data_mut().unwrap(),
-                        conn.redirect_address,
+                        redirect_address,
                         conn.redirect_port,
+                        conn.unify,
                     );
                 }
                 Direction::Inbound => {
@@ -203,10 +213,7 @@ fn ip_packet_layer(
                     inbound = true;
                 }
             }
-            let loopback = match conn.redirect_address {
-                IpAddress::Ipv4(addr) => addr.is_loopback(),
-                IpAddress::Ipv6(addr) => addr.is_loopback(),
-            };
+            let loopback = !conn.unify;
 
             let result = device.injector.inject_net_buffer_list(
                 clone,

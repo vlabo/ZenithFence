@@ -144,8 +144,6 @@ impl Injector {
                 None => core::ptr::null_mut(),
             };
 
-            crate::info!("inject ip: {:?}", packet_list.remote_ip);
-
             let mut send_params = FWPS_TRANSPORT_SEND_PARAMS1 {
                 remote_address: &packet_list.remote_ip as _,
                 remote_scope_id: packet_list.remote_scope_id,

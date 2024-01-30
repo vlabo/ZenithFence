@@ -15,9 +15,7 @@ use wdk::filter_engine::packet::Injector;
 use wdk::interface;
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
-use crate::connection::{
-    ConnectionAction, ConnectionExtra, ConnectionV4, ConnectionV6, Direction, Verdict,
-};
+use crate::connection::{ConnectionExtra, ConnectionV4, ConnectionV6, Direction, Verdict};
 use crate::connection_cache::Key;
 use crate::info;
 use crate::{dbg, device::Device, err};
@@ -235,25 +233,25 @@ fn ale_layer_auth(
         }
     }
 
-    let action = if ale_data.is_ipv6 {
+    let verdict = if ale_data.is_ipv6 {
         device.connection_cache.get_connection_action_v6(
             &ale_data.as_key(),
-            |conn| -> Option<ConnectionAction> {
+            |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
-                Some(conn.action.clone())
+                Some(conn.verdict)
             },
         )
     } else {
         device.connection_cache.get_connection_action_v4(
             &ale_data.as_key(),
-            |conn| -> Option<ConnectionAction> {
+            |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
-                Some(conn.action.clone())
+                Some(conn.verdict)
             },
         )
     };
 
-    if let Some(action) = action {
+    if let Some(action) = verdict {
         // We already have a verdict for it.
         dbg!(
             device.logger,
@@ -263,38 +261,30 @@ fn ale_layer_auth(
             ale_data.as_key()
         );
         match action {
-            ConnectionAction::Verdict(verdict) => match verdict {
-                Verdict::Accept | Verdict::Redirect | Verdict::RedirectTunnel => {
-                    data.action_permit()
-                }
-                Verdict::Block => data.action_block(),
-                Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
-                    data.block_and_absorb();
-                }
-                Verdict::Undecided => {
-                    if ale_data.protocol == IpProtocol::Udp || ale_data.reauthorize {
-                        let mut nbl = NetBufferList::new(data.get_layer_data() as _);
-                        if let Direction::Inbound = ale_data.direction {
-                            if ale_data.is_ipv6 {
-                                nbl.retreat(IPV6_HEADER_LEN as u32, true);
-                            } else {
-                                nbl.retreat(IPV4_HEADER_LEN as u32, true);
-                            }
-                        }
-                        if let Ok(clone) = nbl.clone(&device.network_allocator) {
-                            device
-                                .connection_cache
-                                .push_packet_to_connection(ale_data.as_key(), clone);
+            Verdict::Accept | Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
+                data.action_permit()
+            }
+            Verdict::Block => data.action_block(),
+            Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
+                data.block_and_absorb();
+            }
+            Verdict::Undecided => {
+                if ale_data.protocol == IpProtocol::Udp || ale_data.reauthorize {
+                    let mut nbl = NetBufferList::new(data.get_layer_data() as _);
+                    if let Direction::Inbound = ale_data.direction {
+                        if ale_data.is_ipv6 {
+                            nbl.retreat(IPV6_HEADER_LEN as u32, true);
+                        } else {
+                            nbl.retreat(IPV4_HEADER_LEN as u32, true);
                         }
                     }
-                    data.block_and_absorb();
+                    if let Ok(clone) = nbl.clone(&device.network_allocator) {
+                        device
+                            .connection_cache
+                            .push_packet_to_connection(ale_data.as_key(), clone);
+                    }
                 }
-            },
-            ConnectionAction::RedirectIP {
-                redirect_address: _,
-                redirect_port: _,
-            } => {
-                data.action_permit();
+                data.block_and_absorb();
             }
         }
     } else {
@@ -380,7 +370,7 @@ fn ale_layer_auth(
                 local_port: ale_data.local_port,
                 remote_address,
                 remote_port: ale_data.remote_port,
-                action: ConnectionAction::Verdict(Verdict::Undecided),
+                verdict: Verdict::Undecided,
                 extra,
             };
 
@@ -402,7 +392,7 @@ fn ale_layer_auth(
                 local_port: ale_data.local_port,
                 remote_address,
                 remote_port: ale_data.remote_port,
-                action: ConnectionAction::Verdict(Verdict::Undecided),
+                verdict: Verdict::Undecided,
                 extra,
             };
 

@@ -6,6 +6,9 @@ use wdk::filter_engine::callout_data::ClassifyDefer;
 
 use crate::connection_cache::Key;
 
+pub static PM_DNS_PORT: u16 = 53;
+pub static PM_SPN_PORT: u16 = 717;
+
 #[derive(Copy, Clone, FromPrimitive)]
 #[repr(u8)]
 pub enum Verdict {
@@ -15,7 +18,7 @@ pub enum Verdict {
     Accept = 2,
     Block = 3,
     Drop = 4,
-    Redirect = 5,
+    RedirectNameServer = 5,
     RedirectTunnel = 6,
     Failed = 7,
 }
@@ -28,7 +31,7 @@ impl Display for Verdict {
             Verdict::Accept => write!(f, "Accept"),
             Verdict::Block => write!(f, "Block"),
             Verdict::Drop => write!(f, "Drop"),
-            Verdict::Redirect => write!(f, "Redirect"),
+            Verdict::RedirectNameServer => write!(f, "Redirect"),
             Verdict::RedirectTunnel => write!(f, "RedirectTunnel"),
             Verdict::Failed => write!(f, "Failed"),
         }
@@ -57,26 +60,26 @@ impl Debug for Direction {
     }
 }
 
-#[derive(Clone)]
-pub enum ConnectionAction {
-    Verdict(Verdict),
-    RedirectIP {
-        redirect_address: IpAddress,
-        redirect_port: u16,
-    },
-}
+// #[derive(Clone)]
+// pub enum ConnectionAction {
+//     Verdict(Verdict),
+//     RedirectIP {
+//         redirect_address: IpAddress,
+//         redirect_port: u16,
+//     },
+// }
 
-impl Display for ConnectionAction {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ConnectionAction::Verdict(verdict) => write!(f, "{}", verdict),
-            ConnectionAction::RedirectIP {
-                redirect_address,
-                redirect_port,
-            } => write!(f, "Redirect: {}:{}", redirect_address, redirect_port),
-        }
-    }
-}
+// impl Display for ConnectionAction {
+//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+//         match self {
+//             ConnectionAction::Verdict(verdict) => write!(f, "{}", verdict),
+//             ConnectionAction::RedirectIP {
+//                 redirect_address,
+//                 redirect_port,
+//             } => write!(f, "Redirect: {}:{}", redirect_address, redirect_port),
+//         }
+//     }
+// }
 
 pub struct ConnectionV4 {
     pub(crate) protocol: IpProtocol,
@@ -84,7 +87,7 @@ pub struct ConnectionV4 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
-    pub(crate) action: ConnectionAction,
+    pub(crate) verdict: Verdict,
     // Less frequently used data
     pub(crate) extra: Box<ConnectionExtra>,
 }
@@ -95,7 +98,7 @@ pub struct ConnectionV6 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv6Address,
     pub(crate) remote_port: u16,
-    pub(crate) action: ConnectionAction,
+    pub(crate) verdict: Verdict,
     // Less frequently used data
     pub(crate) extra: Box<ConnectionExtra>,
 }
@@ -128,16 +131,22 @@ impl ConnectionV4 {
     }
 
     pub fn redirect_equals(&self, key: &Key) -> bool {
-        match self.action {
-            ConnectionAction::RedirectIP {
-                redirect_address,
-                redirect_port,
-            } => {
-                if redirect_port != key.remote_port {
+        match self.verdict {
+            Verdict::RedirectNameServer => {
+                if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
 
-                redirect_address.eq(&key.remote_address)
+                match key.remote_address {
+                    IpAddress::Ipv4(a) => a.is_loopback(),
+                    IpAddress::Ipv6(_) => false,
+                }
+            }
+            Verdict::RedirectTunnel => {
+                if key.remote_port != PM_SPN_PORT {
+                    return false;
+                }
+                key.local_address.eq(&key.remote_address)
             }
             _ => false,
         }
@@ -165,16 +174,22 @@ impl ConnectionV6 {
     }
 
     pub fn redirect_equals(&self, key: &Key) -> bool {
-        match self.action {
-            ConnectionAction::RedirectIP {
-                redirect_address,
-                redirect_port,
-            } => {
-                if redirect_port != key.remote_port {
+        match self.verdict {
+            Verdict::RedirectNameServer => {
+                if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
 
-                redirect_address.eq(&key.remote_address)
+                match key.remote_address {
+                    IpAddress::Ipv4(_) => false,
+                    IpAddress::Ipv6(a) => a.is_loopback(),
+                }
+            }
+            Verdict::RedirectTunnel => {
+                if key.remote_port != PM_SPN_PORT {
+                    return false;
+                }
+                key.local_address.eq(&key.remote_address)
             }
             _ => false,
         }

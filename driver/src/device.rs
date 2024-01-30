@@ -13,9 +13,8 @@ use crate::{
     array_holder::ArrayHolder,
     bandwidth::Bandwidth,
     callouts,
-    connection::{ConnectionAction, Verdict},
     connection_cache::{ConnectionCache, Key},
-    dbg, err,
+    err,
     id_cache::IdCache,
     logger::Logger,
 };
@@ -136,9 +135,7 @@ impl Device {
                         // dbg!(self.logger, "Verdict response: {}", verdict);
 
                         // Add verdict in the cache.
-                        classify_defer = self
-                            .connection_cache
-                            .update_connection(key, ConnectionAction::Verdict(verdict));
+                        classify_defer = self.connection_cache.update_connection(key, verdict);
                     };
                 } else {
                     // Id was not in the packet cache.
@@ -146,77 +143,10 @@ impl Device {
                     err!(self.logger, "Verdict invalid id: {}", id);
                 }
             }
-            CommandType::RedirectV4 => {
-                let redirect = protocol::command::parse_redirect_v4(buffer);
-                if let Some(key) = self.packet_cache.pop_id(redirect.id) {
-                    dbg!(self.logger, "packet: {}", key);
-                    let remote_address = redirect.remote_address;
-                    let remote_port = redirect.remote_port;
-                    dbg!(
-                        self.logger,
-                        "Redirect V4: {:?} {}",
-                        remote_address,
-                        remote_port
-                    );
-
-                    classify_defer = self.connection_cache.update_connection(
-                        key,
-                        ConnectionAction::RedirectIP {
-                            redirect_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                &remote_address,
-                            )),
-                            redirect_port: remote_port,
-                        },
-                    );
-                } else {
-                    // Id was not in the packet cache.
-                    let id = redirect.id;
-                    err!(self.logger, "Redirect invalid id: {}", id);
-                }
-            }
-            CommandType::RedirectV6 => {
-                let redirect = protocol::command::parse_redirect_v6(buffer);
-                if let Some(key) = self.packet_cache.pop_id(redirect.id) {
-                    dbg!(self.logger, "packet: {}", key);
-                    let remote_address = redirect.remote_address;
-                    let remote_port = redirect.remote_port;
-                    dbg!(
-                        self.logger,
-                        "Redirect V6: {:?} {}",
-                        remote_address,
-                        remote_port
-                    );
-
-                    classify_defer = self.connection_cache.update_connection(
-                        key,
-                        ConnectionAction::RedirectIP {
-                            redirect_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                &remote_address,
-                            )),
-                            redirect_port: remote_port,
-                        },
-                    );
-                } else {
-                    // Id was not in the packet cache.
-                    let id = redirect.id;
-                    err!(self.logger, "Redirect invalid id: {}", id);
-                }
-            }
             CommandType::UpdateV4 => {
                 let update = protocol::command::parse_update_v4(buffer);
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
-                    let action = match verdict {
-                        Verdict::Redirect | Verdict::RedirectTunnel => {
-                            ConnectionAction::RedirectIP {
-                                redirect_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                    &update.redirect_address,
-                                )),
-                                redirect_port: update.redirect_port,
-                            }
-                        }
-                        verdict => ConnectionAction::Verdict(verdict),
-                    };
                     // Update with new action.
                     classify_defer = self.connection_cache.update_connection(
                         Key {
@@ -230,7 +160,7 @@ impl Device {
                             )),
                             remote_port: update.remote_port,
                         },
-                        action,
+                        verdict,
                     );
                 } else {
                     err!(self.logger, "invalid verdict value: {}", update.verdict);
@@ -240,17 +170,6 @@ impl Device {
                 let update = protocol::command::parse_update_v6(buffer);
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
-                    let action = match verdict {
-                        Verdict::Redirect | Verdict::RedirectTunnel => {
-                            ConnectionAction::RedirectIP {
-                                redirect_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                    &update.redirect_address,
-                                )),
-                                redirect_port: update.redirect_port,
-                            }
-                        }
-                        verdict => ConnectionAction::Verdict(verdict),
-                    };
                     // Update with new action.
                     classify_defer = self.connection_cache.update_connection(
                         Key {
@@ -264,7 +183,7 @@ impl Device {
                             )),
                             remote_port: update.remote_port,
                         },
-                        action,
+                        verdict,
                     );
                 } else {
                     err!(self.logger, "invalid verdict value: {}", update.verdict);
