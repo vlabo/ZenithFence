@@ -48,8 +48,13 @@ pub fn redirect_outbound_packet(
         IpAddress::Ipv6(remote_address) => {
             if let Ok(mut ip_packet) = Ipv6Packet::new_checked(packet) {
                 ip_packet.set_dst_addr(remote_address);
-                if remote_address.is_loopback() {
-                    ip_packet.set_src_addr(Ipv6Address::LOOPBACK);
+                if unify {
+                    ip_packet.set_dst_addr(ip_packet.src_addr());
+                } else {
+                    ip_packet.set_dst_addr(remote_address);
+                    if remote_address.is_loopback() {
+                        ip_packet.set_src_addr(Ipv6Address::LOOPBACK);
+                    }
                 }
                 let src_addr = ip_packet.src_addr();
                 let dst_addr = ip_packet.dst_addr();

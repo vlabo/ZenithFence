@@ -78,9 +78,9 @@ type BandwidthValueV4 struct {
 }
 
 type BandwidthValueV6 struct {
-	LocalIP          [4]byte
+	LocalIP          [16]byte
 	LocalPort        uint16
-	RemoteIP         [4]byte
+	RemoteIP         [16]byte
 	RemotePort       uint16
 	TransmittedBytes uint64
 	ReceivedBytes    uint64

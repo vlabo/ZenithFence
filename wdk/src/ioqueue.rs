@@ -69,13 +69,6 @@ extern "C" {
     fn KeRundownQueue(queue: *mut KQUEUE) -> *mut LIST_ENTRY;
 }
 
-// TODO: replace with original struct when it becomes available.
-// #[repr(C)]
-// struct KQueue {
-//     data: [u8; 64],    // Size of C KQueue struct.
-//     initialized: bool, // not used by C.
-// }
-
 #[repr(C)]
 struct Entry<T> {
     list: LIST_ENTRY, // Internal use
