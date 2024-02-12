@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 use crate::common::ControlCode;
 use crate::device;
 use num_traits::FromPrimitive;
@@ -45,6 +47,11 @@ pub extern "system" fn driver_entry(
     driver.set_read_fn(driver_read);
     driver.set_write_fn(driver_write);
     driver.set_device_control_fn(device_control);
+
+    unsafe {
+        // Ensure that zeroed state is a valid state.
+        let _: device::Device = MaybeUninit::zeroed().assume_init();
+    }
 
     // Initialize device.
     if let Some(device_object) = driver.get_device_object_ref() {

@@ -355,7 +355,9 @@ impl NetworkAllocator {
 impl Drop for NetworkAllocator {
     fn drop(&mut self) {
         unsafe {
-            NdisFreeNetBufferListPool(self.pool_handle);
+            if !self.pool_handle.is_null() {
+                NdisFreeNetBufferListPool(self.pool_handle);
+            }
         }
     }
 }

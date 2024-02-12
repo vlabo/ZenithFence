@@ -176,6 +176,10 @@ impl<T> IOQueue<T> {
     pub fn rundown(&self) {
         unsafe {
             let kqueue = self.kernel_queue.get();
+            if kqueue.is_null() {
+                return;
+            }
+
             // Check if initialized.
             if self.initialized.swap(false, Ordering::Acquire) {
                 // Remove and free all elements from the queue.
@@ -202,7 +206,9 @@ impl<T> Drop for IOQueue<T> {
         self.rundown();
         unsafe {
             let ptr = self.kernel_queue.get();
-            *ptr = MaybeUninit::zeroed().assume_init();
+            if !ptr.is_null() {
+                *ptr = MaybeUninit::zeroed().assume_init();
+            }
         }
     }
 }

@@ -36,7 +36,7 @@ pub struct FilterEngine {
     handle: HANDLE,
     sublayer_guid: u128,
     committed: bool,
-    callouts: Vec<Box<Callout>>,
+    callouts: Option<Vec<Box<Callout>>>,
 }
 
 impl FilterEngine {
@@ -53,6 +53,7 @@ impl FilterEngine {
         self.device_object = driver.get_device_object();
         self.handle = filter_engine_handle;
         self.sublayer_guid = layer_guid;
+        self.callouts = None;
         return Ok(());
     }
 
@@ -98,7 +99,11 @@ impl FilterEngine {
                 );
                 boxed_callouts.push(callout)
             }
-            filter_engine.callouts.append(&mut boxed_callouts);
+            if let Some(callouts) = &mut filter_engine.callouts {
+                callouts.append(&mut boxed_callouts);
+            } else {
+                filter_engine.callouts = Some(boxed_callouts);
+            }
 
             if let Err(err) = filter_engine.commit() {
                 return Err(err);
@@ -155,17 +160,21 @@ impl FilterEngine {
         };
         let filter_engine_handle = filter_engine.handle;
         let sublayer_guid = filter_engine.sublayer_guid;
-        for callout in &mut filter_engine.callouts {
-            if callout.filter_id != 0 {
-                // Remove old filter.
-                if let Err(err) = ffi::unregister_filter(filter_engine_handle, callout.filter_id) {
+        if let Some(callouts) = &mut filter_engine.callouts {
+            for callout in callouts {
+                if callout.filter_id != 0 {
+                    // Remove old filter.
+                    if let Err(err) =
+                        ffi::unregister_filter(filter_engine_handle, callout.filter_id)
+                    {
+                        return Err(format!("filter_engine: {}", err));
+                    }
+                    callout.filter_id = 0;
+                }
+                // Create new filter.
+                if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
                     return Err(format!("filter_engine: {}", err));
                 }
-                callout.filter_id = 0;
-            }
-            // Create new filter.
-            if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
-                return Err(format!("filter_engine: {}", err));
             }
         }
         // Commit transaction.
@@ -193,14 +202,16 @@ impl FilterEngine {
 impl Drop for FilterEngine {
     fn drop(&mut self) {
         dbg!("Unregistering callouts");
-        for callout in &self.callouts {
-            if callout.registered {
-                if let Err(code) = ffi::unregister_callout(callout.id) {
-                    dbg!("failed to unregister callout: {}", code);
-                }
-                if callout.filter_id != 0 {
-                    if let Err(code) = ffi::unregister_filter(self.handle, callout.filter_id) {
-                        dbg!("failed to unregister filter: {}", code)
+        if let Some(callouts) = &self.callouts {
+            for callout in callouts {
+                if callout.registered {
+                    if let Err(code) = ffi::unregister_callout(callout.id) {
+                        dbg!("failed to unregister callout: {}", code);
+                    }
+                    if callout.filter_id != 0 {
+                        if let Err(code) = ffi::unregister_filter(self.handle, callout.filter_id) {
+                            dbg!("failed to unregister filter: {}", code)
+                        }
                     }
                 }
             }
@@ -212,7 +223,7 @@ impl Drop for FilterEngine {
             }
         }
 
-        if self.handle != INVALID_HANDLE_VALUE {
+        if self.handle != 0 && self.handle != INVALID_HANDLE_VALUE {
             _ = ffi::filter_engine_close(self.handle);
         }
     }

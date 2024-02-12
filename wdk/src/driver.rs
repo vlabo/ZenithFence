@@ -3,10 +3,20 @@ use windows_sys::{
     Win32::Foundation::{HANDLE, NTSTATUS},
 };
 
-use crate::interface;
+use crate::{
+    interface,
+    irp_helpers::{ReadRequest, WriteRequest},
+};
+
+pub trait Device {
+    fn new(driver: &Driver) -> Self;
+    fn cleanup(&mut self);
+    fn read(&mut self, read_request: &mut ReadRequest);
+    fn write(&mut self, write_request: &mut WriteRequest);
+    fn shutdown(&mut self);
+}
 
 pub struct Driver {
-    // driver_handle: HANDLE,
     _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
     device_object: *mut DEVICE_OBJECT,

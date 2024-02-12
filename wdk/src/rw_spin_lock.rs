@@ -15,9 +15,6 @@ impl RwSpinLock {
             data: UnsafeCell::new(0),
         }
     }
-    pub fn init(&mut self) {
-        self.data = UnsafeCell::new(0);
-    }
 
     pub fn read_lock(&self) -> RwLockGuard {
         let irq = unsafe { ExAcquireSpinLockShared(self.data.get()) };
