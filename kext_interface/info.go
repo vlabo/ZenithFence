@@ -1,6 +1,3 @@
-//go:build windows
-// +build windows
-
 package kext_interface
 
 import (
@@ -101,7 +98,7 @@ type Info struct {
 	BandwidthStats  *BandwidthStatsArray
 }
 
-func readInfo(reader io.Reader) (*Info, error) {
+func ReadInfo(reader io.Reader) (*Info, error) {
 	var infoType byte
 	err := binary.Read(reader, binary.LittleEndian, &infoType)
 	if err != nil {
@@ -213,7 +210,7 @@ func readInfo(reader io.Reader) (*Info, error) {
 }
 
 func RecvInfo(file *KextFile) (*Info, error) {
-	info, err := readInfo(file)
+	info, err := ReadInfo(file)
 	if err != nil && errors.Is(err, ErrorUnknownInfoType) {
 		// Info type is not recognized ignore the rest of the command.
 		file.flush_buffer()

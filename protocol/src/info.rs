@@ -311,3 +311,108 @@ impl<Value> Info for BandwidthStatArray<Value> {
         return &self.bytes;
     }
 }
+
+#[cfg(test)]
+use std::fs::File;
+#[cfg(test)]
+use std::io::Write;
+
+#[test]
+fn generate_test_info_file() -> Result<(), std::io::Error> {
+    let mut file = File::create("rust_info_test.bin")?;
+    let enums = [
+        InfoType::LogLine,
+        InfoType::ConnectionIpv4,
+        InfoType::ConnectionIpv6,
+        InfoType::ConnectionEndEventV4,
+        InfoType::ConnectionEndEventV6,
+        InfoType::BandwidthStatsV4,
+        InfoType::BandwidthStatsV6,
+    ];
+    for value in enums {
+        file.write_all(&match value {
+            InfoType::LogLine => LogLine::new(
+                Severity::Trace,
+                "prefix: ".to_string(),
+                "test log".to_string(),
+            )
+            .as_bytes()
+            .to_vec(),
+            InfoType::ConnectionIpv4 => {
+                ConnectionInfoV4::new(1, 2, 3, 4, [1, 2, 3, 4], [2, 3, 4, 5], 5, 6)
+                    .as_bytes()
+                    .to_vec()
+            }
+
+            InfoType::ConnectionIpv6 => ConnectionInfoV6::new(
+                1,
+                2,
+                3,
+                4,
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                5,
+                6,
+            )
+            .as_bytes()
+            .to_vec(),
+            InfoType::ConnectionEndEventV4 => {
+                ConnectionEndEventV4Info::new(1, 2, 3, [1, 2, 3, 4], [2, 3, 4, 5], 4, 5)
+                    .as_bytes()
+                    .to_vec()
+            }
+            InfoType::ConnectionEndEventV6 => ConnectionEndEventV6Info::new(
+                1,
+                2,
+                3,
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                4,
+                5,
+            )
+            .as_bytes()
+            .to_vec(),
+            InfoType::BandwidthStatsV4 => {
+                let mut info = BandwidthStatArray::new_v4(2, 1);
+                info.push_value(BandwidthValueV4 {
+                    local_ip: [1, 2, 3, 4],
+                    local_port: 1,
+                    remote_ip: [2, 3, 4, 5],
+                    remote_port: 2,
+                    transmitted_bytes: 3,
+                    received_bytes: 4,
+                });
+                info.push_value(BandwidthValueV4 {
+                    local_ip: [1, 2, 3, 4],
+                    local_port: 5,
+                    remote_ip: [2, 3, 4, 5],
+                    remote_port: 6,
+                    transmitted_bytes: 7,
+                    received_bytes: 8,
+                });
+                info.as_bytes().to_vec()
+            }
+            InfoType::BandwidthStatsV6 => {
+                let mut info = BandwidthStatArray::new_v6(2, 1);
+                info.push_value(BandwidthValueV6 {
+                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    local_port: 1,
+                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    remote_port: 2,
+                    transmitted_bytes: 3,
+                    received_bytes: 4,
+                });
+                info.push_value(BandwidthValueV6 {
+                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    local_port: 5,
+                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    remote_port: 6,
+                    transmitted_bytes: 7,
+                    received_bytes: 8,
+                });
+                info.as_bytes().to_vec()
+            }
+        })?;
+    }
+    return Ok(());
+}
