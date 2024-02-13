@@ -14,6 +14,13 @@ static VERSION: [u8; 4] = include!("../../version.rs");
 static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
     WdfObjectContextTypeInfo::default("DriverContext\0");
 
+// Compile time check. Function should not be executed.
+#[allow(dead_code)]
+pub fn ensure_correctness() {
+    // Ensure that zeroed state is a valid state.
+    let _: device::Device = unsafe { MaybeUninit::zeroed().assume_init() };
+}
+
 // DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
 // Name should not be changed
 #[export_name = "DriverEntry"]
@@ -47,11 +54,6 @@ pub extern "system" fn driver_entry(
     driver.set_read_fn(driver_read);
     driver.set_write_fn(driver_write);
     driver.set_device_control_fn(device_control);
-
-    unsafe {
-        // Ensure that zeroed state is a valid state.
-        let _: device::Device = MaybeUninit::zeroed().assume_init();
-    }
 
     // Initialize device.
     if let Some(device_object) = driver.get_device_object_ref() {
