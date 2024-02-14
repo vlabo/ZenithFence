@@ -8,11 +8,12 @@ import (
 	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
 )
 
-func TestInfo(t *testing.T) {
+func TestRustInfoFile(t *testing.T) {
 	file, err := os.Open("../protocol/rust_info_test.bin")
 	if err != nil {
 		panic(err)
 	}
+	defer file.Close()
 	for {
 		info, err := kext_interface.ReadInfo(file)
 		if err != nil {
@@ -151,4 +152,73 @@ func TestInfo(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestGenerateCommandFile(t *testing.T) {
+	file, err := os.Create("go_command_test.bin")
+	if err != nil {
+		t.Errorf("failed to create file: %s", err)
+	}
+	defer file.Close()
+	enums := []byte{
+		kext_interface.CommandShutdown,
+		kext_interface.CommandVerdict,
+		kext_interface.CommandUpdateV4,
+		kext_interface.CommandUpdateV6,
+		kext_interface.CommandClearCache,
+		kext_interface.CommandGetLogs,
+		kext_interface.CommandBandwidthStats,
+	}
+
+	for _, value := range enums {
+		switch value {
+		case kext_interface.CommandShutdown:
+			{
+				kext_interface.SendShutdownCommand(file)
+			}
+		case kext_interface.CommandVerdict:
+			{
+				kext_interface.SendVerdictCommand(file, kext_interface.Verdict{
+					Id:      1,
+					Verdict: 2,
+				})
+			}
+		case kext_interface.CommandUpdateV4:
+			{
+				kext_interface.SendUpdateV4Command(file, kext_interface.UpdateV4{
+					Protocol:      1,
+					LocalAddress:  [4]byte{1, 2, 3, 4},
+					LocalPort:     2,
+					RemoteAddress: [4]byte{2, 3, 4, 5},
+					RemotePort:    3,
+					Verdict:       4,
+				})
+			}
+		case kext_interface.CommandUpdateV6:
+			{
+
+				kext_interface.SendUpdateV6Command(file, kext_interface.UpdateV6{
+					Protocol:      1,
+					LocalAddress:  [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+					LocalPort:     2,
+					RemoteAddress: [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
+					RemotePort:    3,
+					Verdict:       4,
+				})
+			}
+		case kext_interface.CommandClearCache:
+			{
+				kext_interface.SendClearCacheCommand(file)
+			}
+		case kext_interface.CommandGetLogs:
+			{
+				kext_interface.SendGetLogsCommand(file)
+			}
+		case kext_interface.CommandBandwidthStats:
+			{
+				kext_interface.SendGetBandwidthStatsCommand(file)
+			}
+		}
+	}
+
 }

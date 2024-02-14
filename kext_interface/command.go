@@ -1,6 +1,3 @@
-//go:build windows
-// +build windows
-
 package kext_interface
 
 import (
