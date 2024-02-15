@@ -98,12 +98,18 @@ type Info struct {
 	BandwidthStats  *BandwidthStatsArray
 }
 
-func ReadInfo(reader io.Reader) (*Info, error) {
+func RecvInfo(reader io.Reader) (*Info, error) {
 	var infoType byte
 	err := binary.Read(reader, binary.LittleEndian, &infoType)
 	if err != nil {
 		return nil, err
 	}
+
+	// Read size of data
+	var size uint32
+	err = binary.Read(reader, binary.LittleEndian, &size)
+
+	// Read data
 	switch infoType {
 	case InfoConnectionIpv4:
 		{
@@ -149,14 +155,8 @@ func ReadInfo(reader io.Reader) (*Info, error) {
 			if err != nil {
 				return nil, err
 			}
-			// Read size
-			var size uint32
-			err = binary.Read(reader, binary.LittleEndian, &size)
-			if err != nil {
-				return nil, err
-			}
 			// Read string
-			var line = make([]byte, size)
+			var line = make([]byte, size-1) // -1 for the severity enum.
 			err = binary.Read(reader, binary.LittleEndian, &line)
 			logLine.Line = string(line)
 			return &Info{LogLine: &logLine}, nil
@@ -170,7 +170,7 @@ func ReadInfo(reader io.Reader) (*Info, error) {
 				return nil, err
 			}
 			// Read size of array
-			var size uint64
+			var size uint32
 			err = binary.Read(reader, binary.LittleEndian, &size)
 			if err != nil {
 				return nil, err
@@ -192,7 +192,7 @@ func ReadInfo(reader io.Reader) (*Info, error) {
 				return nil, err
 			}
 			// Read size of array
-			var size uint64
+			var size uint32
 			err = binary.Read(reader, binary.LittleEndian, &size)
 			if err != nil {
 				return nil, err
@@ -206,16 +206,8 @@ func ReadInfo(reader io.Reader) (*Info, error) {
 			return &Info{BandwidthStats: &BandwidthStatsArray{Protocol: protocol, ValuesV6: stats_array}}, nil
 		}
 	}
+
+	unknownData := make([]byte, size)
+	reader.Read(unknownData)
 	return nil, ErrorUnknownInfoType
-}
-
-func RecvInfo(file *KextFile) (*Info, error) {
-	info, err := ReadInfo(file)
-	if err != nil && errors.Is(err, ErrorUnknownInfoType) {
-		// Info type is not recognized ignore the rest of the command.
-		file.flush_buffer()
-	}
-
-	return info, err
-
 }

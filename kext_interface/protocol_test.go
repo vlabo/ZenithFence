@@ -15,7 +15,7 @@ func TestRustInfoFile(t *testing.T) {
 	}
 	defer file.Close()
 	for {
-		info, err := kext_interface.ReadInfo(file)
+		info, err := kext_interface.RecvInfo(file)
 		if err != nil {
 			if err != io.EOF {
 				t.Errorf("unexpected error: %s\n", err)

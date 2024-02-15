@@ -22,7 +22,7 @@ func (f *KextFile) Read(buffer []byte) (int, error) {
 	}
 
 	if len(f.read_slice) >= len(buffer) {
-		// Wrote all requested bytes.
+		// Write all requested bytes.
 		copy(buffer, f.read_slice[0:len(buffer)])
 		f.read_slice = f.read_slice[len(buffer):]
 	} else {
@@ -49,10 +49,6 @@ func (f *KextFile) refill_read_buffer() error {
 	f.read_slice = f.buffer[0:count]
 
 	return nil
-}
-
-func (f *KextFile) flush_buffer() {
-	f.read_slice = nil
 }
 
 func (f *KextFile) Write(buffer []byte) (int, error) {

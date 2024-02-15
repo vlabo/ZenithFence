@@ -18,10 +18,12 @@ enum InfoType {
 pub trait Info {
     fn as_bytes(&mut self) -> &[u8];
 }
-// Fallow this pattern when adding new structs
+// Fallow this pattern when adding new structs: [InfoType: u8, data_size_in_bytes: u32, data: ...]
+
 #[repr(C, packed)]
 pub struct ConnectionInfoV4 {
     info_type: InfoType,
+    size: u32,
     id: u64,
     process_id: u64,
     direction: u8,
@@ -45,6 +47,7 @@ impl ConnectionInfoV4 {
     ) -> Self {
         Self {
             info_type: InfoType::ConnectionIpv4,
+            size: core::mem::size_of::<Self>() as u32,
             id,
             process_id,
             direction,
@@ -66,6 +69,7 @@ impl Info for ConnectionInfoV4 {
 #[repr(C, packed)]
 pub struct ConnectionInfoV6 {
     info_type: InfoType,
+    size: u32,
     id: u64,
     process_id: u64,
     direction: u8,
@@ -89,6 +93,7 @@ impl ConnectionInfoV6 {
     ) -> Self {
         Self {
             info_type: InfoType::ConnectionIpv6,
+            size: core::mem::size_of::<Self>() as u32,
             id,
             process_id,
             direction,
@@ -110,6 +115,7 @@ impl Info for ConnectionInfoV6 {
 #[repr(C, packed)]
 pub struct ConnectionEndEventV4Info {
     info_type: InfoType,
+    size: u32,
     process_id: u64,
     direction: u8,
     protocol: u8,
@@ -131,6 +137,7 @@ impl ConnectionEndEventV4Info {
     ) -> Self {
         Self {
             info_type: InfoType::ConnectionEndEventV4,
+            size: core::mem::size_of::<Self>() as u32,
             process_id,
             direction,
             protocol,
@@ -150,6 +157,7 @@ impl Info for ConnectionEndEventV4Info {
 #[repr(C, packed)]
 pub struct ConnectionEndEventV6Info {
     info_type: InfoType,
+    size: u32,
     process_id: u64,
     direction: u8,
     protocol: u8,
@@ -171,6 +179,7 @@ impl ConnectionEndEventV6Info {
     ) -> Self {
         Self {
             info_type: InfoType::ConnectionEndEventV6,
+            size: core::mem::size_of::<Self>() as u32,
             process_id,
             direction,
             protocol,
@@ -226,12 +235,12 @@ impl LogLine {
 
 impl Info for LogLine {
     fn as_bytes(&mut self) -> &[u8] {
-        // Write [InfoType: u8, Severity: u8, size: u32, prefix+line: [u8; size]]
-        let size: u32 = (self.prefix.len() + self.line.len()) as u32;
-        self.combined = Vec::with_capacity(1 + 1 + size_of::<u32>() + size as usize);
+        // Write [InfoType: u8, size: u32, Severity: u8, prefix+line: [u8; size]]
+        let size: u32 = (self.prefix.len() + self.line.len() + 1) as u32;
+        self.combined = Vec::with_capacity(1 + size_of::<u32>() + 1 + size as usize);
         self.combined.push(InfoType::LogLine as u8);
-        self.combined.push(self.severity as u8);
         self.combined.extend_from_slice(&u32::to_le_bytes(size));
+        self.combined.push(self.severity as u8);
         self.combined.extend_from_slice(self.prefix.as_bytes());
         self.combined.extend_from_slice(self.line.as_bytes());
 
@@ -295,14 +304,17 @@ impl<Value> BandwidthStatArray<Value> {
 
 impl<Value> Info for BandwidthStatArray<Value> {
     fn as_bytes(&mut self) -> &[u8] {
-        // Write [InfoType: u8, protocol: u8, ArraySize: u64, stats_array: [BandwidthValueTcpV4; ArraySize]]
+        // Write [InfoType: u8, size: u32, protocol: u8, ArraySize: u32, stats_array: [BandwidthValueTcpV4; ArraySize]]
         self.bytes
-            .reserve(1 + 1 + size_of::<u64>() + self.array.len() * size_of::<Value>());
-
+            .reserve(1 + 1 + size_of::<u32>() + self.array.len() * size_of::<Value>());
+        let bytes_count_after_info =
+            (1 + size_of::<u32>() + self.array.len() * size_of::<Value>()) as u32;
         self.bytes.push(self.info_type as u8);
+        self.bytes
+            .extend_from_slice(&u32::to_le_bytes(bytes_count_after_info));
         self.bytes.push(self.protocol as u8);
 
-        let size: u64 = self.array.len() as _;
+        let size: u32 = self.array.len() as _;
         self.bytes.extend_from_slice(&size.to_ne_bytes());
 
         for value in &self.array {

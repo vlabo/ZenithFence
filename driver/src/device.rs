@@ -64,7 +64,7 @@ impl Device {
         let bytes = info.as_bytes();
         let count = read_request.write(bytes);
 
-        // Check if full command was written.
+        // Check if the full buffer was written.
         if count < bytes.len() {
             // Save the leftovers for later.
             self.read_leftover.save(&bytes[count..]);
@@ -87,8 +87,6 @@ impl Device {
             match self.event_queue.wait_and_pop() {
                 Ok(info) => {
                     self.write_buffer(read_request, info);
-                    read_request.complete();
-                    return;
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
@@ -104,6 +102,15 @@ impl Device {
             }
         }
 
+        // Check if we have more space. InfoType + data_size == 5 bytes
+        while read_request.free_space() > 5 {
+            match self.event_queue.pop() {
+                Ok(info) => {
+                    self.write_buffer(read_request, info);
+                }
+                Err(_) => {}
+            }
+        }
         read_request.complete();
     }
 
