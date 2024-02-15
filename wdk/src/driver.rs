@@ -23,6 +23,8 @@ pub struct Driver {
 }
 unsafe impl Sync for Driver {}
 
+// This is a workaround for current state of wdk bindings.
+// TODO: replace with official version when they are correct: https://github.com/microsoft/wdkmetadata/issues/59
 pub type UnloadFnType = unsafe extern "system" fn(driver_object: *const DRIVER_OBJECT);
 pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
 

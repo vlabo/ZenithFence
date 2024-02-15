@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 
-#define NDIS61 1                // Need to declare this to compile WFP stuff on Win7, I'm not sure why
+#define NDIS640 1                // Windows 8 and Windows Server 2012
 
 #include "Ntifs.h"
 #include <ntddk.h>              // Windows Driver Development Kit
@@ -67,8 +67,10 @@ NTSTATUS pm_InitDriverObject(DRIVER_OBJECT * driverObject, UNICODE_STRING * regi
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
+
 	// The system will not send I/O requests or Windows Management Instrumentation (WMI) requests to a control device object unless the driver has called WdfControlFinishInitializing.
 	WdfControlFinishInitializing(*device);
+
 	return STATUS_SUCCESS;
 }
 
