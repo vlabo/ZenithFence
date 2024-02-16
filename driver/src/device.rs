@@ -108,7 +108,9 @@ impl Device {
                 Ok(info) => {
                     self.write_buffer(read_request, info);
                 }
-                Err(_) => {}
+                Err(_) => {
+                    break;
+                }
             }
         }
         read_request.complete();
