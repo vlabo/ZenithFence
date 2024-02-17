@@ -129,7 +129,7 @@ fn ip_packet_layer(
         // Check if packet should be redirected.
         let conn_info = if ipv6 {
             redirect_address = IpAddress::Ipv6(Ipv6Address::LOOPBACK);
-            device.connection_cache.get_connection_action_v6(
+            device.connection_cache.get_connection_redirect_v6(
                 &key,
                 |conn: &ConnectionV6| -> Option<ConnectionInfo> {
                     // Function is is behind spin lock. Just copy and return.
@@ -154,7 +154,7 @@ fn ip_packet_layer(
             )
         } else {
             redirect_address = IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1));
-            device.connection_cache.get_connection_action_v4(
+            device.connection_cache.get_connection_redirect_v4(
                 &key,
                 |conn: &ConnectionV4| -> Option<ConnectionInfo> {
                     // Function is is behind spin lock. Just copy and return.

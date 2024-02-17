@@ -38,6 +38,15 @@ impl Display for Verdict {
     }
 }
 
+impl Verdict {
+    pub fn is_redirect(&self) -> bool {
+        match self {
+            Verdict::RedirectNameServer | Verdict::RedirectTunnel => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Copy, Clone, FromPrimitive)]
 #[repr(u8)]
 pub enum Direction {

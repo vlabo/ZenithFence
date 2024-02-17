@@ -47,9 +47,17 @@ impl Key {
     }
 }
 
+struct Entry<T> {
+    has_redirect: bool,
+    connections: Vec<T>,
+}
+
+type EntryV4 = Entry<ConnectionV4>;
+type EntryV6 = Entry<ConnectionV6>;
+
 pub struct ConnectionCache {
-    connections_v4: DeviceHashMap<(IpProtocol, u16), Vec<ConnectionV4>>,
-    connections_v6: DeviceHashMap<(IpProtocol, u16), Vec<ConnectionV6>>,
+    connections_v4: DeviceHashMap<(IpProtocol, u16), EntryV4>,
+    connections_v6: DeviceHashMap<(IpProtocol, u16), EntryV6>,
     lock_v4: RwSpinLock,
     lock_v6: RwSpinLock,
 }
@@ -67,30 +75,42 @@ impl ConnectionCache {
     pub fn add_connection_v4(&mut self, connection: ConnectionV4) {
         let key = connection.get_key();
         let _guard = self.lock_v4.write_lock();
-        if let Some(conns) = self.connections_v4.get_mut(&key.small()) {
-            conns.push(connection);
+        if let Some(entry) = self.connections_v4.get_mut(&key.small()) {
+            if connection.verdict.is_redirect() {
+                entry.has_redirect = true;
+            }
+            entry.connections.push(connection);
         } else {
-            let conns = alloc::vec![connection];
-            self.connections_v4.insert(key.small(), conns);
+            let entry = EntryV4 {
+                has_redirect: connection.verdict.is_redirect(),
+                connections: alloc::vec![connection],
+            };
+            self.connections_v4.insert(key.small(), entry);
         }
     }
 
     pub fn add_connection_v6(&mut self, connection: ConnectionV6) {
         let key = connection.get_key();
         let _guard = self.lock_v6.write_lock();
-        if let Some(conns) = self.connections_v6.get_mut(&key.small()) {
-            conns.push(connection);
+        if let Some(entry) = self.connections_v6.get_mut(&key.small()) {
+            if connection.verdict.is_redirect() {
+                entry.has_redirect = true;
+            }
+            entry.connections.push(connection);
         } else {
-            let conns = alloc::vec![connection];
-            self.connections_v6.insert(key.small(), conns);
+            let entry = EntryV6 {
+                has_redirect: connection.verdict.is_redirect(),
+                connections: alloc::vec![connection],
+            };
+            self.connections_v6.insert(key.small(), entry);
         }
     }
 
     pub fn push_packet_to_connection(&mut self, key: Key, packet: NetBufferList) {
         if key.is_ipv6() {
             let _guard = self.lock_v6.write_lock();
-            if let Some(conns) = self.connections_v6.get_mut(&key.small()) {
-                for conn in conns {
+            if let Some(entry) = self.connections_v6.get_mut(&key.small()) {
+                for conn in &mut entry.connections {
                     if conn.remote_equals(&key) {
                         if let Some(classify_defer) = &mut conn.extra.packet_queue {
                             classify_defer.add_net_buffer(packet);
@@ -101,8 +121,8 @@ impl ConnectionCache {
             }
         } else {
             let _guard = self.lock_v4.write_lock();
-            if let Some(conns) = self.connections_v4.get_mut(&key.small()) {
-                for conn in conns {
+            if let Some(entry) = self.connections_v4.get_mut(&key.small()) {
+                for conn in &mut entry.connections {
                     if conn.remote_equals(&key) {
                         if let Some(classify_defer) = &mut conn.extra.packet_queue {
                             classify_defer.add_net_buffer(packet);
@@ -117,8 +137,11 @@ impl ConnectionCache {
     pub fn update_connection(&mut self, key: Key, verdict: Verdict) -> Option<ClassifyDefer> {
         if key.is_ipv6() {
             let _guard = self.lock_v6.write_lock();
-            if let Some(conns) = self.connections_v6.get_mut(&key.small()) {
-                for conn in conns {
+            if let Some(entry) = self.connections_v6.get_mut(&key.small()) {
+                if verdict.is_redirect() {
+                    entry.has_redirect = true;
+                }
+                for conn in &mut entry.connections {
                     if conn.remote_equals(&key) {
                         conn.verdict = verdict;
                         let classify_defer = conn.extra.packet_queue.take();
@@ -135,8 +158,11 @@ impl ConnectionCache {
             }
         } else {
             let _guard = self.lock_v4.write_lock();
-            if let Some(conns) = self.connections_v4.get_mut(&key.small()) {
-                for conn in conns {
+            if let Some(entry) = self.connections_v4.get_mut(&key.small()) {
+                if verdict.is_redirect() {
+                    entry.has_redirect = true;
+                }
+                for conn in &mut entry.connections {
                     if conn.remote_equals(&key) {
                         conn.verdict = verdict;
                         let classify_defer = conn.extra.packet_queue.take();
@@ -162,8 +188,8 @@ impl ConnectionCache {
     ) -> Option<T> {
         let _guard = self.lock_v4.read_lock();
 
-        if let Some(conns) = self.connections_v4.get(&key.small()) {
-            for conn in conns {
+        if let Some(entry) = self.connections_v4.get(&key.small()) {
+            for conn in &entry.connections {
                 if conn.remote_equals(key) {
                     return process_connection(conn);
                 }
@@ -183,8 +209,62 @@ impl ConnectionCache {
     ) -> Option<T> {
         let _guard = self.lock_v6.read_lock();
 
-        if let Some(conns) = self.connections_v6.get(&key.small()) {
-            for conn in conns {
+        if let Some(entry) = self.connections_v6.get(&key.small()) {
+            for conn in &entry.connections {
+                if conn.remote_equals(key) {
+                    return process_connection(conn);
+                }
+                if conn.redirect_equals(key) {
+                    return process_connection(conn);
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_connection_redirect_v4<T>(
+        &mut self,
+        key: &Key,
+        process_connection: fn(&ConnectionV4) -> Option<T>,
+    ) -> Option<T> {
+        let _guard = self.lock_v4.read_lock();
+
+        if let Some(entry) = self.connections_v4.get(&key.small()) {
+            if !entry.has_redirect {
+                return None;
+            }
+            for conn in &entry.connections {
+                if !conn.verdict.is_redirect() {
+                    continue;
+                }
+                if conn.remote_equals(key) {
+                    return process_connection(conn);
+                }
+                if conn.redirect_equals(key) {
+                    return process_connection(conn);
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_connection_redirect_v6<T>(
+        &mut self,
+        key: &Key,
+        process_connection: fn(&ConnectionV6) -> Option<T>,
+    ) -> Option<T> {
+        let _guard = self.lock_v6.read_lock();
+
+        if let Some(entry) = self.connections_v6.get(&key.small()) {
+            if !entry.has_redirect {
+                return None;
+            }
+            for conn in &entry.connections {
+                if !conn.verdict.is_redirect() {
+                    continue;
+                }
                 if conn.remote_equals(key) {
                     return process_connection(conn);
                 }
@@ -206,18 +286,18 @@ impl ConnectionCache {
         let mut index = None;
         let mut conn = None;
         let mut delete = false;
-        if let Some(conns) = self.connections_v4.get_mut(&key) {
-            for (i, conn) in conns.iter().enumerate() {
+        if let Some(entry) = self.connections_v4.get_mut(&key) {
+            for (i, conn) in entry.connections.iter().enumerate() {
                 if conn.extra.endpoint_handle == endpoint_handle {
                     index = Some(i);
                     break;
                 }
             }
             if let Some(index) = index {
-                conn = Some(conns.remove(index));
+                conn = Some(entry.connections.remove(index));
             }
 
-            if conns.is_empty() {
+            if entry.connections.is_empty() {
                 delete = true;
             }
         }
@@ -233,27 +313,27 @@ impl ConnectionCache {
         key: (IpProtocol, u16),
         endpoint_handle: u64,
     ) -> Option<ConnectionV6> {
-        let _guard = self.lock_v4.write_lock();
+        let _guard = self.lock_v6.write_lock();
         let mut index = None;
         let mut conn = None;
         let mut delete = false;
-        if let Some(conns) = self.connections_v6.get_mut(&key) {
-            for (i, conn) in conns.iter().enumerate() {
+        if let Some(entry) = self.connections_v6.get_mut(&key) {
+            for (i, conn) in entry.connections.iter().enumerate() {
                 if conn.extra.endpoint_handle == endpoint_handle {
                     index = Some(i);
                     break;
                 }
             }
             if let Some(index) = index {
-                conn = Some(conns.remove(index));
+                conn = Some(entry.connections.remove(index));
             }
 
-            if conns.is_empty() {
+            if entry.connections.is_empty() {
                 delete = true;
             }
         }
         if delete {
-            self.connections_v4.remove(&key);
+            self.connections_v6.remove(&key);
         }
 
         return conn;
@@ -261,12 +341,18 @@ impl ConnectionCache {
 
     pub fn unregister_port_v4(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV4>> {
         let _guard = self.lock_v4.write_lock();
-        self.connections_v4.remove(&key)
+        if let Some(entry) = self.connections_v4.remove(&key) {
+            return Some(entry.connections);
+        }
+        return None;
     }
 
     pub fn unregister_port_v6(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV6>> {
-        let _guard = self.lock_v4.write_lock();
-        self.connections_v6.remove(&key)
+        let _guard = self.lock_v6.write_lock();
+        if let Some(entry) = self.connections_v6.remove(&key) {
+            return Some(entry.connections);
+        }
+        return None;
     }
 
     pub fn clear(&mut self) {
