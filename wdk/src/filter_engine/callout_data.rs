@@ -65,7 +65,7 @@ pub struct CalloutData<'a> {
 
 impl<'a> CalloutData<'a> {
     pub fn get_value_type(&self, index: usize) -> ValueType {
-        return self.values[index].value_type;
+        self.values[index].value_type
     }
 
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
@@ -151,7 +151,7 @@ impl<'a> CalloutData<'a> {
     }
 
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
-        return ClassifyDefer::Reauthorization(self.callout_id, packet_list);
+        ClassifyDefer::Reauthorization(self.callout_id, packet_list)
     }
 
     pub fn action_permit(&mut self) {
@@ -196,6 +196,6 @@ impl<'a> CalloutData<'a> {
     }
 
     pub fn get_callout_id(&self) -> usize {
-        return self.callout_id;
+        self.callout_id
     }
 }

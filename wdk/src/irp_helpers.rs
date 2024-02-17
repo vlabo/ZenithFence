@@ -69,7 +69,7 @@ impl ReadRequest<'_> {
         }
         self.fill_index = self.fill_index + bytes_to_write;
 
-        return bytes_to_write;
+        bytes_to_write
     }
 }
 
@@ -117,12 +117,13 @@ pub struct DeviceControlRequest<'a> {
     control_code: u32,
 }
 
-// Windows-rs version of the struct is incorrect (18.01.2024). Use the official version when fixed.
+// Windows-rs version of the struct is incorrect (18.01.2024).
+// TODO: Use the official version when fixed.
 // For future reference: https://github.com/microsoft/windows-rs/issues/2805
 #[repr(C)]
 struct DeviceIOControlParams {
     output_buffer_length: u32,
-    _padding: u32,
+    _padding1: u32,
     input_buffer_length: u32,
     _padding2: u32,
     io_control_code: u32,
@@ -169,7 +170,7 @@ impl DeviceControlRequest<'_> {
         }
         self.fill_index = self.fill_index + bytes_to_write;
 
-        return bytes_to_write;
+        bytes_to_write
     }
 
     pub fn complete(&mut self) {
