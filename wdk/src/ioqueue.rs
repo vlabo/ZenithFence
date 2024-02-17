@@ -17,7 +17,7 @@ pub enum Status {
     Uninitialized,
     Timeout,
     UserAPC,
-    Abandened,
+    Abandoned,
 }
 
 impl Display for Status {
@@ -26,7 +26,7 @@ impl Display for Status {
             Status::Uninitialized => write!(f, "Uninitialized"),
             Status::Timeout => write!(f, "Timeout"),
             Status::UserAPC => write!(f, "UserAPC"),
-            Status::Abandened => write!(f, "Abandened"),
+            Status::Abandoned => write!(f, "Abandoned"),
         }
     }
 }
@@ -92,13 +92,12 @@ impl<T> IOQueue<T> {
         }
     }
 
-    /// Returns new queue object.
     /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
     pub fn init(&self) {
         unsafe {
             let kqueue = self.kernel_queue.get();
             KeInitializeQueue(kqueue, 1);
-            self.initialized.store(true, Ordering::Release);
+            self.initialized.store(true, Ordering::Relaxed);
         }
     }
 
@@ -116,15 +115,19 @@ impl<T> IOQueue<T> {
         let raw_ptr = Box::into_raw(list_entry);
 
         // Check if initialized.
-        if self.initialized.load(Ordering::Acquire) {
-            unsafe {
-                KeInsertQueue(kqueue, raw_ptr as *mut c_void);
-            }
-            return Ok(());
+        let result = if self.initialized.load(Ordering::Acquire) {
+            unsafe { KeInsertQueue(kqueue, raw_ptr as *mut c_void) }
         } else {
-            _ = unsafe { Box::from_raw(raw_ptr) };
-            return Err(Status::Uninitialized);
+            -1
+        };
+        // There is no documentation that rundown queue will return error. This is here just for good measures.
+        // It is unlikely to happen and not critical.
+        if result >= 0 {
+            return Ok(());
         }
+
+        _ = unsafe { Box::from_raw(raw_ptr) };
+        return Err(Status::Uninitialized);
     }
 
     /// Returns an Element or a status.
@@ -140,7 +143,7 @@ impl<T> IOQueue<T> {
                 match error_code {
                     Ok(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
                     Ok(NtStatus::STATUS_USER_APC) => return Err(Status::UserAPC),
-                    Ok(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandened),
+                    Ok(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandoned),
                     _ => {
                         // The return value is a pointer.
                         let list_entry = Box::from_raw(list_entry);
@@ -189,11 +192,11 @@ impl<T> IOQueue<T> {
                     while !core::ptr::eq((*entry).Flink, list_entries) {
                         let next = (*entry).Flink;
                         dbg!("discarding entry");
-                        let _ = Box::from_raw(entry);
+                        let _ = Box::from_raw(entry as *mut Entry<T>);
                         entry = next;
                     }
                     dbg!("discarding last entry");
-                    let _ = Box::from_raw(entry);
+                    let _ = Box::from_raw(entry as *mut Entry<T>);
                 }
             }
         }
