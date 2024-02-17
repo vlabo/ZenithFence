@@ -81,8 +81,8 @@ fn ip_packet_layer(
     interface_index: u32,
     sub_interface_index: u32,
 ) {
-    // Set default action to permit. If redirect happens it will override the flag.
-    data.action_permit();
+    // Set default action to drop.
+    data.block_and_absorb();
     let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
     else {
         return;
@@ -91,6 +91,7 @@ fn ip_packet_layer(
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _, ipv6)
     {
+        data.action_permit();
         return;
     }
 
@@ -113,11 +114,11 @@ fn ip_packet_layer(
         } {
             Ok(key) => key,
             Err(_) => {
-                // Protocol not supported.
-                continue;
+                // Redirect for non TCP/UDP protocols is not supported.
+                data.action_permit();
+                return;
             }
         };
-        // crit!(device.logger, "Packet: {}", key);
         struct ConnectionInfo {
             local_address: IpAddress,
             remote_address: IpAddress,
@@ -187,8 +188,7 @@ fn ip_packet_layer(
                 Ok(clone) => clone,
                 Err(err) => {
                     err!(device.logger, "failed to clone net buffer: {}", err);
-                    // TODO: should the error action be permit?
-                    continue;
+                    return;
                 }
             };
 
@@ -229,9 +229,10 @@ fn ip_packet_layer(
             if let Err(err) = result {
                 err!(device.logger, "failed to inject net buffer: {}", err);
             }
-
-            // TODO: should it block on failed inject?
-            data.block_and_absorb();
+        } else {
+            // No redirection action for packet.
+            data.action_permit();
+            return;
         }
     }
 }

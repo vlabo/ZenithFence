@@ -327,7 +327,7 @@ fn ale_layer_auth(
                 Ok(cc) => cc,
                 Err(error) => {
                     err!(device.logger, "failed to postpone decision: {}", error);
-                    data.action_permit(); // TODO: should error action be permit?
+                    data.block_and_absorb();
                     return;
                 }
             }
