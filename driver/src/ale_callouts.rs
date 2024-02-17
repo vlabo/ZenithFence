@@ -40,7 +40,7 @@ impl AleLayerData {
     fn as_connection_info_v4(&self, id: u64) -> Option<Box<dyn Info>> {
         let mut local_port = 0;
         let mut remote_port = 0;
-        match IpProtocol::from(self.protocol) {
+        match self.protocol {
             IpProtocol::Tcp | IpProtocol::Udp => {
                 local_port = self.local_port;
                 remote_port = self.remote_port;
@@ -69,7 +69,7 @@ impl AleLayerData {
     fn as_connection_info_v6(&self, id: u64) -> Option<Box<dyn Info>> {
         let mut local_port = 0;
         let mut remote_port = 0;
-        match IpProtocol::from(self.protocol) {
+        match self.protocol {
             IpProtocol::Tcp | IpProtocol::Udp => {
                 local_port = self.local_port;
                 remote_port = self.remote_port;
@@ -214,7 +214,7 @@ fn ale_layer_auth(
     }
 
     // Check if protocol is supported
-    match IpProtocol::from(ale_data.protocol) {
+    match ale_data.protocol {
         IpProtocol::Tcp | IpProtocol::Udp => {}
         _ => {
             // Not supported. Send event and permit.

@@ -37,7 +37,9 @@ impl ClassifyDefer {
                     return Ok(packet_list);
                 }
                 ClassifyDefer::Reauthorization(callout_id, packet_list) => {
-                    filter_engine.reset_callout_filter(callout_id)?;
+                    if let Err(err) = filter_engine.reset_callout_filter(callout_id) {
+                        return Err(err);
+                    }
                     return Ok(packet_list);
                 }
             }

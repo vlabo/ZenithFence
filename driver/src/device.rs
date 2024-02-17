@@ -36,7 +36,7 @@ impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
     /// Make sure everything is initialized here.
     pub fn init(&mut self, driver: &Driver) {
-        self.logger.init();
+        self.logger = Logger::new();
         self.event_queue.init();
         self.read_leftover = ArrayHolder::default();
         self.packet_cache.init();
@@ -140,9 +140,6 @@ impl Device {
                 // Received verdict decision for a specific connection.
                 if let Some(key) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        // dbg!(self.logger, "Packet: {}", packet);
-                        // dbg!(self.logger, "Verdict response: {}", verdict);
-
                         // Add verdict in the cache.
                         classify_defer = self.connection_cache.update_connection(key, verdict);
                     };

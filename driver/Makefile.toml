@@ -11,7 +11,7 @@ script = [
 ]
 
 [tasks.upload]
-dependencies = ["build"]
+dependencies = ["build-driver"]
 script = [
     "scp $TARGET_PATH/driver.lib windows:'C:/Dev/'",
 ]

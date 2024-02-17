@@ -1,9 +1,20 @@
+#[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! log {
     ($level:expr, $($arg:tt)*) => ({
         let message = alloc::format!($($arg)*);
         $crate::interface::dbg_print(alloc::format!("{} {}: {}", $level, core::module_path!(), message));
     });
+}
+
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! log {
+    ($($arg:expr),*) => {{
+        $(
+            _ = $arg;
+        )*
+    }};
 }
 
 #[macro_export]

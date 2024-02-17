@@ -40,10 +40,7 @@ impl Display for Verdict {
 
 impl Verdict {
     pub fn is_redirect(&self) -> bool {
-        match self {
-            Verdict::RedirectNameServer | Verdict::RedirectTunnel => true,
-            _ => false,
-        }
+        matches!(self, Verdict::RedirectNameServer | Verdict::RedirectTunnel)
     }
 }
 
@@ -68,27 +65,6 @@ impl Debug for Direction {
         write!(f, "{}", self)
     }
 }
-
-// #[derive(Clone)]
-// pub enum ConnectionAction {
-//     Verdict(Verdict),
-//     RedirectIP {
-//         redirect_address: IpAddress,
-//         redirect_port: u16,
-//     },
-// }
-
-// impl Display for ConnectionAction {
-//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-//         match self {
-//             ConnectionAction::Verdict(verdict) => write!(f, "{}", verdict),
-//             ConnectionAction::RedirectIP {
-//                 redirect_address,
-//                 redirect_port,
-//             } => write!(f, "Redirect: {}:{}", redirect_address, redirect_port),
-//         }
-//     }
-// }
 
 pub struct ConnectionV4 {
     pub(crate) protocol: IpProtocol,

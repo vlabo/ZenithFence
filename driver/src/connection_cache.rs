@@ -147,12 +147,8 @@ impl ConnectionCache {
                         let classify_defer = conn.extra.packet_queue.take();
                         if classify_defer.is_some() {
                             return classify_defer;
-                        } else {
-                            return Some(ClassifyDefer::Reauthorization(
-                                conn.extra.callout_id,
-                                None,
-                            ));
                         }
+                        return Some(ClassifyDefer::Reauthorization(conn.extra.callout_id, None));
                     }
                 }
             }
