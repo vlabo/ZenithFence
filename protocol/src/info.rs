@@ -329,6 +329,9 @@ use std::fs::File;
 #[cfg(test)]
 use std::io::Write;
 
+#[cfg(test)]
+use rand::seq::SliceRandom;
+
 #[test]
 fn generate_test_info_file() -> Result<(), std::io::Error> {
     let mut file = File::create("rust_info_test.bin")?;
@@ -341,7 +344,14 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
         InfoType::BandwidthStatsV4,
         InfoType::BandwidthStatsV6,
     ];
-    for value in enums {
+
+    let mut selected: Vec<InfoType> = Vec::with_capacity(1000);
+    let mut rng = rand::thread_rng();
+    for _ in 0..selected.capacity() {
+        selected.push(enums.choose(&mut rng).unwrap().clone());
+    }
+
+    for value in selected {
         file.write_all(&match value {
             InfoType::LogLine => LogLine::new(
                 Severity::Trace,

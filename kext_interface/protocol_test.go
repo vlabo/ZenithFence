@@ -2,6 +2,7 @@ package kext_interface_test
 
 import (
 	"io"
+	"math/rand"
 	"os"
 	"testing"
 
@@ -170,7 +171,12 @@ func TestGenerateCommandFile(t *testing.T) {
 		kext_interface.CommandBandwidthStats,
 	}
 
-	for _, value := range enums {
+	selected := make([]byte, 5000)
+	for i := range selected {
+		selected[i] = enums[rand.Intn(len(enums))]
+	}
+
+	for _, value := range selected {
 		switch value {
 		case kext_interface.CommandShutdown:
 			{
