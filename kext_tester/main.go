@@ -58,7 +58,8 @@ func main() {
 
 	version, err := kext_interface.ReadVersion(file)
 	if err == nil {
-		log.Printf("Kext version: %d.%d.%d.%d\n", version[0], version[1], version[2], version[3])
+		log.Printf("Kext  version: %d.%d.%d.%d\n", version[0], version[1], version[2], version[3])
+		log.Printf("KextI version: %d.%d.%d.%d\n", kext_interface.InterfaceVersion[0], kext_interface.InterfaceVersion[1], kext_interface.InterfaceVersion[2], kext_interface.InterfaceVersion[3])
 	} else {
 		log.Printf("Error reading version: %s\n", err)
 	}

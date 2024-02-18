@@ -9,7 +9,7 @@ use wdk::{err, info, interface};
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
 use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
 
-static VERSION: [u8; 4] = include!("../../version.rs");
+static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
 static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
     WdfObjectContextTypeInfo::default("DriverContext\0");
