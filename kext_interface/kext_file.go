@@ -92,3 +92,7 @@ func (f *KextFile) deviceIOControl(code uint32, inData []byte, outData []byte) (
 
 	return overlapped, nil
 }
+
+func (f *KextFile) GetHandle() windows.Handle {
+	return f.handle
+}

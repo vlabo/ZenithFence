@@ -112,6 +112,10 @@ func (s *KextService) Start(wait bool) error {
 	return nil
 }
 
+func (s *KextService) GetHandle() windows.Handle {
+	return s.handle
+}
+
 func (s *KextService) Stop(wait bool) error {
 	if !s.isValid() {
 		return fmt.Errorf("kext service not initialized")

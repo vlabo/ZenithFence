@@ -224,6 +224,10 @@ func TestGenerateCommandFile(t *testing.T) {
 			{
 				kext_interface.SendGetBandwidthStatsCommand(file)
 			}
+		case kext_interface.CommandPrintMemoryStats:
+			{
+				kext_interface.SendPrintMemoryStatsCommand(file)
+			}
 		}
 	}
 
