@@ -271,4 +271,30 @@ impl Bandwidth {
             );
         }
     }
+
+    pub fn get_entries_count(&self) -> usize {
+        let mut size = 0;
+        {
+            let values = &self.stats_tcp_v4.values();
+            let _guard = self.stats_tcp_v4_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_tcp_v6.values();
+            let _guard = self.stats_tcp_v6_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_udp_v4.values();
+            let _guard = self.stats_udp_v4_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_udp_v6.values();
+            let _guard = self.stats_udp_v6_lock.read_lock();
+            size += values.len();
+        }
+
+        return size;
+    }
 }

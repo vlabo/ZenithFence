@@ -14,7 +14,7 @@ use crate::{
     bandwidth::Bandwidth,
     callouts,
     connection_cache::{ConnectionCache, Key},
-    err,
+    dbg, err,
     id_cache::IdCache,
     logger::Logger,
 };
@@ -230,6 +230,24 @@ impl Device {
                 if let Some(stats) = stats {
                     _ = self.event_queue.push(stats);
                 }
+            }
+            CommandType::PrintMemoryStats => {
+                dbg!(
+                    self.logger,
+                    "Packet cache: {} entries",
+                    self.packet_cache.get_entries_count()
+                );
+                dbg!(
+                    self.logger,
+                    "BandwidthStats cache: {} entries",
+                    self.bandwidth_stats.get_entries_count()
+                );
+                dbg!(
+                    self.logger,
+                    "Connection cache: {} entries\n {}",
+                    self.connection_cache.get_entries_count(),
+                    self.connection_cache.get_full_cache_info()
+                );
             }
         }
 

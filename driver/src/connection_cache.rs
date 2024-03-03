@@ -2,7 +2,7 @@ use crate::{
     connection::{ConnectionV4, ConnectionV6, Verdict},
     driver_hashmap::DeviceHashMap,
 };
-use alloc::vec::Vec;
+use alloc::{format, string::String, vec::Vec};
 use core::fmt::Display;
 
 use smoltcp::wire::{IpAddress, IpProtocol};
@@ -273,18 +273,14 @@ impl ConnectionCache {
         None
     }
 
-    pub fn remove_connection_v4(
-        &mut self,
-        key: (IpProtocol, u16),
-        endpoint_handle: u64,
-    ) -> Option<ConnectionV4> {
+    pub fn remove_connection_v4(&mut self, key: Key) -> Option<ConnectionV4> {
         let _guard = self.lock_v4.write_lock();
         let mut index = None;
         let mut conn = None;
         let mut delete = false;
-        if let Some(entry) = self.connections_v4.get_mut(&key) {
+        if let Some(entry) = self.connections_v4.get_mut(&key.small()) {
             for (i, conn) in entry.connections.iter().enumerate() {
-                if conn.extra.endpoint_handle == endpoint_handle {
+                if conn.remote_equals(&key) {
                     index = Some(i);
                     break;
                 }
@@ -298,24 +294,20 @@ impl ConnectionCache {
             }
         }
         if delete {
-            self.connections_v4.remove(&key);
+            self.connections_v4.remove(&key.small());
         }
 
         return conn;
     }
 
-    pub fn remove_connection_v6(
-        &mut self,
-        key: (IpProtocol, u16),
-        endpoint_handle: u64,
-    ) -> Option<ConnectionV6> {
+    pub fn remove_connection_v6(&mut self, key: Key) -> Option<ConnectionV6> {
         let _guard = self.lock_v6.write_lock();
         let mut index = None;
         let mut conn = None;
         let mut delete = false;
-        if let Some(entry) = self.connections_v6.get_mut(&key) {
+        if let Some(entry) = self.connections_v6.get_mut(&key.small()) {
             for (i, conn) in entry.connections.iter().enumerate() {
-                if conn.extra.endpoint_handle == endpoint_handle {
+                if conn.remote_equals(&key) {
                     index = Some(i);
                     break;
                 }
@@ -329,7 +321,7 @@ impl ConnectionCache {
             }
         }
         if delete {
-            self.connections_v6.remove(&key);
+            self.connections_v6.remove(&key.small());
         }
 
         return conn;
@@ -355,5 +347,71 @@ impl ConnectionCache {
         let _guard = self.lock_v4.write_lock();
         self.connections_v4.clear();
         self.connections_v6.clear();
+    }
+
+    pub fn get_entries_count(&self) -> usize {
+        let mut size = 0;
+        {
+            let values = self.connections_v4.values();
+            let _guard = self.lock_v4.read_lock();
+            for entry in values {
+                size += entry.connections.len();
+            }
+        }
+
+        {
+            let values = self.connections_v6.values();
+            let _guard = self.lock_v6.read_lock();
+            for entry in values {
+                size += entry.connections.len();
+            }
+        }
+
+        return size;
+    }
+
+    pub fn get_full_cache_info(&self) -> String {
+        let mut info = String::new();
+        {
+            let _guard = self.lock_v4.read_lock();
+            for ((protocol, port), entry) in self.connections_v4.iter() {
+                info.push_str(&format!(
+                    "{} -> {} has_redirect: {}\n",
+                    protocol, port, entry.has_redirect
+                ));
+                for conn in &entry.connections {
+                    info.push_str(&format!(
+                        "\t{}:{} -> {}:{} {}\n",
+                        conn.local_address,
+                        conn.local_port,
+                        conn.remote_address,
+                        conn.remote_port,
+                        conn.verdict
+                    ))
+                }
+            }
+        }
+
+        {
+            let _guard = self.lock_v6.read_lock();
+            for ((protocol, port), entry) in self.connections_v6.iter() {
+                info.push_str(&format!(
+                    "{} -> {} has_redirect: {}\n",
+                    protocol, port, entry.has_redirect
+                ));
+                for conn in &entry.connections {
+                    info.push_str(&format!(
+                        "\t{}:{} -> {}:{} {}\n",
+                        conn.local_address,
+                        conn.local_port,
+                        conn.remote_address,
+                        conn.remote_port,
+                        conn.verdict
+                    ))
+                }
+            }
+        }
+
+        return info;
     }
 }

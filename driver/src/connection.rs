@@ -89,7 +89,6 @@ pub struct ConnectionV6 {
 }
 
 pub struct ConnectionExtra {
-    pub(crate) endpoint_handle: u64,
     pub(crate) direction: Direction,
     pub(crate) packet_queue: Option<ClassifyDefer>,
     pub(crate) callout_id: usize,

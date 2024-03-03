@@ -13,6 +13,7 @@ pub enum CommandType {
     ClearCache,
     GetLogs,
     GetBandwidthStats,
+    PrintMemoryStats,
 }
 
 #[repr(C, packed)]
@@ -145,6 +146,7 @@ fn test_go_command_file() {
                 CommandType::ClearCache => {}
                 CommandType::GetLogs => {}
                 CommandType::GetBandwidthStats => {}
+                CommandType::PrintMemoryStats => {}
             }
         } else {
             panic!("Unknown command: {}", command[0]);

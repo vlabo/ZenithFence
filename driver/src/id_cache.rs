@@ -39,4 +39,13 @@ impl<T> IdCache<T> {
         }
         None
     }
+
+    pub fn get_entries_count(&self) -> usize {
+        if let Some(values) = &self.values {
+            let _guard = self.lock.read_lock();
+            return values.len();
+        }
+
+        return 0;
+    }
 }

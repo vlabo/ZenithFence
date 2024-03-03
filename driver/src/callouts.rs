@@ -161,6 +161,6 @@ pub fn get_callout_vec() -> Vec<Callout> {
             Layer::InboundIppacketV6,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             packet_callouts::ip_packet_layer_inbound_v6,
-        ),
+        )
     ]
 }
