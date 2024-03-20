@@ -344,9 +344,14 @@ impl ConnectionCache {
     }
 
     pub fn clear(&mut self) {
-        let _guard = self.lock_v4.write_lock();
-        self.connections_v4.clear();
-        self.connections_v6.clear();
+        {
+            let _guard = self.lock_v4.write_lock();
+            self.connections_v4.clear();
+        }
+        {
+            let _guard = self.lock_v6.write_lock();
+            self.connections_v6.clear();
+        }
     }
 
     pub fn get_entries_count(&self) -> usize {
