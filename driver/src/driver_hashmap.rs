@@ -8,6 +8,12 @@ impl<Key, Value> DeviceHashMap<Key, Value> {
     pub fn new() -> Self {
         Self(Some(HashMap::new()))
     }
+
+    pub fn replace(&mut self, mut new: DeviceHashMap<Key, Value>) -> DeviceHashMap<Key, Value> {
+        let old = self.0.replace(new.0.take().unwrap());
+        new.0 = old;
+        new
+    }
 }
 
 impl<Key, Value> Deref for DeviceHashMap<Key, Value> {

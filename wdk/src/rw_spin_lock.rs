@@ -1,60 +1,87 @@
-use core::cell::UnsafeCell;
+use core::{
+    cell::UnsafeCell,
+    ops::{Deref, DerefMut},
+};
 
 use windows_sys::Wdk::System::SystemServices::{
     ExAcquireSpinLockExclusive, ExAcquireSpinLockShared, ExReleaseSpinLockExclusive,
-    ExReleaseSpinLockShared, ExTryConvertSharedSpinLockExclusive,
+    ExReleaseSpinLockShared,
 };
 
-pub struct RwSpinLock {
-    data: UnsafeCell<i32>,
+pub struct RwMutex<T> {
+    lock: UnsafeCell<i32>,
+    data: T,
 }
 
-impl RwSpinLock {
-    pub const fn default() -> Self {
+impl<T> RwMutex<T> {
+    pub fn new(data: T) -> RwMutex<T> {
         Self {
-            data: UnsafeCell::new(0),
+            lock: UnsafeCell::new(0),
+            data,
         }
     }
 
-    pub fn read_lock(&self) -> RwLockGuard {
-        let irq = unsafe { ExAcquireSpinLockShared(self.data.get()) };
-        RwLockGuard {
+    pub fn lock(&self) -> MutexReadGuard<T> {
+        let irq = unsafe { ExAcquireSpinLockShared(self.lock.get()) };
+        MutexReadGuard {
             data: &self.data,
-            exclusive: false,
+            lock: &self.lock,
             old_irq: irq,
         }
     }
 
-    pub fn write_lock(&self) -> RwLockGuard {
-        let irq = unsafe { ExAcquireSpinLockExclusive(self.data.get()) };
-        RwLockGuard {
-            data: &self.data,
-            exclusive: true,
+    pub fn lock_mut(&mut self) -> MutexWriteGuard<T> {
+        let irq = unsafe { ExAcquireSpinLockExclusive(self.lock.get()) };
+        MutexWriteGuard {
+            data: &mut self.data,
+            lock: &self.lock,
             old_irq: irq,
         }
     }
 }
 
-pub struct RwLockGuard<'a> {
-    data: &'a UnsafeCell<i32>,
-    exclusive: bool,
+pub struct MutexReadGuard<'a, T> {
+    data: &'a T,
+    lock: &'a UnsafeCell<i32>,
     old_irq: u8,
 }
 
-impl<'a> RwLockGuard<'a> {
-    pub fn convert_to_write(&'a self) -> bool {
-        unsafe { ExTryConvertSharedSpinLockExclusive(self.data.get()) == 1 }
+impl<'a, T> Deref for MutexReadGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
     }
 }
 
-impl<'a> Drop for RwLockGuard<'a> {
+impl<'a, T> Drop for MutexReadGuard<'a, T> {
     fn drop(&mut self) {
-        unsafe {
-            if self.exclusive {
-                ExReleaseSpinLockExclusive(self.data.get(), self.old_irq);
-            } else {
-                ExReleaseSpinLockShared(self.data.get(), self.old_irq);
-            }
-        }
+        unsafe { ExReleaseSpinLockShared(self.lock.get(), self.old_irq) };
+    }
+}
+
+pub struct MutexWriteGuard<'a, T> {
+    data: &'a mut T,
+    lock: &'a UnsafeCell<i32>,
+    old_irq: u8,
+}
+
+impl<'a, T> Deref for MutexWriteGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<'a, T> DerefMut for MutexWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl<'a, T> Drop for MutexWriteGuard<'a, T> {
+    fn drop(&mut self) {
+        unsafe { ExReleaseSpinLockExclusive(self.lock.get(), self.old_irq) };
     }
 }
