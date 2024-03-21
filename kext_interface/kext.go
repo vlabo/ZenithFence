@@ -37,6 +37,7 @@ var (
 )
 
 const winInvalidHandleValue = windows.Handle(^uintptr(0)) // Max value
+const stopServiceTimeoutDuration = time.Duration(30 * time.Second)
 
 type KextService struct {
 	handle     windows.Handle
@@ -103,7 +104,7 @@ func (s *KextService) Start(wait bool) error {
 
 	// Wait for service to start
 	if wait {
-		success, err := s.waitForServiceStatus(windows.SERVICE_RUNNING, time.Duration(10*time.Second))
+		success, err := s.waitForServiceStatus(windows.SERVICE_RUNNING, stopServiceTimeoutDuration)
 		if err != nil || !success {
 			return fmt.Errorf("service did not start: %w", err)
 		}
