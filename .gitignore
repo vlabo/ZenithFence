@@ -19,8 +19,8 @@ mono_crash.*
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
-[Rr]elease/
-[Rr]eleases/
+*/**/[Rr]elease/
+*/**/[Rr]eleases/
 bld/
 [Bb]in/
 [Oo]bj/
@@ -397,3 +397,4 @@ pm_kext/RCa05788
 pm_kext/RCa06452
 target
 kext.sys
+release/build
