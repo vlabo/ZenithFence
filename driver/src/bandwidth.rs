@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use protocol::info::{BandwidthStatArray, BandwidthValueV4, BandwidthValueV6};
 use smoltcp::wire::{IpProtocol, Ipv4Address, Ipv6Address};
-use wdk::rw_spin_lock::RwMutex;
+use wdk::rw_spin_lock::RwSpinLock;
 
 use crate::driver_hashmap::DeviceHashMap;
 
@@ -25,32 +25,45 @@ enum Direction {
     Tx(usize),
     Rx(usize),
 }
-
 pub struct Bandwidth {
-    stats_tcp_v4: RwMutex<DeviceHashMap<Key<Ipv4Address>, Value>>,
-    stats_tcp_v6: RwMutex<DeviceHashMap<Key<Ipv6Address>, Value>>,
-    stats_udp_v4: RwMutex<DeviceHashMap<Key<Ipv4Address>, Value>>,
-    stats_udp_v6: RwMutex<DeviceHashMap<Key<Ipv6Address>, Value>>,
+    stats_tcp_v4: DeviceHashMap<Key<Ipv4Address>, Value>,
+    stats_tcp_v4_lock: RwSpinLock,
+
+    stats_tcp_v6: DeviceHashMap<Key<Ipv6Address>, Value>,
+    stats_tcp_v6_lock: RwSpinLock,
+
+    stats_udp_v4: DeviceHashMap<Key<Ipv4Address>, Value>,
+    stats_udp_v4_lock: RwSpinLock,
+
+    stats_udp_v6: DeviceHashMap<Key<Ipv6Address>, Value>,
+    stats_udp_v6_lock: RwSpinLock,
 }
 
 impl Bandwidth {
     pub fn new() -> Self {
         Self {
-            stats_tcp_v4: RwMutex::new(DeviceHashMap::new()),
-            stats_tcp_v6: RwMutex::new(DeviceHashMap::new()),
-            stats_udp_v4: RwMutex::new(DeviceHashMap::new()),
-            stats_udp_v6: RwMutex::new(DeviceHashMap::new()),
+            stats_tcp_v4: DeviceHashMap::new(),
+            stats_tcp_v4_lock: RwSpinLock::default(),
+
+            stats_tcp_v6: DeviceHashMap::new(),
+            stats_tcp_v6_lock: RwSpinLock::default(),
+
+            stats_udp_v4: DeviceHashMap::new(),
+            stats_udp_v4_lock: RwSpinLock::default(),
+
+            stats_udp_v6: DeviceHashMap::new(),
+            stats_udp_v6_lock: RwSpinLock::default(),
         }
     }
 
     pub fn get_all_updates_tcp_v4(&mut self) -> Option<Box<BandwidthStatArray<BandwidthValueV4>>> {
         let stats_map;
         {
-            let mut stats_tcp_v4 = self.stats_tcp_v4.lock_mut();
-            if stats_tcp_v4.is_empty() {
+            let _guard = self.stats_tcp_v4_lock.write_lock();
+            if self.stats_tcp_v4.is_empty() {
                 return None;
             }
-            stats_map = stats_tcp_v4.replace(DeviceHashMap::new());
+            stats_map = core::mem::replace(&mut self.stats_tcp_v4, DeviceHashMap::new());
         }
 
         let mut stats_array = Box::new(BandwidthStatArray::new_v4(
@@ -73,11 +86,11 @@ impl Bandwidth {
     pub fn get_all_updates_tcp_v6(&mut self) -> Option<Box<BandwidthStatArray<BandwidthValueV6>>> {
         let stats_map;
         {
-            let mut stats_tcp_v6 = self.stats_tcp_v6.lock_mut();
-            if stats_tcp_v6.is_empty() {
+            let _guard = self.stats_tcp_v6_lock.write_lock();
+            if self.stats_tcp_v6.is_empty() {
                 return None;
             }
-            stats_map = stats_tcp_v6.replace(DeviceHashMap::new());
+            stats_map = core::mem::replace(&mut self.stats_tcp_v6, DeviceHashMap::new());
         }
 
         let mut stats_array = Box::new(BandwidthStatArray::new_v6(
@@ -100,11 +113,11 @@ impl Bandwidth {
     pub fn get_all_updates_udp_v4(&mut self) -> Option<Box<BandwidthStatArray<BandwidthValueV4>>> {
         let stats_map;
         {
-            let mut stats_udp_v4 = self.stats_udp_v4.lock_mut();
-            if stats_udp_v4.is_empty() {
+            let _guard = self.stats_udp_v4_lock.write_lock();
+            if self.stats_udp_v4.is_empty() {
                 return None;
             }
-            stats_map = stats_udp_v4.replace(DeviceHashMap::new());
+            stats_map = core::mem::replace(&mut self.stats_udp_v4, DeviceHashMap::new());
         }
 
         let mut stats_array = Box::new(BandwidthStatArray::new_v4(
@@ -127,11 +140,11 @@ impl Bandwidth {
     pub fn get_all_updates_udp_v6(&mut self) -> Option<Box<BandwidthStatArray<BandwidthValueV6>>> {
         let stats_map;
         {
-            let mut stats_tcp_v6 = self.stats_tcp_v6.lock_mut();
-            if stats_tcp_v6.is_empty() {
+            let _guard = self.stats_udp_v6_lock.write_lock();
+            if self.stats_tcp_v6.is_empty() {
                 return None;
             }
-            stats_map = stats_tcp_v6.replace(DeviceHashMap::new());
+            stats_map = core::mem::replace(&mut self.stats_tcp_v6, DeviceHashMap::new());
         }
 
         let mut stats_array = Box::new(BandwidthStatArray::new_v6(
@@ -152,60 +165,101 @@ impl Bandwidth {
     }
 
     pub fn update_tcp_v4_tx(&mut self, key: Key<Ipv4Address>, tx_bytes: usize) {
-        Self::update(&mut self.stats_tcp_v4, key, Direction::Tx(tx_bytes));
+        Self::update(
+            &mut self.stats_tcp_v4,
+            &mut self.stats_tcp_v4_lock,
+            key,
+            Direction::Tx(tx_bytes),
+        );
     }
 
     pub fn update_tcp_v4_rx(&mut self, key: Key<Ipv4Address>, rx_bytes: usize) {
-        Self::update(&mut self.stats_tcp_v4, key, Direction::Rx(rx_bytes));
+        Self::update(
+            &mut self.stats_tcp_v4,
+            &mut self.stats_tcp_v4_lock,
+            key,
+            Direction::Rx(rx_bytes),
+        );
     }
 
     pub fn update_tcp_v6_tx(&mut self, key: Key<Ipv6Address>, tx_bytes: usize) {
-        Self::update(&mut self.stats_tcp_v6, key, Direction::Tx(tx_bytes));
+        Self::update(
+            &mut self.stats_tcp_v6,
+            &mut self.stats_tcp_v6_lock,
+            key,
+            Direction::Tx(tx_bytes),
+        );
     }
 
     pub fn update_tcp_v6_rx(&mut self, key: Key<Ipv6Address>, rx_bytes: usize) {
-        Self::update(&mut self.stats_tcp_v6, key, Direction::Rx(rx_bytes));
+        Self::update(
+            &mut self.stats_tcp_v6,
+            &mut self.stats_tcp_v6_lock,
+            key,
+            Direction::Rx(rx_bytes),
+        );
     }
 
     pub fn update_udp_v4_tx(&mut self, key: Key<Ipv4Address>, tx_bytes: usize) {
-        Self::update(&mut self.stats_udp_v4, key, Direction::Tx(tx_bytes));
+        Self::update(
+            &mut self.stats_udp_v4,
+            &mut self.stats_udp_v4_lock,
+            key,
+            Direction::Tx(tx_bytes),
+        );
     }
 
     pub fn update_udp_v4_rx(&mut self, key: Key<Ipv4Address>, rx_bytes: usize) {
-        Self::update(&mut self.stats_udp_v4, key, Direction::Rx(rx_bytes));
+        Self::update(
+            &mut self.stats_udp_v4,
+            &mut self.stats_udp_v4_lock,
+            key,
+            Direction::Rx(rx_bytes),
+        );
     }
 
     pub fn update_udp_v6_tx(&mut self, key: Key<Ipv6Address>, tx_bytes: usize) {
-        Self::update(&mut self.stats_udp_v6, key, Direction::Tx(tx_bytes));
+        Self::update(
+            &mut self.stats_udp_v6,
+            &mut self.stats_udp_v6_lock,
+            key,
+            Direction::Tx(tx_bytes),
+        );
     }
 
     pub fn update_udp_v6_rx(&mut self, key: Key<Ipv6Address>, rx_bytes: usize) {
-        Self::update(&mut self.stats_udp_v6, key, Direction::Rx(rx_bytes));
+        Self::update(
+            &mut self.stats_udp_v6,
+            &mut self.stats_udp_v6_lock,
+            key,
+            Direction::Rx(rx_bytes),
+        );
     }
 
     fn update<Address: Eq + PartialEq + core::hash::Hash>(
-        map: &mut RwMutex<DeviceHashMap<Key<Address>, Value>>,
+        map: &mut DeviceHashMap<Key<Address>, Value>,
+        lock: &mut RwSpinLock,
         key: Key<Address>,
-        direction: Direction,
+        bytes: Direction,
     ) {
-        let mut map = map.lock_mut();
+        let _guard = lock.write_lock();
         if let Some(value) = map.get_mut(&key) {
-            match direction {
+            match bytes {
                 Direction::Tx(bytes_count) => value.transmitted_bytes += bytes_count,
                 Direction::Rx(bytes_count) => value.received_bytes += bytes_count,
             }
         } else {
-            let mut tx_count = 0;
-            let mut rx_count = 0;
-            match direction {
-                Direction::Tx(bytes_count) => tx_count = bytes_count,
-                Direction::Rx(bytes_count) => rx_count = bytes_count,
+            let mut received_bytes = 0;
+            let mut transmitted_bytes = 0;
+            match bytes {
+                Direction::Tx(bytes_count) => transmitted_bytes += bytes_count,
+                Direction::Rx(bytes_count) => received_bytes += bytes_count,
             }
             map.insert(
                 key,
                 Value {
-                    received_bytes: rx_count,
-                    transmitted_bytes: tx_count,
+                    received_bytes,
+                    transmitted_bytes,
                 },
             );
         }
@@ -213,10 +267,26 @@ impl Bandwidth {
 
     pub fn get_entries_count(&self) -> usize {
         let mut size = 0;
-        size += self.stats_tcp_v4.lock().values().len();
-        size += self.stats_tcp_v6.lock().values().len();
-        size += self.stats_udp_v4.lock().values().len();
-        size += self.stats_udp_v6.lock().values().len();
+        {
+            let values = &self.stats_tcp_v4.values();
+            let _guard = self.stats_tcp_v4_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_tcp_v6.values();
+            let _guard = self.stats_tcp_v6_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_udp_v4.values();
+            let _guard = self.stats_udp_v4_lock.read_lock();
+            size += values.len();
+        }
+        {
+            let values = &self.stats_udp_v6.values();
+            let _guard = self.stats_udp_v6_lock.read_lock();
+            size += values.len();
+        }
 
         return size;
     }
