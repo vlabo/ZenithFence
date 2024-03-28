@@ -445,37 +445,33 @@ pub fn endpoint_closure_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     else {
         return;
     };
-    let ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
+    let local_ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
+    let remote_ip_address_type = data.get_value_type(Fields::IpRemoteAddress as usize);
 
-    if let ValueType::FwpByteArray16Type = ip_address_type {
-        let key = Key {
-            protocol: get_protocol(&data, Fields::IpProtocol as usize),
-            local_address: get_ipv6_address(&data, Fields::IpLocalAddress as usize),
-            local_port: data.get_value_u16(Fields::IpLocalPort as usize),
-            remote_address: get_ipv6_address(&data, Fields::IpRemoteAddress as usize),
-            remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
-        };
+    if let ValueType::FwpByteArray16Type = local_ip_address_type {
+        if let ValueType::FwpByteArray16Type = remote_ip_address_type {
+            let key = Key {
+                protocol: get_protocol(&data, Fields::IpProtocol as usize),
+                local_address: get_ipv6_address(&data, Fields::IpLocalAddress as usize),
+                local_port: data.get_value_u16(Fields::IpLocalPort as usize),
+                remote_address: get_ipv6_address(&data, Fields::IpRemoteAddress as usize),
+                remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
+            };
 
-        let conn = device.connection_cache.remove_connection_v6(key);
-        if let Some(conn) = conn {
-            let info = Box::new(ConnectionEndEventV6Info::new(
-                data.get_process_id().unwrap_or(0),
-                conn.extra.direction as u8,
-                u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                conn.local_address.0,
-                conn.remote_address.0,
-                conn.local_port,
-                conn.remote_port,
-            ));
-            let _ = device.event_queue.push(info);
+            let conn = device.connection_cache.remove_connection_v6(key);
+            if let Some(conn) = conn {
+                let info = Box::new(ConnectionEndEventV6Info::new(
+                    data.get_process_id().unwrap_or(0),
+                    conn.extra.direction as u8,
+                    u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
+                    conn.local_address.0,
+                    conn.remote_address.0,
+                    conn.local_port,
+                    conn.remote_port,
+                ));
+                let _ = device.event_queue.push(info);
+            }
         }
-    } else {
-        // Invalid ip address type. Just ignore the error.
-        // err!(
-        //     device.logger,
-        //     "unknown ipv6 address type: {:?}",
-        //     ip_address_type
-        // );
     }
 }
 
