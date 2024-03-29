@@ -11,7 +11,7 @@ use alloc::{format, vec::Vec};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 
-use self::callout::Callout;
+use self::callout::{Callout, FilterType};
 use self::callout_data::CalloutData;
 use self::classify::ClassifyOut;
 use self::layer::IncomingValues;
@@ -115,41 +115,6 @@ impl FilterEngine {
         return Ok(());
     }
 
-    pub(crate) fn reset_callout_filter(&mut self, callout_id: usize) -> Result<(), String> {
-        // Begin write transaction. This is also a lock guard.
-        let mut filter_engine = match Transaction::begin_write(self) {
-            Ok(transaction) => transaction,
-            Err(err) => {
-                return Err(err);
-            }
-        };
-        unsafe {
-            let callout = callout_id as *mut Callout;
-            if let Some(callout) = callout.as_mut() {
-                if callout.filter_id != 0 {
-                    // Remove old filter.
-                    if let Err(err) =
-                        ffi::unregister_filter(filter_engine.handle, callout.filter_id)
-                    {
-                        return Err(format!("filter_engine: {}", err));
-                    }
-                    callout.filter_id = 0;
-                }
-                // Create new filter.
-                if let Err(err) =
-                    callout.register_filter(filter_engine.handle, filter_engine.sublayer_guid)
-                {
-                    return Err(format!("filter_engine: {}", err));
-                }
-            }
-        }
-        // Commit transaction.
-        if let Err(err) = filter_engine.commit() {
-            return Err(err);
-        }
-        return Ok(());
-    }
-
     pub fn reset_all_filters(&mut self) -> Result<(), String> {
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         let mut filter_engine = match Transaction::begin_write(self) {
@@ -162,18 +127,20 @@ impl FilterEngine {
         let sublayer_guid = filter_engine.sublayer_guid;
         if let Some(callouts) = &mut filter_engine.callouts {
             for callout in callouts {
-                if callout.filter_id != 0 {
-                    // Remove old filter.
-                    if let Err(err) =
-                        ffi::unregister_filter(filter_engine_handle, callout.filter_id)
-                    {
+                if let FilterType::Resettable = callout.filter_type {
+                    if callout.filter_id != 0 {
+                        // Remove old filter.
+                        if let Err(err) =
+                            ffi::unregister_filter(filter_engine_handle, callout.filter_id)
+                        {
+                            return Err(format!("filter_engine: {}", err));
+                        }
+                        callout.filter_id = 0;
+                    }
+                    // Create new filter.
+                    if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
                         return Err(format!("filter_engine: {}", err));
                     }
-                    callout.filter_id = 0;
-                }
-                // Create new filter.
-                if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
-                    return Err(format!("filter_engine: {}", err));
                 }
             }
         }
@@ -258,8 +225,6 @@ unsafe extern "C" fn catch_all_callout(
             layer_data,
         };
         // Call the defined function.
-        if let Some(device_object) = callout.device_object.as_mut() {
-            (callout.callout_fn)(data, device_object);
-        }
+        (callout.callout_fn)(data);
     }
 }

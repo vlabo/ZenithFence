@@ -3,24 +3,21 @@ use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
 use wdk::filter_engine::net_buffer::NetBufferListIter;
 use wdk::filter_engine::packet::InjectInfo;
-use wdk::interface;
-use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::connection::{ConnectionV4, ConnectionV6, Direction, PM_DNS_PORT, PM_SPN_PORT};
+use crate::err;
 use crate::packet_util::{
     get_key_from_nbl_v4, get_key_from_nbl_v6, redirect_inbound_packet, redirect_outbound_packet,
 };
-use crate::{device::Device, err};
 
 // IP packet layers
-pub fn ip_packet_layer_outbound_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
     ip_packet_layer(
         data,
-        device_object,
         false,
         Direction::Outbound,
         interface_index,
@@ -28,14 +25,13 @@ pub fn ip_packet_layer_outbound_v4(data: CalloutData, device_object: &mut DEVICE
     );
 }
 
-pub fn ip_packet_layer_inbound_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_inbound_v4(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
     ip_packet_layer(
         data,
-        device_object,
         false,
         Direction::Inbound,
         interface_index,
@@ -43,14 +39,13 @@ pub fn ip_packet_layer_inbound_v4(data: CalloutData, device_object: &mut DEVICE_
     );
 }
 
-pub fn ip_packet_layer_outbound_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_outbound_v6(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
     ip_packet_layer(
         data,
-        device_object,
         true,
         Direction::Outbound,
         interface_index,
@@ -58,14 +53,13 @@ pub fn ip_packet_layer_outbound_v6(data: CalloutData, device_object: &mut DEVICE
     );
 }
 
-pub fn ip_packet_layer_inbound_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
 
     ip_packet_layer(
         data,
-        device_object,
         true,
         Direction::Inbound,
         interface_index,
@@ -75,7 +69,6 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData, device_object: &mut DEVICE_
 
 fn ip_packet_layer(
     mut data: CalloutData,
-    device_object: &mut DEVICE_OBJECT,
     ipv6: bool,
     direction: Direction,
     interface_index: u32,
@@ -83,8 +76,7 @@ fn ip_packet_layer(
 ) {
     // Set default action to drop.
     data.block_and_absorb();
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     if device
@@ -230,7 +222,7 @@ fn ip_packet_layer(
                 err!(device.logger, "failed to inject net buffer: {}", err);
             }
         } else {
-            // No redirection action for packet.
+            // No redirect action for packet.
             data.action_permit();
             return;
         }

@@ -58,7 +58,7 @@ impl Device {
     }
 
     /// Cleanup is called just before drop.
-    pub fn cleanup(&mut self) {}
+    // pub fn cleanup(&mut self) {}
 
     fn write_buffer(&mut self, read_request: &mut ReadRequest, mut info: Box<dyn Info>) {
         let bytes = info.as_bytes();
@@ -140,6 +140,7 @@ impl Device {
                 // Received verdict decision for a specific connection.
                 if let Some(key) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
+                        dbg!(self.logger, "Verdict received {}: {}", key, verdict);
                         // Add verdict in the cache.
                         classify_defer = self.connection_cache.update_connection(key, verdict);
                     };
@@ -154,6 +155,12 @@ impl Device {
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
+                    dbg!(
+                        self.logger,
+                        "Verdict update received {:?}: {}",
+                        update,
+                        verdict
+                    );
                     classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),
@@ -177,6 +184,12 @@ impl Device {
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
+                    dbg!(
+                        self.logger,
+                        "Verdict update received {:?}: {}",
+                        update,
+                        verdict
+                    );
                     classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),

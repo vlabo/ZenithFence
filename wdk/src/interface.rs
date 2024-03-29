@@ -32,7 +32,7 @@ pub fn init_driver_object(
     driver_object: *mut DRIVER_OBJECT,
     registry_path: *mut UNICODE_STRING,
     driver_name: &str,
-    mut object_attributes: WdfObjectAttributes,
+    object_attributes: *mut WdfObjectAttributes,
 ) -> Result<Driver, String> {
     let win_driver_path = format!("\\Device\\{}", driver_name);
     let dos_driver_path = format!("\\??\\{}", driver_name);
@@ -55,7 +55,7 @@ pub fn init_driver_object(
             &mut wdf_device_handle,
             win_driver.as_ptr(),
             dos_driver.as_ptr(),
-            &mut object_attributes,
+            object_attributes,
             empty_wdf_driver_unload,
         );
 

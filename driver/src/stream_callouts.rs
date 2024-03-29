@@ -1,15 +1,10 @@
 use smoltcp::wire::{Ipv4Address, Ipv6Address};
-use wdk::{
-    filter_engine::{callout_data::CalloutData, layer, net_buffer::NetBufferListIter},
-    interface,
-};
-use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
+use wdk::filter_engine::{callout_data::CalloutData, layer, net_buffer::NetBufferListIter};
 
-use crate::{bandwidth, connection::Direction, device::Device};
+use crate::{bandwidth, connection::Direction};
 
-pub fn stream_layer_tcp_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+pub fn stream_layer_tcp_v4(data: CalloutData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let mut direction = Direction::Outbound;
@@ -60,9 +55,8 @@ pub fn stream_layer_tcp_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     }
 }
 
-pub fn stream_layer_tcp_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+pub fn stream_layer_tcp_v6(data: CalloutData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let mut direction = Direction::Outbound;
@@ -110,9 +104,8 @@ pub fn stream_layer_tcp_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     }
 }
 
-pub fn stream_layer_udp_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+pub fn stream_layer_udp_v4(data: CalloutData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let mut data_length: usize = 0;
@@ -163,9 +156,8 @@ pub fn stream_layer_udp_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     }
 }
 
-pub fn stream_layer_udp_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+pub fn stream_layer_udp_v6(data: CalloutData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let mut data_length: usize = 0;

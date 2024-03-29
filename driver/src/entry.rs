@@ -2,23 +2,28 @@ use core::mem::MaybeUninit;
 
 use crate::common::ControlCode;
 use crate::device;
+use alloc::boxed::Box;
 use num_traits::FromPrimitive;
-use wdk::ffi::{WdfObjectAttributes, WdfObjectContextTypeInfo};
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
 use wdk::{err, info, interface};
 use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
-use windows_sys::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_SUCCESS};
+use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
-static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
-    WdfObjectContextTypeInfo::default("DriverContext\0");
+// static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
+// WdfObjectContextTypeInfo::default("DriverContext\0");
 
 // Compile time check. Function should not be executed.
-#[allow(dead_code)]
-pub fn ensure_correctness() {
-    // Ensure that zeroed state is a valid state.
-    let _: device::Device = unsafe { MaybeUninit::zeroed().assume_init() };
+// #[allow(dead_code)]
+// pub fn ensure_correctness() {
+//     // Ensure that zeroed state is a valid state.
+//     let _: device::Device = unsafe { MaybeUninit::zeroed().assume_init() };
+// }
+
+static mut DEVICE: *mut device::Device = core::ptr::null_mut();
+pub fn get_device() -> Option<&'static mut device::Device> {
+    return unsafe { DEVICE.as_mut() };
 }
 
 // DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
@@ -31,16 +36,16 @@ pub extern "system" fn driver_entry(
     info!("Starting initialization...");
 
     // Setup object attribute.
-    let mut object_attributes = WdfObjectAttributes::new();
-    object_attributes.add_context::<device::Device>(unsafe { &mut DRIVER_CONFIG });
-    object_attributes.set_cleanup_fn(device_cleanup);
+    // let mut object_attributes = WdfObjectAttributes::new();
+    // object_attributes.add_context::<device::Device>(unsafe { &mut DRIVER_CONFIG });
+    // object_attributes.set_cleanup_fn(device_cleanup);
 
     // Initialize driver object.
     let mut driver = match interface::init_driver_object(
         driver_object,
         registry_path,
         "PortmasterKext",
-        object_attributes,
+        core::ptr::null_mut(),
     ) {
         Ok(driver) => driver,
         Err(status) => {
@@ -56,46 +61,52 @@ pub extern "system" fn driver_entry(
     driver.set_device_control_fn(device_control);
 
     // Initialize device.
-    if let Some(device_object) = driver.get_device_object_ref() {
-        if let Ok(context) =
-            interface::get_device_context_from_device_object::<device::Device>(device_object)
-        {
-            context.init(&driver);
-        }
+    // if let Some(device_object) = driver.get_device_object_ref() {
+    //     if let Ok(context) =
+    //         interface::get_device_context_from_device_object::<device::Device>(device_object)
+    //     {
+    //         context.init(&driver);
+    //     }
+    // }
+    unsafe {
+        let mut device = Box::<device::Device>::new(MaybeUninit::zeroed().assume_init());
+        device.init(&driver);
+        DEVICE = Box::into_raw(device);
     }
 
     STATUS_SUCCESS
 }
 
 // device_cleanup cleanup function is called when the current device object will be removed.
-extern "system" fn device_cleanup(device: HANDLE) {
-    let device = interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
-        &DRIVER_CONFIG
-    });
+// extern "system" fn device_cleanup(device: HANDLE) {
+//     let device = interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
+//         &DRIVER_CONFIG
+//     });
 
-    unsafe {
-        // Call drop without freeing memory. Memory is manged by the kernel.
-        if let Some(device) = device.as_mut() {
-            device.cleanup();
-            core::ptr::drop_in_place(device);
-        }
-    }
-}
+//     unsafe {
+//         // Call drop without freeing memory. Memory is manged by the kernel.
+//         if let Some(device) = device.as_mut() {
+//             device.cleanup();
+//             core::ptr::drop_in_place(device);
+//         }
+//     }
+// }
 
 // driver_unload function is called when service delete is called from user-space.
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
+    unsafe {
+        _ = Box::from_raw(DEVICE);
+    }
 }
 
 // driver_read event triggered from user-space on file.Read.
 unsafe extern "system" fn driver_read(
-    device_object: &mut DEVICE_OBJECT,
+    _device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut read_request = ReadRequest::new(irp);
-    let Ok(device) =
-        interface::get_device_context_from_device_object::<device::Device>(device_object)
-    else {
+    let Some(device) = get_device() else {
         read_request.complete();
         return read_request.get_status();
     };
@@ -107,13 +118,11 @@ unsafe extern "system" fn driver_read(
 
 /// driver_write event triggered from user-space on file.Write.
 unsafe extern "system" fn driver_write(
-    device_object: &mut DEVICE_OBJECT,
+    _device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut write_request = WriteRequest::new(irp);
-    let Ok(device) =
-        interface::get_device_context_from_device_object::<device::Device>(device_object)
-    else {
+    let Some(device) = get_device() else {
         write_request.complete();
         return write_request.get_status();
     };
@@ -127,13 +136,11 @@ unsafe extern "system" fn driver_write(
 
 /// device_control event triggered from user-space on file.deviceIOControl.
 unsafe extern "system" fn device_control(
-    device_object: &mut DEVICE_OBJECT,
+    _device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
-    let Ok(device) =
-        interface::get_device_context_from_device_object::<device::Device>(device_object)
-    else {
+    let Some(device) = get_device() else {
         control_request.complete();
         return control_request.get_status();
     };

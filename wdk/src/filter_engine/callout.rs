@@ -3,6 +3,11 @@ use crate::ffi::FwpsCalloutClassifyFn;
 use alloc::{borrow::ToOwned, format, string::String};
 use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
+pub enum FilterType {
+    Resettable,
+    NonResettable,
+}
+
 pub struct Callout {
     pub(crate) id: u32,
     pub(super) address: u64,
@@ -12,9 +17,9 @@ pub struct Callout {
     pub(crate) layer: Layer,
     pub(crate) action: u32,
     pub(crate) registered: bool,
+    pub(crate) filter_type: FilterType,
     pub(crate) filter_id: u64,
-    pub(crate) device_object: *mut DEVICE_OBJECT,
-    pub(crate) callout_fn: fn(CalloutData, &mut DEVICE_OBJECT),
+    pub(crate) callout_fn: fn(CalloutData),
 }
 
 impl Callout {
@@ -24,7 +29,8 @@ impl Callout {
         guid: u128,
         layer: Layer,
         action: u32,
-        callout_fn: fn(CalloutData, &mut DEVICE_OBJECT),
+        filter_type: FilterType,
+        callout_fn: fn(CalloutData),
     ) -> Self {
         Self {
             id: 0,
@@ -35,8 +41,8 @@ impl Callout {
             layer,
             action,
             registered: false,
+            filter_type,
             filter_id: 0,
-            device_object: core::ptr::null_mut(),
             callout_fn,
         }
     }
@@ -73,9 +79,8 @@ impl Callout {
         device_object: *mut DEVICE_OBJECT,
         callout_fn: FwpsCalloutClassifyFn,
     ) -> Result<(), String> {
-        self.device_object = device_object;
         match ffi::register_callout(
-            self.device_object,
+            device_object,
             filter_engine_handle,
             &format!("{}-callout", self.name),
             &self.description,

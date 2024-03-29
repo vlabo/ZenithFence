@@ -12,13 +12,11 @@ use wdk::filter_engine::layer::{
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 use wdk::filter_engine::packet::Injector;
-use wdk::interface;
-use windows_sys::Wdk::Foundation::DEVICE_OBJECT;
 
 use crate::connection::{ConnectionExtra, ConnectionV4, ConnectionV6, Direction, Verdict};
 use crate::connection_cache::Key;
 use crate::info;
-use crate::{dbg, device::Device, err};
+use crate::{dbg, err};
 
 // ALE Layers
 
@@ -120,7 +118,7 @@ fn get_ipv6_address(data: &CalloutData, index: usize) -> IpAddress {
     IpAddress::Ipv6(Ipv6Address::from_bytes(data.get_value_byte_array16(index)))
 }
 
-pub fn ale_layer_connect_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ale_layer_connect_v4(data: CalloutData) {
     type Fields = FieldsAleAuthConnectV4;
     let ale_data = AleLayerData {
         is_ipv6: false,
@@ -136,10 +134,10 @@ pub fn ale_layer_connect_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT
         sub_interface_index: 0,
     };
 
-    ale_layer_auth(data, device_object, ale_data);
+    ale_layer_auth(data, ale_data);
 }
 
-pub fn ale_layer_accept_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ale_layer_accept_v4(data: CalloutData) {
     type Fields = FieldsAleAuthRecvAcceptV4;
     let ale_data = AleLayerData {
         is_ipv6: false,
@@ -154,10 +152,10 @@ pub fn ale_layer_accept_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT)
         interface_index: data.get_value_u32(Fields::InterfaceIndex as usize),
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
-    ale_layer_auth(data, device_object, ale_data);
+    ale_layer_auth(data, ale_data);
 }
 
-pub fn ale_layer_connect_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ale_layer_connect_v6(data: CalloutData) {
     type Fields = FieldsAleAuthConnectV6;
 
     let ale_data = AleLayerData {
@@ -174,10 +172,10 @@ pub fn ale_layer_connect_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
 
-    ale_layer_auth(data, device_object, ale_data);
+    ale_layer_auth(data, ale_data);
 }
 
-pub fn ale_layer_accept_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn ale_layer_accept_v6(data: CalloutData) {
     type Fields = FieldsAleAuthRecvAcceptV6;
     let ale_data = AleLayerData {
         is_ipv6: true,
@@ -192,16 +190,11 @@ pub fn ale_layer_accept_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT)
         interface_index: data.get_value_u32(Fields::InterfaceIndex as usize),
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
-    ale_layer_auth(data, device_object, ale_data);
+    ale_layer_auth(data, ale_data);
 }
 
-fn ale_layer_auth(
-    mut data: CalloutData,
-    device_object: &mut DEVICE_OBJECT,
-    ale_data: AleLayerData,
-) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     // Check if packet was previously injected from the packet layer.
@@ -400,10 +393,9 @@ fn ale_layer_auth(
     }
 }
 
-pub fn endpoint_closure_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn endpoint_closure_v4(data: CalloutData) {
     type Fields = layer::FieldsAleEndpointClosureV4;
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
@@ -439,10 +431,9 @@ pub fn endpoint_closure_v4(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     }
 }
 
-pub fn endpoint_closure_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
+pub fn endpoint_closure_v6(data: CalloutData) {
     type Fields = layer::FieldsAleEndpointClosureV6;
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     let local_ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
@@ -475,9 +466,8 @@ pub fn endpoint_closure_v6(data: CalloutData, device_object: &mut DEVICE_OBJECT)
     }
 }
 
-pub fn ale_resource_monitor(data: CalloutData, device_object: &mut DEVICE_OBJECT) {
-    let Ok(device) = interface::get_device_context_from_device_object::<Device>(device_object)
-    else {
+pub fn ale_resource_monitor(data: CalloutData) {
+    let Some(device) = crate::entry::get_device() else {
         return;
     };
     match data.layer {
