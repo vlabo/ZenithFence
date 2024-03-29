@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::string::String;
 use num_traits::FromPrimitive;
 use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
@@ -35,26 +36,28 @@ pub struct Device {
 impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
     /// Make sure everything is initialized here.
-    pub fn init(&mut self, driver: &Driver) {
-        self.logger = Logger::new();
-        self.event_queue.init();
-        self.read_leftover = ArrayHolder::default();
-        self.packet_cache.init();
-        self.connection_cache = ConnectionCache::new();
-        self.injector = Injector::new();
-        self.network_allocator = NetworkAllocator::new();
-        self.bandwidth_stats = Bandwidth::new();
+    pub fn new(driver: &Driver) -> Result<Self, String> {
+        let mut filter_engine =
+            match FilterEngine::new(driver, 0x7dab1057_8e2b_40c4_9b85_693e381d7896) {
+                Ok(fe) => fe,
+                Err(err) => return Err(alloc::format!("filter engine error: {}", err)),
+            };
 
-        if let Err(err) = self
-            .filter_engine
-            .init(driver, 0x7dab1057_8e2b_40c4_9b85_693e381d7896)
-        {
-            err!(self.logger, "filter engine error: {}", err);
+        if let Err(err) = filter_engine.commit(callouts::get_callout_vec()) {
+            return Err(err);
         }
 
-        if let Err(err) = self.filter_engine.commit(callouts::get_callout_vec()) {
-            err!(self.logger, "{}", err);
-        }
+        Ok(Self {
+            filter_engine,
+            read_leftover: ArrayHolder::default(),
+            event_queue: IOQueue::new(),
+            packet_cache: IdCache::new(),
+            connection_cache: ConnectionCache::new(),
+            injector: Injector::new(),
+            network_allocator: NetworkAllocator::new(),
+            bandwidth_stats: Bandwidth::new(),
+            logger: Logger::new(),
+        })
     }
 
     /// Cleanup is called just before drop.

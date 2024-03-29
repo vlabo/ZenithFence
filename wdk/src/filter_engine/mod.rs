@@ -40,7 +40,7 @@ pub struct FilterEngine {
 }
 
 impl FilterEngine {
-    pub fn init(&mut self, driver: &Driver, layer_guid: u128) -> Result<(), String> {
+    pub fn new(driver: &Driver, layer_guid: u128) -> Result<Self, String> {
         let filter_engine_handle: HANDLE;
         match ffi::create_filter_engine() {
             Ok(handle) => {
@@ -50,11 +50,13 @@ impl FilterEngine {
                 return Err(format!("failed to initialize filter engine {}", code).to_owned());
             }
         }
-        self.device_object = driver.get_device_object();
-        self.handle = filter_engine_handle;
-        self.sublayer_guid = layer_guid;
-        self.callouts = None;
-        return Ok(());
+        Ok(Self {
+            device_object: driver.get_device_object(),
+            handle: filter_engine_handle,
+            sublayer_guid: layer_guid,
+            committed: false,
+            callouts: None,
+        })
     }
 
     pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String> {

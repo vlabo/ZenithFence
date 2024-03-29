@@ -4,6 +4,7 @@ use core::{
     fmt::Display,
     marker::PhantomData,
     mem::MaybeUninit,
+    pin::Pin,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -76,7 +77,8 @@ struct Entry<T> {
 }
 
 pub struct IOQueue<T> {
-    kernel_queue: UnsafeCell<KQUEUE>,
+    // The address of the value should not change.
+    kernel_queue: Pin<Box<UnsafeCell<KQUEUE>>>,
     initialized: AtomicBool,
     _type: PhantomData<T>, // 0 size variable. Required for the generic to work properly. Compiler limitation.
 }
@@ -84,20 +86,17 @@ pub struct IOQueue<T> {
 unsafe impl<T> Sync for IOQueue<T> {}
 
 impl<T> IOQueue<T> {
-    pub const fn default() -> Self {
-        Self {
-            kernel_queue: UnsafeCell::new(unsafe { MaybeUninit::zeroed().assume_init() }),
-            initialized: AtomicBool::new(false),
-            _type: PhantomData,
-        }
-    }
-
     /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
-    pub fn init(&self) {
+    pub fn new() -> Self {
         unsafe {
-            let kqueue = self.kernel_queue.get();
-            KeInitializeQueue(kqueue, 1);
-            self.initialized.store(true, Ordering::Relaxed);
+            let kernel_queue = Box::pin(UnsafeCell::new(MaybeUninit::zeroed().assume_init()));
+            KeInitializeQueue(kernel_queue.get(), 1);
+
+            Self {
+                kernel_queue,
+                initialized: AtomicBool::new(true),
+                _type: PhantomData,
+            }
         }
     }
 

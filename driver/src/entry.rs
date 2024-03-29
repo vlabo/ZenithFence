@@ -1,5 +1,3 @@
-use core::mem::MaybeUninit;
-
 use crate::common::ControlCode;
 use crate::device;
 use alloc::boxed::Box;
@@ -61,16 +59,14 @@ pub extern "system" fn driver_entry(
     driver.set_device_control_fn(device_control);
 
     // Initialize device.
-    // if let Some(device_object) = driver.get_device_object_ref() {
-    //     if let Ok(context) =
-    //         interface::get_device_context_from_device_object::<device::Device>(device_object)
-    //     {
-    //         context.init(&driver);
-    //     }
-    // }
     unsafe {
-        let mut device = Box::<device::Device>::new(MaybeUninit::zeroed().assume_init());
-        device.init(&driver);
+        let device = match device::Device::new(&driver) {
+            Ok(device) => Box::new(device),
+            Err(err) => {
+                wdk::err!("filed to initialize device: {}", err);
+                return -1;
+            }
+        };
         DEVICE = Box::into_raw(device);
     }
 
@@ -96,7 +92,9 @@ pub extern "system" fn driver_entry(
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
     unsafe {
-        _ = Box::from_raw(DEVICE);
+        if !DEVICE.is_null() {
+            _ = Box::from_raw(DEVICE);
+        }
     }
 }
 
