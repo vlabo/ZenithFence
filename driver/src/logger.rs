@@ -11,7 +11,7 @@ pub const LOG_LEVEL: u8 = Severity::Error as u8;
 pub const LOG_LEVEL: u8 = Severity::Debug as u8;
 
 pub(crate) struct Logger {
-    log_lines: Option<Vec<AtomicPtr<LogLine>>>,
+    log_lines: Vec<AtomicPtr<LogLine>>,
     start_index: usize,
     end_index: AtomicUsize,
 }
@@ -24,23 +24,21 @@ impl Logger {
         }
 
         Self {
-            log_lines: Some(vec),
+            log_lines: vec,
             start_index: 0,
             end_index: AtomicUsize::new(0),
         }
     }
 
     pub fn add_line(&mut self, severity: Severity, prefix: String, line_str: String) {
-        if let Some(log_lines) = &mut self.log_lines {
-            let mut index = self.end_index.fetch_add(1, Ordering::Acquire);
-            index %= log_lines.len();
-            let ptr = &mut log_lines[index];
-            let line = Box::new(LogLine::new(severity, prefix, line_str));
-            let old = ptr.swap(Box::into_raw(line), Ordering::Release);
-            if !old.is_null() {
-                unsafe {
-                    _ = Box::from_raw(old);
-                }
+        let mut index = self.end_index.fetch_add(1, Ordering::Acquire);
+        index %= self.log_lines.len();
+        let ptr = &mut self.log_lines[index];
+        let line = Box::new(LogLine::new(severity, prefix, line_str));
+        let old = ptr.swap(Box::into_raw(line), Ordering::Release);
+        if !old.is_null() {
+            unsafe {
+                _ = Box::from_raw(old);
             }
         }
     }
@@ -54,14 +52,12 @@ impl Logger {
         }
         let start_index = self.start_index;
         let count = end_index - start_index;
-        if let Some(log_lines) = &mut self.log_lines {
-            for i in start_index..start_index + count {
-                let index = i % log_lines.len();
-                let ptr = log_lines[index].swap(core::ptr::null_mut(), Ordering::Acquire);
-                unsafe {
-                    if !ptr.is_null() {
-                        vec.push(Box::from_raw(ptr));
-                    }
+        for i in start_index..start_index + count {
+            let index = i % self.log_lines.len();
+            let ptr = self.log_lines[index].swap(core::ptr::null_mut(), Ordering::Acquire);
+            unsafe {
+                if !ptr.is_null() {
+                    vec.push(Box::from_raw(ptr));
                 }
             }
         }
@@ -73,13 +69,11 @@ impl Logger {
 
 impl Drop for Logger {
     fn drop(&mut self) {
-        if let Some(log_lines) = &mut self.log_lines {
-            for line in log_lines {
-                let ptr = line.load(Ordering::Relaxed);
-                unsafe {
-                    if !ptr.is_null() {
-                        _ = Box::from_raw(ptr);
-                    }
+        for line in self.log_lines.drain(..) {
+            let ptr = line.load(Ordering::Relaxed);
+            unsafe {
+                if !ptr.is_null() {
+                    _ = Box::from_raw(ptr);
                 }
             }
         }
