@@ -1,3 +1,8 @@
+use crate::connection::{ConnectionV4, ConnectionV6, Direction, Verdict};
+use crate::connection_map::Key;
+use crate::device::{Device, Packet};
+use crate::info;
+use crate::packet_util::key_to_connection_info;
 use alloc::boxed::Box;
 use protocol::info::{
     ConnectionEndEventV4Info, ConnectionEndEventV6Info, ConnectionInfoV4, ConnectionInfoV6, Info,
@@ -13,14 +18,10 @@ use wdk::filter_engine::layer::{
 use wdk::filter_engine::net_buffer::NetBufferList;
 use wdk::filter_engine::packet::Injector;
 
-use crate::connection::{ConnectionExtra, ConnectionV4, ConnectionV6, Direction, Verdict};
-use crate::connection_cache::Key;
-use crate::info;
-use crate::{dbg, err};
-
 // ALE Layers
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct AleLayerData {
     is_ipv6: bool,
     reauthorize: bool,
@@ -34,6 +35,8 @@ struct AleLayerData {
     interface_index: u32,
     sub_interface_index: u32,
 }
+
+#[allow(dead_code)]
 impl AleLayerData {
     fn as_connection_info_v4(&self, id: u64) -> Option<Box<dyn Info>> {
         let mut local_port = 0;
@@ -202,98 +205,167 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _, ale_data.is_ipv6)
     {
-        data.action_permit();
+        // data.action_permit();
         return;
+    }
+    let key = ale_data.as_key();
+    if ale_data.process_id == 0 {
+        crate::crit!(device.logger, "ALE process id is 0: {}", key);
+    }
+
+    struct Info {
+        verdict: Verdict,
+        process_id: u64,
     }
 
     // Check if protocol is supported
-    match ale_data.protocol {
-        IpProtocol::Tcp | IpProtocol::Udp => {}
-        _ => {
-            // Not supported. Send event and permit.
-            let conn_info: Option<Box<dyn Info>> = if ale_data.is_ipv6 {
-                ale_data.as_connection_info_v6(0)
-            } else {
-                ale_data.as_connection_info_v4(0)
-            };
-            if let Some(conn_info) = conn_info {
-                let _ = device.event_queue.push(conn_info);
-            } else {
-                err!(device.logger, "Failed to build ConnectionInfo");
-            }
-            data.action_permit();
-            return;
+    let info = if ale_data.is_ipv6 {
+        device
+            .connection_cache
+            .read_connection_v6(&key, |conn| -> Option<Info> {
+                // Function is behind spin lock, just copy and return.
+                Some(Info {
+                    verdict: conn.verdict,
+                    process_id: conn.process_id,
+                })
+            })
+    } else {
+        device
+            .connection_cache
+            .read_connection_v4(&ale_data.as_key(), |conn| -> Option<Info> {
+                // Function is behind spin lock, just copy and return.
+                Some(Info {
+                    verdict: conn.verdict,
+                    process_id: conn.process_id,
+                })
+            })
+    };
+    if let Some(info) = &info {
+        if info.process_id == 0 {
+            device
+                .connection_cache
+                .set_process_id(&key, ale_data.process_id);
         }
     }
 
-    let verdict = if ale_data.is_ipv6 {
-        device.connection_cache.get_connection_action_v6(
-            &ale_data.as_key(),
-            |conn| -> Option<Verdict> {
-                // Function is behind spin lock, just copy and return.
-                Some(conn.verdict)
-            },
-        )
-    } else {
-        device.connection_cache.get_connection_action_v4(
-            &ale_data.as_key(),
-            |conn| -> Option<Verdict> {
-                // Function is behind spin lock, just copy and return.
-                Some(conn.verdict)
-            },
-        )
-    };
-
-    if let Some(action) = verdict {
-        // We already have a verdict for it.
-        dbg!(
+    if !ale_data.reauthorize && info.is_none() {
+        // First packet of connection.
+        // Pend and create postmaster request.
+        crate::dbg!(
             device.logger,
-            "{:?} Verdict: {} {}",
-            data.layer,
-            action,
-            ale_data.as_key()
+            "pending connection: {} {}",
+            key,
+            ale_data.direction
         );
-        match action {
-            Verdict::Accept | Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
-                data.action_permit()
-            }
-            Verdict::Block => data.action_block(),
-            Verdict::Drop | Verdict::Undeterminable | Verdict::Failed => {
-                data.block_and_absorb();
-            }
-            Verdict::Undecided => {
-                if ale_data.protocol == IpProtocol::Udp || ale_data.reauthorize {
-                    let mut nbl = NetBufferList::new(data.get_layer_data() as _);
-                    if let Direction::Inbound = ale_data.direction {
-                        if ale_data.is_ipv6 {
-                            nbl.retreat(IPV6_HEADER_LEN as u32, true);
-                        } else {
-                            nbl.retreat(IPV4_HEADER_LEN as u32, true);
-                        }
-                    }
-                    if let Ok(clone) = nbl.clone(&device.network_allocator) {
-                        device
-                            .connection_cache
-                            .push_packet_to_connection(ale_data.as_key(), clone);
-                    }
+        match save_packet(device, &mut data, &ale_data, true) {
+            Ok(packet) => {
+                let packet_id = device.packet_cache.push((key, packet));
+                if let Some(info) =
+                    key_to_connection_info(&key, packet_id, ale_data.process_id, ale_data.direction)
+                {
+                    let _ = device.event_queue.push(info);
                 }
-                data.block_and_absorb();
+            }
+            Err(err) => {
+                crate::err!(device.logger, "failed to pend packet: {}", err);
+            }
+        };
+
+        data.block_and_absorb();
+    } else {
+        if let Some(info) = info {
+            match info.verdict {
+                Verdict::PermanentAccept => {
+                    data.action_permit();
+                }
+                Verdict::PermanentBlock | Verdict::Undeterminable => {
+                    crate::dbg!(device.logger, "permanent block {}", key);
+                    data.action_block();
+                }
+                Verdict::PermanentDrop => {
+                    crate::dbg!(device.logger, "permanent drop {}", key);
+                    data.block_and_absorb();
+                }
+                Verdict::Undecided => {
+                    crate::dbg!(device.logger, "saving packet: {}", key);
+                    match save_packet(device, &mut data, &ale_data, false) {
+                        Ok(packet) => {
+                            let packet_id = device.packet_cache.push((key, packet));
+                            if let Some(info) = key_to_connection_info(
+                                &key,
+                                packet_id,
+                                ale_data.process_id,
+                                ale_data.direction,
+                            ) {
+                                let _ = device.event_queue.push(info);
+                            }
+                        }
+                        Err(err) => {
+                            crate::err!(device.logger, "failed to pend packet: {}", err);
+                        }
+                    };
+                }
+                Verdict::Accept => {
+                    data.action_permit();
+                }
+                Verdict::Block => {
+                    data.action_block();
+                }
+                Verdict::Drop => {
+                    data.block_and_absorb();
+                }
+                Verdict::RedirectNameServer => {
+                    data.action_permit();
+                }
+                Verdict::RedirectTunnel => {
+                    data.action_permit();
+                }
+                Verdict::Failed => {
+                    data.block_and_absorb();
+                }
             }
         }
-    } else {
-        // Pend decision of connection.
-        let mut packet_list = None;
-        if ale_data.protocol == IpProtocol::Udp || ale_data.reauthorize {
-            let mut nbl = NetBufferList::new(data.get_layer_data() as _);
+        return;
+    }
+    if info.is_none() {
+        crate::dbg!(
+            device.logger,
+            "adding connection: {} PID: {}",
+            key,
+            ale_data.process_id
+        );
+        if ale_data.is_ipv6 {
+            let conn =
+                ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+            device.connection_cache.add_connection_v6(conn);
+        } else {
+            let conn =
+                ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+            device.connection_cache.add_connection_v4(conn);
+        }
+    }
+}
+
+fn save_packet(
+    device: &Device,
+    callout_data: &mut CalloutData,
+    ale_data: &AleLayerData,
+    pend: bool,
+) -> Result<Packet, alloc::string::String> {
+    let mut packet_list = None;
+    match ale_data.protocol {
+        IpProtocol::Tcp => {
+            // Does not contain payload
+        }
+        _ => {
+            let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
+            let mut inbound = false;
             if let Direction::Inbound = ale_data.direction {
                 if ale_data.is_ipv6 {
                     nbl.retreat(IPV6_HEADER_LEN as u32, true);
                 } else {
                     nbl.retreat(IPV4_HEADER_LEN as u32, true);
                 }
-            }
-            let mut inbound = false;
-            if let Direction::Inbound = ale_data.direction {
                 inbound = true;
             }
 
@@ -304,7 +376,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             if let Ok(clone) = nbl.clone(&device.network_allocator) {
                 packet_list = Some(Injector::from_ale_callout(
                     ale_data.is_ipv6,
-                    &data,
+                    callout_data,
                     clone,
                     address,
                     inbound,
@@ -313,240 +385,211 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 ));
             }
         }
-        let promise = if ale_data.reauthorize {
-            data.pend_filter_rest(packet_list)
-        } else {
-            match data.pend_operation(packet_list) {
-                Ok(cc) => cc,
-                Err(error) => {
-                    err!(device.logger, "failed to postpone decision: {}", error);
-                    data.block_and_absorb();
-                    return;
-                }
-            }
-        };
+    }
 
-        // Send request to user-space.
-        let id = device.packet_cache.push(ale_data.as_key());
-        let conn_info: Option<Box<dyn Info>> = if ale_data.is_ipv6 {
-            ale_data.as_connection_info_v6(id)
-        } else {
-            ale_data.as_connection_info_v4(id)
-        };
-        if let Some(conn_info) = conn_info {
-            let _ = device.event_queue.push(conn_info);
-        } else {
-            err!(device.logger, "Failed to build ConnectionInfo");
+    if pend {
+        match callout_data.pend_operation(None) {
+            Ok(classify_defer) => return Ok(Packet::AleLayer(classify_defer, packet_list)),
+            Err(err) => return Err(alloc::format!("failed to defer connection: {}", err)),
         }
-        let extra = Box::new(ConnectionExtra {
-            direction: ale_data.direction,
-            packet_queue: Some(promise),
-            callout_id: data.get_callout_id(),
-        });
-        data.block_and_absorb();
-
-        if ale_data.is_ipv6 {
-            let IpAddress::Ipv6(local_address) = ale_data.local_ip else {
-                err!(device.logger, "Failed to build ConnectionV6");
-                return;
-            };
-
-            let IpAddress::Ipv6(remote_address) = ale_data.remote_ip else {
-                err!(device.logger, "Failed to build ConnectionV6");
-                return;
-            };
-
-            let conn = ConnectionV6 {
-                protocol: ale_data.protocol,
-                local_address,
-                local_port: ale_data.local_port,
-                remote_address,
-                remote_port: ale_data.remote_port,
-                verdict: Verdict::Undecided,
-                extra,
-            };
-
-            device.connection_cache.add_connection_v6(conn);
-        } else {
-            let IpAddress::Ipv4(local_address) = ale_data.local_ip else {
-                err!(device.logger, "Failed to build ConnectionV4");
-                return;
-            };
-
-            let IpAddress::Ipv4(remote_address) = ale_data.remote_ip else {
-                err!(device.logger, "Failed to build ConnectionV4");
-                return;
-            };
-
-            let conn = ConnectionV4 {
-                protocol: ale_data.protocol,
-                local_address,
-                local_port: ale_data.local_port,
-                remote_address,
-                remote_port: ale_data.remote_port,
-                verdict: Verdict::Undecided,
-                extra,
-            };
-
-            device.connection_cache.add_connection_v4(conn);
-        }
+    }
+    if let Some(packet_list) = packet_list {
+        Ok(Packet::TransportPacketList(packet_list))
+    } else {
+        Err("".into())
     }
 }
 
 pub fn endpoint_closure_v4(data: CalloutData) {
-    type Fields = layer::FieldsAleEndpointClosureV4;
-    let Some(device) = crate::entry::get_device() else {
-        return;
-    };
-    let ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
-    if let ValueType::FwpUint32 = ip_address_type {
-        let key = Key {
-            protocol: get_protocol(&data, Fields::IpProtocol as usize),
-            local_address: get_ipv4_address(&data, Fields::IpLocalAddress as usize),
-            local_port: data.get_value_u16(Fields::IpLocalPort as usize),
-            remote_address: get_ipv4_address(&data, Fields::IpRemoteAddress as usize),
-            remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
-        };
+    // type Fields = layer::FieldsAleEndpointClosureV4;
+    // let Some(device) = crate::entry::get_device() else {
+    //     return;
+    // };
+    // let ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
+    // if let ValueType::FwpUint32 = ip_address_type {
+    //     let key = Key {
+    //         protocol: get_protocol(&data, Fields::IpProtocol as usize),
+    //         local_address: get_ipv4_address(&data, Fields::IpLocalAddress as usize),
+    //         local_port: data.get_value_u16(Fields::IpLocalPort as usize),
+    //         remote_address: get_ipv4_address(&data, Fields::IpRemoteAddress as usize),
+    //         remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
+    //     };
 
-        let conn = device.connection_cache.remove_connection_v4(key);
-        if let Some(conn) = conn {
-            let info = Box::new(ConnectionEndEventV4Info::new(
-                data.get_process_id().unwrap_or(0),
-                conn.extra.direction as u8,
-                u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                conn.local_address.0,
-                conn.remote_address.0,
-                conn.local_port,
-                conn.remote_port,
-            ));
-            let _ = device.event_queue.push(info);
-        }
-    } else {
-        // Invalid ip address type. Just ignore the error.
-        // err!(
-        //     device.logger,
-        //     "unknown ipv4 address type: {:?}",
-        //     ip_address_type
-        // );
-    }
+    //     let conn = device.connection_cache.remove_connection_v4(key);
+    //     if let Some(conn) = conn {
+    //         let info = Box::new(ConnectionEndEventV4Info::new(
+    //             data.get_process_id().unwrap_or(0),
+    //             conn.direction as u8,
+    //             u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
+    //             conn.local_address.0,
+    //             conn.remote_address.0,
+    //             conn.local_port,
+    //             conn.remote_port,
+    //         ));
+    //         let _ = device.event_queue.push(info);
+    //     }
+    // } else {
+    //     // Invalid ip address type. Just ignore the error.
+    //     // err!(
+    //     //     device.logger,
+    //     //     "unknown ipv4 address type: {:?}",
+    //     //     ip_address_type
+    //     // );
+    // }
 }
 
 pub fn endpoint_closure_v6(data: CalloutData) {
-    type Fields = layer::FieldsAleEndpointClosureV6;
-    let Some(device) = crate::entry::get_device() else {
-        return;
-    };
-    let local_ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
-    let remote_ip_address_type = data.get_value_type(Fields::IpRemoteAddress as usize);
+    // type Fields = layer::FieldsAleEndpointClosureV6;
+    // let Some(device) = crate::entry::get_device() else {
+    //     return;
+    // };
+    // let local_ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
+    // let remote_ip_address_type = data.get_value_type(Fields::IpRemoteAddress as usize);
 
-    if let ValueType::FwpByteArray16Type = local_ip_address_type {
-        if let ValueType::FwpByteArray16Type = remote_ip_address_type {
-            let key = Key {
-                protocol: get_protocol(&data, Fields::IpProtocol as usize),
-                local_address: get_ipv6_address(&data, Fields::IpLocalAddress as usize),
-                local_port: data.get_value_u16(Fields::IpLocalPort as usize),
-                remote_address: get_ipv6_address(&data, Fields::IpRemoteAddress as usize),
-                remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
-            };
+    // if let ValueType::FwpByteArray16Type = local_ip_address_type {
+    //     if let ValueType::FwpByteArray16Type = remote_ip_address_type {
+    //         let key = Key {
+    //             protocol: get_protocol(&data, Fields::IpProtocol as usize),
+    //             local_address: get_ipv6_address(&data, Fields::IpLocalAddress as usize),
+    //             local_port: data.get_value_u16(Fields::IpLocalPort as usize),
+    //             remote_address: get_ipv6_address(&data, Fields::IpRemoteAddress as usize),
+    //             remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
+    //         };
 
-            let conn = device.connection_cache.remove_connection_v6(key);
-            if let Some(conn) = conn {
-                let info = Box::new(ConnectionEndEventV6Info::new(
-                    data.get_process_id().unwrap_or(0),
-                    conn.extra.direction as u8,
-                    u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                    conn.local_address.0,
-                    conn.remote_address.0,
-                    conn.local_port,
-                    conn.remote_port,
-                ));
-                let _ = device.event_queue.push(info);
-            }
-        }
-    }
+    //         let conn = device.connection_cache.remove_connection_v6(key);
+    //         if let Some(conn) = conn {
+    //             let info = Box::new(ConnectionEndEventV6Info::new(
+    //                 data.get_process_id().unwrap_or(0),
+    //                 conn.direction as u8,
+    //                 u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
+    //                 conn.local_address.0,
+    //                 conn.remote_address.0,
+    //                 conn.local_port,
+    //                 conn.remote_port,
+    //             ));
+    //             let _ = device.event_queue.push(info);
+    //         }
+    //     }
+    // }
 }
 
 pub fn ale_resource_monitor(data: CalloutData) {
-    let Some(device) = crate::entry::get_device() else {
-        return;
-    };
-    match data.layer {
-        layer::Layer::AleResourceAssignmentV4 => {
-            type Fields = layer::FieldsAleResourceAssignmentV4;
-            info!(
-                device.logger,
-                "Port {}/{} Ipv4 assigned pid={}",
-                data.get_value_u16(Fields::IpLocalPort as usize),
-                get_protocol(&data, Fields::IpProtocol as usize),
-                data.get_process_id().unwrap_or(0),
-            );
-        }
-        layer::Layer::AleResourceAssignmentV6 => {
-            type Fields = layer::FieldsAleResourceAssignmentV6;
-            info!(
-                device.logger,
-                "Port {}/{} Ipv6 assigned pid={}",
-                data.get_value_u16(Fields::IpLocalPort as usize),
-                get_protocol(&data, Fields::IpProtocol as usize),
-                data.get_process_id().unwrap_or(0),
-            );
-        }
-        layer::Layer::AleResourceReleaseV4 => {
-            type Fields = layer::FieldsAleResourceReleaseV4;
-            if let Some(conns) = device.connection_cache.unregister_port_v4((
-                get_protocol(&data, Fields::IpProtocol as usize),
-                data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    device.logger,
-                    "Port {}/{} released pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
-                    get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = Box::new(ConnectionEndEventV4Info::new(
-                        process_id,
-                        conn.extra.direction as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
-                        conn.local_port,
-                        conn.remote_port,
-                    ));
-                    let _ = device.event_queue.push(info);
-                }
-            }
-        }
-        layer::Layer::AleResourceReleaseV6 => {
-            type Fields = layer::FieldsAleResourceReleaseV6;
-            if let Some(conns) = device.connection_cache.unregister_port_v6((
-                get_protocol(&data, Fields::IpProtocol as usize),
-                data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    device.logger,
-                    "Port {}/{} released pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
-                    get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = Box::new(ConnectionEndEventV6Info::new(
-                        process_id,
-                        conn.extra.direction as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
-                        conn.local_port,
-                        conn.remote_port,
-                    ));
-                    let _ = device.event_queue.push(info);
-                }
-            }
-        }
-        _ => {}
-    }
+    // let Some(device) = crate::entry::get_device() else {
+    //     return;
+    // };
+    // match data.layer {
+    //     layer::Layer::AleResourceAssignmentV4Discard => {
+    //         type Fields = layer::FieldsAleResourceAssignmentV4;
+    //         if let Some(conns) = device.connection_cache.unregister_port_v4((
+    //             get_protocol(&data, Fields::IpProtocol as usize),
+    //             data.get_value_u16(Fields::IpLocalPort as usize),
+    //         )) {
+    //             let process_id = data.get_process_id().unwrap_or(0);
+    //             info!(
+    //                 device.logger,
+    //                 "Port {}/{} Ipv4 assign request discarded pid={}",
+    //                 data.get_value_u16(Fields::IpLocalPort as usize),
+    //                 get_protocol(&data, Fields::IpProtocol as usize),
+    //                 process_id,
+    //             );
+    //             for conn in conns {
+    //                 let info = Box::new(ConnectionEndEventV4Info::new(
+    //                     process_id,
+    //                     conn.direction as u8,
+    //                     data.get_value_u8(Fields::IpProtocol as usize),
+    //                     conn.local_address.0,
+    //                     conn.remote_address.0,
+    //                     conn.local_port,
+    //                     conn.remote_port,
+    //                 ));
+    //                 let _ = device.event_queue.push(info);
+    //             }
+    //         }
+    //     }
+    //     layer::Layer::AleResourceAssignmentV6Discard => {
+    //         type Fields = layer::FieldsAleResourceAssignmentV6;
+    //         if let Some(conns) = device.connection_cache.unregister_port_v6((
+    //             get_protocol(&data, Fields::IpProtocol as usize),
+    //             data.get_value_u16(Fields::IpLocalPort as usize),
+    //         )) {
+    //             let process_id = data.get_process_id().unwrap_or(0);
+    //             info!(
+    //                 device.logger,
+    //                 "Port {}/{} Ipv6 assign request discarded pid={}",
+    //                 data.get_value_u16(Fields::IpLocalPort as usize),
+    //                 get_protocol(&data, Fields::IpProtocol as usize),
+    //                 process_id,
+    //             );
+    //             for conn in conns {
+    //                 let info = Box::new(ConnectionEndEventV6Info::new(
+    //                     process_id,
+    //                     conn.direction as u8,
+    //                     data.get_value_u8(Fields::IpProtocol as usize),
+    //                     conn.local_address.0,
+    //                     conn.remote_address.0,
+    //                     conn.local_port,
+    //                     conn.remote_port,
+    //                 ));
+    //                 let _ = device.event_queue.push(info);
+    //             }
+    //         }
+    //     }
+    //     layer::Layer::AleResourceReleaseV4 => {
+    //         type Fields = layer::FieldsAleResourceReleaseV4;
+    //         if let Some(conns) = device.connection_cache.unregister_port_v4((
+    //             get_protocol(&data, Fields::IpProtocol as usize),
+    //             data.get_value_u16(Fields::IpLocalPort as usize),
+    //         )) {
+    //             let process_id = data.get_process_id().unwrap_or(0);
+    //             info!(
+    //                 device.logger,
+    //                 "Port {}/{} released pid={}",
+    //                 data.get_value_u16(Fields::IpLocalPort as usize),
+    //                 get_protocol(&data, Fields::IpProtocol as usize),
+    //                 process_id,
+    //             );
+    //             for conn in conns {
+    //                 let info = Box::new(ConnectionEndEventV4Info::new(
+    //                     process_id,
+    //                     conn.direction as u8,
+    //                     data.get_value_u8(Fields::IpProtocol as usize),
+    //                     conn.local_address.0,
+    //                     conn.remote_address.0,
+    //                     conn.local_port,
+    //                     conn.remote_port,
+    //                 ));
+    //                 let _ = device.event_queue.push(info);
+    //             }
+    //         }
+    //     }
+    //     layer::Layer::AleResourceReleaseV6 => {
+    //         type Fields = layer::FieldsAleResourceReleaseV6;
+    //         if let Some(conns) = device.connection_cache.unregister_port_v6((
+    //             get_protocol(&data, Fields::IpProtocol as usize),
+    //             data.get_value_u16(Fields::IpLocalPort as usize),
+    //         )) {
+    //             let process_id = data.get_process_id().unwrap_or(0);
+    //             info!(
+    //                 device.logger,
+    //                 "Port {}/{} released pid={}",
+    //                 data.get_value_u16(Fields::IpLocalPort as usize),
+    //                 get_protocol(&data, Fields::IpProtocol as usize),
+    //                 process_id,
+    //             );
+    //             for conn in conns {
+    //                 let info = Box::new(ConnectionEndEventV6Info::new(
+    //                     process_id,
+    //                     conn.direction as u8,
+    //                     data.get_value_u8(Fields::IpProtocol as usize),
+    //                     conn.local_address.0,
+    //                     conn.remote_address.0,
+    //                     conn.local_port,
+    //                     conn.remote_port,
+    //                 ));
+    //                 let _ = device.event_queue.push(info);
+    //             }
+    //         }
+    //     }
+    //     _ => {}
+    // }
 }

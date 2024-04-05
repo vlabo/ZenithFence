@@ -5,27 +5,33 @@ use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::{
     driver::Driver,
-    filter_engine::{net_buffer::NetworkAllocator, packet::Injector, FilterEngine},
+    filter_engine::{
+        callout_data::ClassifyDefer,
+        net_buffer::{NetBufferList, NetworkAllocator},
+        packet::{InjectInfo, Injector, TransportPacketList},
+        FilterEngine,
+    },
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
 };
 
 use crate::{
-    array_holder::ArrayHolder,
-    bandwidth::Bandwidth,
-    callouts,
-    connection_cache::{ConnectionCache, Key},
-    dbg, err,
-    id_cache::IdCache,
-    logger::Logger,
+    array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection_cache::ConnectionCache,
+    connection_map::Key, dbg, err, id_cache::IdCache, logger::Logger, packet_util::Redirect,
 };
+
+pub enum Packet {
+    PacketLayer(NetBufferList, InjectInfo),
+    AleLayer(ClassifyDefer, Option<TransportPacketList>),
+    TransportPacketList(TransportPacketList),
+}
 
 // Device Context
 pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) event_queue: IOQueue<Box<dyn Info>>,
-    pub(crate) packet_cache: IdCache<Key>,
+    pub(crate) packet_cache: IdCache<(Key, Packet)>,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
@@ -130,7 +136,7 @@ impl Device {
         };
         buffer = &buffer[1..];
 
-        let mut classify_defer = None;
+        let mut _classify_defer = None;
 
         match command {
             CommandType::Shutdown => {
@@ -141,11 +147,39 @@ impl Device {
                 let verdict = protocol::command::parse_verdict(buffer);
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
-                if let Some(key) = self.packet_cache.pop_id(verdict.id) {
+                if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
                         dbg!(self.logger, "Verdict received {}: {}", key, verdict);
                         // Add verdict in the cache.
-                        classify_defer = self.connection_cache.update_connection(key, verdict);
+                        let redirect_info = self.connection_cache.update_connection(key, verdict);
+
+                        // if verdict.is_permanent() {
+                        //     dbg!(self.logger, "resetting filters {}: {}", key, verdict);
+                        //     _ = self.filter_engine.reset_all_filters();
+                        // }
+
+                        match verdict {
+                            crate::connection::Verdict::Accept
+                            | crate::connection::Verdict::PermanentAccept => {
+                                _ = self.inject_packet(packet, false);
+                            }
+                            crate::connection::Verdict::RedirectNameServer
+                            | crate::connection::Verdict::RedirectTunnel => {
+                                if let Some(redirect_info) = redirect_info {
+                                    if let Err(err) = packet.redirect(redirect_info) {
+                                        err!(self.logger, "failed to redirect packet: {}", err);
+                                    }
+                                    if let Err(err) = self.inject_packet(packet, false) {
+                                        err!(self.logger, "failed to inject packet: {}", err);
+                                    }
+                                }
+                            }
+                            _ => {
+                                if let Err(err) = self.inject_packet(packet, true) {
+                                    err!(self.logger, "failed to inject packet: {}", err);
+                                }
+                            }
+                        }
                     };
                 } else {
                     // Id was not in the packet cache.
@@ -164,7 +198,7 @@ impl Device {
                         update,
                         verdict
                     );
-                    classify_defer = self.connection_cache.update_connection(
+                    _classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),
                             local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
@@ -193,7 +227,7 @@ impl Device {
                         update,
                         verdict
                     );
-                    classify_defer = self.connection_cache.update_connection(
+                    _classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),
                             local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
@@ -268,27 +302,49 @@ impl Device {
         }
 
         // Check if connection was pended. If yes call complete to trigger the callout again.
-        if let Some(classify_defer) = classify_defer {
-            match classify_defer.complete(&mut self.filter_engine) {
-                Ok(packet_list) => {
-                    if let Some(packet_list) = packet_list {
-                        // Inject back all packets collected while classification was pending.
-                        let result = self.injector.inject_packet_list_transport(packet_list);
-                        if let Err(err) = result {
-                            err!(self.logger, "failed to inject packets: {}", err);
-                        }
-                    }
-                }
-                Err(err) => {
-                    err!(self.logger, "error completing connection decision: {}", err);
-                }
-            }
-        }
+        // if let Some(classify_defer) = classify_defer {
+        //     match classify_defer.complete(&mut self.filter_engine) {
+        //         Ok(packet_list) => {
+        //             if let Some(packet_list) = packet_list {
+        //                 // Inject back all packets collected while classification was pending.
+        //                 let result = self.injector.inject_packet_list_transport(packet_list);
+        //                 if let Err(err) = result {
+        //                     err!(self.logger, "failed to inject packets: {}", err);
+        //                 }
+        //             }
+        //         }
+        //         Err(err) => {
+        //             err!(self.logger, "error completing connection decision: {}", err);
+        //         }
+        //     }
+        // }
     }
 
     pub fn shutdown(&self) {
         // End blocking operations from the queue. This will end pending read requests.
         self.event_queue.rundown();
+    }
+
+    pub fn inject_packet(&mut self, packet: Packet, blocked: bool) -> Result<(), String> {
+        match packet {
+            Packet::PacketLayer(nbl, inject_info) => {
+                if !blocked {
+                    self.injector.inject_net_buffer_list(nbl, inject_info)
+                } else {
+                    Ok(())
+                }
+            }
+            Packet::AleLayer(defer, tpl) => {
+                // FIXME(vladimir): redirect before inject if needed
+                let _ = defer.complete(&mut self.filter_engine)?;
+                if let Some(packet_list) = tpl {
+                    self.injector.inject_packet_list_transport(packet_list)?;
+                }
+
+                return Ok(());
+            }
+            Packet::TransportPacketList(_) => todo!(),
+        }
     }
 }
 

@@ -175,6 +175,12 @@ impl<'a> CalloutData<'a> {
         }
     }
 
+    pub fn action_none(&mut self) {
+        unsafe {
+            (*self.classify_out).set_none();
+        }
+    }
+
     pub fn block_and_absorb(&mut self) {
         unsafe {
             (*self.classify_out).action_block();

@@ -16,6 +16,24 @@ const (
 	CommandPrintMemoryStats = 7
 )
 
+type KextVerdict uint8
+
+// Make sure this is in sync with the Rust version.
+const (
+	// VerdictUndecided is the default status of new connections.
+	VerdictUndecided           KextVerdict = 0
+	VerdictUndeterminable      KextVerdict = 1
+	VerdictAccept              KextVerdict = 2
+	VerdictPermanentAccept     KextVerdict = 3
+	VerdictBlock               KextVerdict = 4
+	VerdictPermanentBlock      KextVerdict = 5
+	VerdictDrop                KextVerdict = 6
+	VerdictPermanentDrop       KextVerdict = 7
+	VerdictRerouteToNameserver KextVerdict = 8
+	VerdictRerouteToTunnel     KextVerdict = 9
+	VerdictFailed              KextVerdict = 10
+)
+
 type Verdict struct {
 	command uint8
 	Id      uint64

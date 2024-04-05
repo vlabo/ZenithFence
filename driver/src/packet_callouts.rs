@@ -1,13 +1,20 @@
-use smoltcp::wire::{IpAddress, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN};
+use alloc::string::String;
+use smoltcp::wire::{IPV4_HEADER_LEN, IPV6_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
-use wdk::filter_engine::net_buffer::NetBufferListIter;
+use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
 use wdk::filter_engine::packet::InjectInfo;
 
-use crate::connection::{ConnectionV4, ConnectionV6, Direction, PM_DNS_PORT, PM_SPN_PORT};
+use crate::connection::{
+    Connection, ConnectionV4, ConnectionV6, Direction, RedirectInfo, Verdict, PM_DNS_PORT,
+    PM_SPN_PORT,
+};
+use crate::connection_cache::ConnectionCache;
+use crate::connection_map::Key;
+use crate::device::{Device, Packet};
 use crate::err;
 use crate::packet_util::{
-    get_key_from_nbl_v4, get_key_from_nbl_v6, redirect_inbound_packet, redirect_outbound_packet,
+    get_key_from_nbl_v4, get_key_from_nbl_v6, key_to_connection_info, Redirect,
 };
 
 // IP packet layers
@@ -67,6 +74,39 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
     );
 }
 
+struct ConnectionInfo {
+    verdict: Verdict,
+    process_id: u64,
+    redirect_info: Option<RedirectInfo>,
+}
+
+impl ConnectionInfo {
+    fn from_connection_v4(conn: &ConnectionV4) -> Self {
+        ConnectionInfo {
+            verdict: conn.verdict,
+            process_id: conn.process_id,
+            redirect_info: conn.redirect_info(),
+        }
+    }
+    fn from_connection_v6(conn: &ConnectionV6) -> Self {
+        ConnectionInfo {
+            verdict: conn.verdict,
+            process_id: conn.process_id,
+            redirect_info: conn.redirect_info(),
+        }
+    }
+}
+
+fn fast_track_pm_packets(key: &Key, direction: Direction) -> bool {
+    if let Direction::Outbound = direction {
+        if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
+            return key.local_address == key.remote_address;
+        }
+    }
+
+    return false;
+}
+
 fn ip_packet_layer(
     mut data: CalloutData,
     ipv6: bool,
@@ -74,8 +114,6 @@ fn ip_packet_layer(
     interface_index: u32,
     sub_interface_index: u32,
 ) {
-    // Set default action to drop.
-    data.block_and_absorb();
     let Some(device) = crate::entry::get_device() else {
         return;
     };
@@ -105,126 +143,155 @@ fn ip_packet_layer(
             get_key_from_nbl_v4(&nbl, direction)
         } {
             Ok(key) => key,
-            Err(_) => {
-                // Redirect for non TCP/UDP protocols is not supported.
-                data.action_permit();
+            Err(err) => {
+                err!(device.logger, "failed to get key from nbl: {}", err);
                 return;
             }
         };
-        struct ConnectionInfo {
-            local_address: IpAddress,
-            remote_address: IpAddress,
-            remote_port: u16,
-            redirect_port: u16,
-            unify: bool,
-        }
-        let redirect_address;
-        // Check if packet should be redirected.
-        let conn_info = if ipv6 {
-            redirect_address = IpAddress::Ipv6(Ipv6Address::LOOPBACK);
-            device.connection_cache.get_connection_redirect_v6(
-                &key,
-                |conn: &ConnectionV6| -> Option<ConnectionInfo> {
-                    // Function is is behind spin lock. Just copy and return.
-                    match conn.verdict {
-                        crate::connection::Verdict::RedirectNameServer => Some(ConnectionInfo {
-                            local_address: IpAddress::Ipv6(conn.local_address),
-                            remote_address: IpAddress::Ipv6(conn.remote_address),
-                            remote_port: conn.remote_port,
-                            redirect_port: PM_DNS_PORT,
-                            unify: false,
-                        }),
-                        crate::connection::Verdict::RedirectTunnel => Some(ConnectionInfo {
-                            local_address: IpAddress::Ipv6(conn.local_address),
-                            remote_address: IpAddress::Ipv6(conn.remote_address),
-                            remote_port: conn.remote_port,
-                            redirect_port: PM_SPN_PORT,
-                            unify: true,
-                        }),
-                        _ => None,
-                    }
-                },
-            )
-        } else {
-            redirect_address = IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1));
-            device.connection_cache.get_connection_redirect_v4(
-                &key,
-                |conn: &ConnectionV4| -> Option<ConnectionInfo> {
-                    // Function is is behind spin lock. Just copy and return.
-                    match conn.verdict {
-                        crate::connection::Verdict::RedirectNameServer => Some(ConnectionInfo {
-                            local_address: IpAddress::Ipv4(conn.local_address),
-                            remote_address: IpAddress::Ipv4(conn.remote_address),
-                            remote_port: conn.remote_port,
-                            redirect_port: PM_DNS_PORT,
-                            unify: false,
-                        }),
-                        crate::connection::Verdict::RedirectTunnel => Some(ConnectionInfo {
-                            local_address: IpAddress::Ipv4(conn.local_address),
-                            remote_address: IpAddress::Ipv4(conn.remote_address),
-                            remote_port: conn.remote_port,
-                            redirect_port: PM_SPN_PORT,
-                            unify: true,
-                        }),
-                        _ => None,
-                    }
-                },
-            )
-        };
 
+        if fast_track_pm_packets(&key, direction) {
+            data.action_permit();
+            return;
+        }
+
+        let mut is_tmp_verdict = false;
+
+        let mut conn_info =
+            get_or_create_connection_info(&mut device.connection_cache, &key, ipv6, direction);
         // Check if there is action for this connection.
-        if let Some(conn) = conn_info {
-            // Only redirects have custom behavior.
-            // Clone net buffer so it can be modified.
-            let mut clone = match nbl.clone(&device.network_allocator) {
-                Ok(clone) => clone,
+        match conn_info.verdict {
+            Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
+                is_tmp_verdict = true
+            }
+            Verdict::PermanentAccept => data.action_permit(),
+            Verdict::PermanentBlock => data.action_block(),
+            Verdict::Undeterminable | Verdict::PermanentDrop | Verdict::Failed => {
+                data.block_and_absorb()
+            }
+            Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
+                if let Some(redirect_info) = conn_info.redirect_info.take() {
+                    match clone_packet(
+                        device,
+                        nbl,
+                        direction,
+                        ipv6,
+                        key.is_loopback(),
+                        interface_index,
+                        sub_interface_index,
+                    ) {
+                        Ok(mut packet) => {
+                            let _ = packet.redirect(redirect_info);
+                            if let Err(err) = device.inject_packet(packet, false) {
+                                err!(device.logger, "failed to inject packet: {}", err);
+                            }
+                        }
+                        Err(err) => err!(device.logger, "failed to clone packet: {}", err),
+                    }
+                }
+
+                // This will block the original packet, not the injected. Even if injection failed.
+                data.block_and_absorb();
+                continue;
+            }
+        }
+
+        if is_tmp_verdict {
+            let packet = match clone_packet(
+                device,
+                nbl,
+                direction,
+                ipv6,
+                key.is_loopback(),
+                interface_index,
+                sub_interface_index,
+            ) {
+                Ok(p) => p,
                 Err(err) => {
-                    err!(device.logger, "failed to clone net buffer: {}", err);
+                    err!(device.logger, "failed to clone packet: {}", err);
                     return;
                 }
             };
 
-            // print_packet(&mut device.logger, &connection.in_packet_buffer);
-            let mut inbound = false;
-            match direction {
-                Direction::Outbound => {
-                    redirect_outbound_packet(
-                        clone.get_data_mut().unwrap(),
-                        redirect_address,
-                        conn.redirect_port,
-                        conn.unify,
-                    );
-                }
-                Direction::Inbound => {
-                    redirect_inbound_packet(
-                        clone.get_data_mut().unwrap(),
-                        conn.local_address,
-                        conn.remote_address,
-                        conn.remote_port,
-                    );
-                    inbound = true;
-                }
+            if conn_info.process_id == 0 {
+                crate::crit!(device.logger, "Process id was 0: {} {}", key, direction);
             }
-            let loopback = !conn.unify;
 
-            let result = device.injector.inject_net_buffer_list(
-                clone,
-                InjectInfo {
-                    ipv6,
-                    inbound,
-                    loopback,
-                    interface_index,
-                    sub_interface_index,
-                },
-            );
-
-            if let Err(err) = result {
-                err!(device.logger, "failed to inject net buffer: {}", err);
+            let packet_id = device.packet_cache.push((key, packet));
+            // Send to Portmaster
+            if let Some(info) =
+                key_to_connection_info(&key, packet_id, conn_info.process_id, direction)
+            {
+                let _ = device.event_queue.push(info);
             }
-        } else {
-            // No redirect action for packet.
-            data.action_permit();
-            return;
+            data.block_and_absorb();
         }
     }
+}
+
+fn clone_packet(
+    device: &mut Device,
+    nbl: NetBufferList,
+    direction: Direction,
+    ipv6: bool,
+    loopback: bool,
+    interface_index: u32,
+    sub_interface_index: u32,
+) -> Result<Packet, String> {
+    let clone = nbl.clone(&device.network_allocator)?;
+    let inbound = match direction {
+        Direction::Outbound => false,
+        Direction::Inbound => true,
+    };
+    Ok(Packet::PacketLayer(
+        clone,
+        InjectInfo {
+            ipv6,
+            inbound,
+            loopback,
+            interface_index,
+            sub_interface_index,
+        },
+    ))
+}
+
+fn get_or_create_connection_info(
+    connection_cache: &mut ConnectionCache,
+    key: &Key,
+    ipv6: bool,
+    direction: Direction,
+) -> ConnectionInfo {
+    if ipv6 {
+        let conn_info = connection_cache.read_connection_v6(
+            &key,
+            |conn: &ConnectionV6| -> Option<ConnectionInfo> {
+                // Function is is behind spin lock. Just copy and return.
+                Some(ConnectionInfo::from_connection_v6(conn))
+            },
+        );
+        if conn_info.is_some() {
+            return conn_info.unwrap();
+        }
+    } else {
+        let conn_info = connection_cache.read_connection_v4(
+            &key,
+            |conn: &ConnectionV4| -> Option<ConnectionInfo> {
+                // Function is is behind spin lock. Just copy and return.
+                Some(ConnectionInfo::from_connection_v4(conn))
+            },
+        );
+        if conn_info.is_some() {
+            return conn_info.unwrap();
+        }
+    }
+    let conn_info;
+    if key.is_ipv6() {
+        let conn = ConnectionV6::from_key(&key, 0, direction).unwrap();
+        conn_info = ConnectionInfo::from_connection_v6(&conn);
+        connection_cache.add_connection_v6(conn);
+    } else {
+        let conn = ConnectionV4::from_key(&key, 0, direction).unwrap();
+        conn_info = ConnectionInfo::from_connection_v4(&conn);
+        connection_cache.add_connection_v4(conn);
+    }
+    return conn_info;
 }

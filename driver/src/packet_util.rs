@@ -1,15 +1,53 @@
-use alloc::{
-    format,
-    string::{String, ToString},
-};
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
+use protocol::info::{ConnectionInfoV4, ConnectionInfoV6, Info};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 
-use crate::{connection::Direction, connection_cache::Key, dbg, err, logger::Logger};
+use crate::connection_map::Key;
+use crate::device::Packet;
+use crate::{
+    connection::{Direction, RedirectInfo},
+    dbg, err,
+    logger::Logger,
+};
 
-pub fn redirect_outbound_packet(
+pub trait Redirect {
+    fn redirect(&mut self, redirect_info: RedirectInfo) -> Result<(), String>;
+}
+
+impl Redirect for Packet {
+    fn redirect(&mut self, redirect_info: RedirectInfo) -> Result<(), String> {
+        if let Packet::PacketLayer(nbl, inject_info) = self {
+            let Some(data) = nbl.get_data_mut() else {
+                return Err("trying to redirect immutable NBL".to_string());
+            };
+
+            if inject_info.inbound {
+                redirect_inbound_packet(
+                    data,
+                    redirect_info.local_address,
+                    redirect_info.remote_address,
+                    redirect_info.remote_port,
+                )
+            } else {
+                redirect_outbound_packet(
+                    data,
+                    redirect_info.redirect_address,
+                    redirect_info.redirect_port,
+                    redirect_info.unify,
+                )
+            }
+            return Ok(());
+        }
+        // return Err("can't redirect from ale layer".to_string());
+        return Ok(());
+    }
+}
+
+fn redirect_outbound_packet(
     packet: &mut [u8],
     remote_address: IpAddress,
     remote_port: u16,
@@ -77,7 +115,7 @@ pub fn redirect_outbound_packet(
     }
 }
 
-pub fn redirect_inbound_packet(
+fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: IpAddress,
     original_remote_address: IpAddress,
@@ -170,43 +208,35 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
 
     // Parse packet
     let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let protocol;
-    let src_port;
-    let dst_port;
+    let mut src_port = 0;
+    let mut dst_port = 0;
     match ip_packet.next_header() {
         smoltcp::wire::IpProtocol::Tcp => {
             let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Tcp;
             src_port = tcp_packet.src_port();
             dst_port = tcp_packet.dst_port();
         }
         smoltcp::wire::IpProtocol::Udp => {
             let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Udp;
             src_port = udp_packet.src_port();
             dst_port = udp_packet.dst_port();
         }
-        protocol => {
-            return Err(format!(
-                "unsupported protocol: {} {} {}",
-                ip_packet.src_addr(),
-                ip_packet.dst_addr(),
-                protocol
-            ));
+        _ => {
+            // No ports for other protocols
         }
     };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol,
+            protocol: ip_packet.next_header(),
             local_address: IpAddress::Ipv4(ip_packet.src_addr()),
             local_port: src_port,
             remote_address: IpAddress::Ipv4(ip_packet.dst_addr()),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol,
+            protocol: ip_packet.next_header(),
             local_address: IpAddress::Ipv4(ip_packet.dst_addr()),
             local_port: dst_port,
             remote_address: IpAddress::Ipv4(ip_packet.src_addr()),
@@ -224,47 +254,93 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
 
     // Parse packet
     let ip_packet = Ipv6Packet::new_unchecked(&headers);
-    let protocol;
-    let src_port;
-    let dst_port;
+    let mut src_port = 0;
+    let mut dst_port = 0;
     match ip_packet.next_header() {
         smoltcp::wire::IpProtocol::Tcp => {
             let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV6_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Tcp;
             src_port = tcp_packet.src_port();
             dst_port = tcp_packet.dst_port();
         }
         smoltcp::wire::IpProtocol::Udp => {
             let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV6_HEADER_LEN..]);
-            protocol = smoltcp::wire::IpProtocol::Udp;
             src_port = udp_packet.src_port();
             dst_port = udp_packet.dst_port();
         }
-        protocol => {
-            return Err(format!(
-                "unsupported protocol: {} {} {}",
-                ip_packet.src_addr(),
-                ip_packet.dst_addr(),
-                protocol
-            ));
+        _ => {
+            // No ports for other protocols
         }
     };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol,
+            protocol: ip_packet.next_header(),
             local_address: IpAddress::Ipv6(ip_packet.src_addr()),
             local_port: src_port,
             remote_address: IpAddress::Ipv6(ip_packet.dst_addr()),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol,
+            protocol: ip_packet.next_header(),
             local_address: IpAddress::Ipv6(ip_packet.dst_addr()),
             local_port: dst_port,
             remote_address: IpAddress::Ipv6(ip_packet.src_addr()),
             remote_port: src_port,
         }),
+    }
+}
+
+pub fn key_to_connection_info(
+    key: &Key,
+    packet_id: u64,
+    process_id: u64,
+    direction: Direction,
+) -> Option<Box<dyn Info>> {
+    let mut local_port = 0;
+    let mut remote_port = 0;
+    match key.protocol {
+        IpProtocol::Tcp | IpProtocol::Udp => {
+            local_port = key.local_port;
+            remote_port = key.remote_port;
+        }
+        _ => {}
+    }
+    if key.is_ipv6() {
+        let IpAddress::Ipv6(local_ip) = key.local_address else {
+            return None;
+        };
+        let IpAddress::Ipv6(remote_ip) = key.remote_address else {
+            return None;
+        };
+
+        Some(Box::new(ConnectionInfoV6::new(
+            packet_id,
+            process_id,
+            direction as u8,
+            u8::from(key.protocol),
+            local_ip.0,
+            remote_ip.0,
+            local_port,
+            remote_port,
+        )))
+    } else {
+        let IpAddress::Ipv4(local_ip) = key.local_address else {
+            return None;
+        };
+        let IpAddress::Ipv4(remote_ip) = key.remote_address else {
+            return None;
+        };
+
+        Some(Box::new(ConnectionInfoV4::new(
+            packet_id,
+            process_id,
+            direction as u8,
+            u8::from(key.protocol),
+            local_ip.0,
+            remote_ip.0,
+            local_port,
+            remote_port,
+        )))
     }
 }
