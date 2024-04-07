@@ -11,7 +11,6 @@ use crate::device::Packet;
 use crate::{
     connection::{Direction, RedirectInfo},
     dbg, err,
-    logger::Logger,
 };
 
 pub trait Redirect {
@@ -178,24 +177,20 @@ fn redirect_inbound_packet(
 }
 
 #[allow(dead_code)]
-fn print_packet(logger: &mut Logger, packet: &[u8]) {
+fn print_packet(packet: &[u8]) {
     if let Ok(ip_packet) = Ipv4Packet::new_checked(packet) {
         if ip_packet.next_header() == IpProtocol::Udp {
             if let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) {
-                dbg!(logger, "packet {} {}", ip_packet, udp_packet);
+                dbg!("packet {} {}", ip_packet, udp_packet);
             }
         }
         if ip_packet.next_header() == IpProtocol::Tcp {
             if let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) {
-                dbg!(logger, "packet {} {}", ip_packet, tcp_packet);
+                dbg!("packet {} {}", ip_packet, tcp_packet);
             }
         }
     } else {
-        err!(
-            logger,
-            "failed to print packet: invalid ip header: {:?}",
-            packet
-        );
+        err!("failed to print packet: invalid ip header: {:?}", packet);
     }
 }
 

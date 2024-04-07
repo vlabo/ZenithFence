@@ -1,19 +1,17 @@
 use crate::connection::{ConnectionV4, ConnectionV6, Direction, Verdict};
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
-use crate::info;
+
 use crate::packet_util::key_to_connection_info;
 use alloc::boxed::Box;
-use protocol::info::{
-    ConnectionEndEventV4Info, ConnectionEndEventV6Info, ConnectionInfoV4, ConnectionInfoV6, Info,
-};
+use protocol::info::{ConnectionInfoV4, ConnectionInfoV6, Info};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{
-    self, FieldsAleAuthConnectV4, FieldsAleAuthConnectV6, FieldsAleAuthRecvAcceptV4,
-    FieldsAleAuthRecvAcceptV6, ValueType,
+    FieldsAleAuthConnectV4, FieldsAleAuthConnectV6, FieldsAleAuthRecvAcceptV4,
+    FieldsAleAuthRecvAcceptV6,
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 use wdk::filter_engine::packet::Injector;
@@ -210,7 +208,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     }
     let key = ale_data.as_key();
     if ale_data.process_id == 0 {
-        crate::crit!(device.logger, "ALE process id is 0: {}", key);
+        crate::crit!("ALE process id is 0: {}", key);
     }
 
     struct Info {
@@ -251,12 +249,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     if !ale_data.reauthorize && info.is_none() {
         // First packet of connection.
         // Pend and create postmaster request.
-        crate::dbg!(
-            device.logger,
-            "pending connection: {} {}",
-            key,
-            ale_data.direction
-        );
+        crate::dbg!("pending connection: {} {}", key, ale_data.direction);
         match save_packet(device, &mut data, &ale_data, true) {
             Ok(packet) => {
                 let packet_id = device.packet_cache.push((key, packet));
@@ -267,7 +260,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 }
             }
             Err(err) => {
-                crate::err!(device.logger, "failed to pend packet: {}", err);
+                crate::err!("failed to pend packet: {}", err);
             }
         };
 
@@ -279,15 +272,15 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                     data.action_permit();
                 }
                 Verdict::PermanentBlock | Verdict::Undeterminable => {
-                    crate::dbg!(device.logger, "permanent block {}", key);
+                    crate::dbg!("permanent block {}", key);
                     data.action_block();
                 }
                 Verdict::PermanentDrop => {
-                    crate::dbg!(device.logger, "permanent drop {}", key);
+                    crate::dbg!("permanent drop {}", key);
                     data.block_and_absorb();
                 }
                 Verdict::Undecided => {
-                    crate::dbg!(device.logger, "saving packet: {}", key);
+                    crate::dbg!("saving packet: {}", key);
                     match save_packet(device, &mut data, &ale_data, false) {
                         Ok(packet) => {
                             let packet_id = device.packet_cache.push((key, packet));
@@ -301,7 +294,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                             }
                         }
                         Err(err) => {
-                            crate::err!(device.logger, "failed to pend packet: {}", err);
+                            crate::err!("failed to pend packet: {}", err);
                         }
                     };
                 }
@@ -328,12 +321,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         return;
     }
     if info.is_none() {
-        crate::dbg!(
-            device.logger,
-            "adding connection: {} PID: {}",
-            key,
-            ale_data.process_id
-        );
+        crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
         if ale_data.is_ipv6 {
             let conn =
                 ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();

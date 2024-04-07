@@ -17,7 +17,7 @@ use wdk::{
 
 use crate::{
     array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection_cache::ConnectionCache,
-    connection_map::Key, dbg, err, id_cache::IdCache, logger::Logger, packet_util::Redirect,
+    connection_map::Key, dbg, err, id_cache::IdCache, logger, packet_util::Redirect,
 };
 
 pub enum Packet {
@@ -36,7 +36,6 @@ pub struct Device {
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
     pub(crate) bandwidth_stats: Bandwidth,
-    pub(crate) logger: Logger,
 }
 
 impl Device {
@@ -62,7 +61,6 @@ impl Device {
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
             bandwidth_stats: Bandwidth::new(),
-            logger: Logger::new(),
         })
     }
 
@@ -104,7 +102,7 @@ impl Device {
                 }
                 Err(err) => {
                     // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
-                    err!(self.logger, "failed to pop value: {}", err);
+                    err!("failed to pop value: {}", err);
                     read_request.end_of_file();
                     return;
                 }
@@ -131,7 +129,7 @@ impl Device {
         let mut buffer = write_request.get_buffer();
         let command = protocol::command::parse_type(buffer);
         let Some(command) = command else {
-            err!(self.logger, "Unknown command number: {}", buffer[0]);
+            err!("Unknown command number: {}", buffer[0]);
             return;
         };
         buffer = &buffer[1..];
@@ -149,7 +147,7 @@ impl Device {
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        dbg!(self.logger, "Verdict received {}: {}", key, verdict);
+                        dbg!("Verdict received {}: {}", key, verdict);
                         // Add verdict in the cache.
                         let redirect_info = self.connection_cache.update_connection(key, verdict);
 
@@ -167,16 +165,16 @@ impl Device {
                             | crate::connection::Verdict::RedirectTunnel => {
                                 if let Some(redirect_info) = redirect_info {
                                     if let Err(err) = packet.redirect(redirect_info) {
-                                        err!(self.logger, "failed to redirect packet: {}", err);
+                                        err!("failed to redirect packet: {}", err);
                                     }
                                     if let Err(err) = self.inject_packet(packet, false) {
-                                        err!(self.logger, "failed to inject packet: {}", err);
+                                        err!("failed to inject packet: {}", err);
                                     }
                                 }
                             }
                             _ => {
                                 if let Err(err) = self.inject_packet(packet, true) {
-                                    err!(self.logger, "failed to inject packet: {}", err);
+                                    err!("failed to inject packet: {}", err);
                                 }
                             }
                         }
@@ -184,7 +182,7 @@ impl Device {
                 } else {
                     // Id was not in the packet cache.
                     let id = verdict.id;
-                    err!(self.logger, "Verdict invalid id: {}", id);
+                    err!("Verdict invalid id: {}", id);
                 }
             }
             CommandType::UpdateV4 => {
@@ -192,12 +190,7 @@ impl Device {
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
-                    dbg!(
-                        self.logger,
-                        "Verdict update received {:?}: {}",
-                        update,
-                        verdict
-                    );
+                    dbg!("Verdict update received {:?}: {}", update, verdict);
                     _classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),
@@ -213,7 +206,7 @@ impl Device {
                         verdict,
                     );
                 } else {
-                    err!(self.logger, "invalid verdict value: {}", update.verdict);
+                    err!("invalid verdict value: {}", update.verdict);
                 }
             }
             CommandType::UpdateV6 => {
@@ -221,12 +214,7 @@ impl Device {
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
-                    dbg!(
-                        self.logger,
-                        "Verdict update received {:?}: {}",
-                        update,
-                        verdict
-                    );
+                    dbg!("Verdict update received {:?}: {}", update, verdict);
                     _classify_defer = self.connection_cache.update_connection(
                         Key {
                             protocol: IpProtocol::from(update.protocol),
@@ -242,19 +230,19 @@ impl Device {
                         verdict,
                     );
                 } else {
-                    err!(self.logger, "invalid verdict value: {}", update.verdict);
+                    err!("invalid verdict value: {}", update.verdict);
                 }
             }
             CommandType::ClearCache => {
                 wdk::dbg!("ClearCache command");
                 self.connection_cache.clear();
                 if let Err(err) = self.filter_engine.reset_all_filters() {
-                    err!(self.logger, "failed to reset filters: {}", err);
+                    err!("failed to reset filters: {}", err);
                 }
             }
             CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");
-                let lines_vec = self.logger.flush();
+                let lines_vec = logger::flush();
                 for line in lines_vec {
                     let _ = self.event_queue.push(line);
                 }
@@ -283,17 +271,14 @@ impl Device {
             }
             CommandType::PrintMemoryStats => {
                 dbg!(
-                    self.logger,
                     "Packet cache: {} entries",
                     self.packet_cache.get_entries_count()
                 );
                 dbg!(
-                    self.logger,
                     "BandwidthStats cache: {} entries",
                     self.bandwidth_stats.get_entries_count()
                 );
                 dbg!(
-                    self.logger,
                     "Connection cache: {} entries\n {}",
                     self.connection_cache.get_entries_count(),
                     self.connection_cache.get_full_cache_info()
@@ -350,6 +335,7 @@ impl Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
+        _ = logger::flush();
         // dbg!("Device Context drop called.");
     }
 }

@@ -144,7 +144,7 @@ fn ip_packet_layer(
         } {
             Ok(key) => key,
             Err(err) => {
-                err!(device.logger, "failed to get key from nbl: {}", err);
+                err!("failed to get key from nbl: {}", err);
                 return;
             }
         };
@@ -182,10 +182,10 @@ fn ip_packet_layer(
                         Ok(mut packet) => {
                             let _ = packet.redirect(redirect_info);
                             if let Err(err) = device.inject_packet(packet, false) {
-                                err!(device.logger, "failed to inject packet: {}", err);
+                                err!("failed to inject packet: {}", err);
                             }
                         }
-                        Err(err) => err!(device.logger, "failed to clone packet: {}", err),
+                        Err(err) => err!("failed to clone packet: {}", err),
                     }
                 }
 
@@ -207,13 +207,13 @@ fn ip_packet_layer(
             ) {
                 Ok(p) => p,
                 Err(err) => {
-                    err!(device.logger, "failed to clone packet: {}", err);
+                    err!("failed to clone packet: {}", err);
                     return;
                 }
             };
 
             if conn_info.process_id == 0 {
-                crate::crit!(device.logger, "Process id was 0: {} {}", key, direction);
+                crate::crit!("Process id was 0: {} {}", key, direction);
             }
 
             let packet_id = device.packet_cache.push((key, packet));
