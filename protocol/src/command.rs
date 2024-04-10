@@ -5,15 +5,17 @@ use num_traits::FromPrimitive;
 
 #[repr(u8)]
 #[derive(Clone, Copy, FromPrimitive)]
+#[rustfmt::skip]
 pub enum CommandType {
-    Shutdown,
-    Verdict,
-    UpdateV4,
-    UpdateV6,
-    ClearCache,
-    GetLogs,
-    GetBandwidthStats,
-    PrintMemoryStats,
+    Shutdown              = 0,
+    Verdict               = 1,
+    UpdateV4              = 2,
+    UpdateV6              = 3,
+    ClearCache            = 4,
+    GetLogs               = 5,
+    GetBandwidthStats     = 6,
+    PrintMemoryStats      = 7,
+    CleanEndedConnections = 8,
 }
 
 #[repr(C, packed)]
@@ -147,6 +149,7 @@ fn test_go_command_file() {
                 CommandType::GetLogs => {}
                 CommandType::GetBandwidthStats => {}
                 CommandType::PrintMemoryStats => {}
+                CommandType::CleanEndedConnections => {}
             }
         } else {
             panic!("Unknown command: {}", command[0]);

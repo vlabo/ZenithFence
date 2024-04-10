@@ -1,4 +1,4 @@
-use core::fmt::Display;
+use core::{fmt::Display, time::Duration};
 
 use crate::connection::Connection;
 use alloc::vec::Vec;
@@ -51,6 +51,7 @@ impl Key {
     }
 
     /// Returns a new key with the local and remote addresses and ports reversed.
+    #[allow(dead_code)]
     pub fn reverse(&self) -> Key {
         Key {
             protocol: self.protocol,
@@ -82,6 +83,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         if let Some(connections) = self.0.get_mut(&key.small()) {
             for conn in connections {
                 if conn.remote_equals(key) {
+                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     return Some(conn);
                 }
             }
@@ -94,9 +96,11 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         if let Some(connections) = self.0.get(&key.small()) {
             for conn in connections {
                 if conn.remote_equals(key) {
+                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     return read_connection(conn);
                 }
                 if conn.redirect_equals(key) {
+                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     return read_connection(conn);
                 }
             }
@@ -109,7 +113,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         if let Some(connections) = self.0.get_mut(&key.small()) {
             for (_, conn) in connections.iter_mut().enumerate() {
                 if conn.remote_equals(&key) {
-                    conn.end(wdk::utils::get_system_timestamp_mili());
+                    conn.end(wdk::utils::get_system_timestamp_ms());
                     return Some(conn.clone());
                 }
             }
@@ -122,7 +126,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
             let mut vec = Vec::with_capacity(connections.len());
             for (_, conn) in connections.iter_mut().enumerate() {
                 if !conn.has_ended() {
-                    conn.end(wdk::utils::get_system_timestamp_mili());
+                    conn.end(wdk::utils::get_system_timestamp_ms());
                     vec.push(conn.clone());
                 }
             }
@@ -135,10 +139,27 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         self.0.clear();
     }
 
-    /// Remove all connections that have ended before the given timestamp.
-    pub fn clean_ended_connections(&mut self, timestamp: u64) {
+    pub fn clean_ended_connections(&mut self) {
+        let now = wdk::utils::get_system_timestamp_ms();
+        const TEN_MINUETS: u64 = Duration::from_secs(60 * 10).as_millis() as u64;
+        let ten_minutes = now - TEN_MINUETS;
+        let one_minute = now - Duration::from_secs(60).as_millis() as u64;
+
         for (_, connections) in self.0.iter_mut() {
-            connections.retain(|c| !(c.has_ended() && c.get_end_time() > timestamp));
+            connections.retain(|c| {
+                if c.has_ended() && c.get_end_time() < one_minute {
+                    // Ended more than 1 minute ago
+                    return false;
+                }
+
+                if c.get_last_accessed_time() < ten_minutes {
+                    // Last active more than 10 minutes ago
+                    return false;
+                }
+
+                // Keep
+                return true;
+            });
         }
         self.0.retain(|_, v| !v.is_empty());
     }

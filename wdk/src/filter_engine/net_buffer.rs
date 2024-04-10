@@ -22,7 +22,6 @@ use crate::{
 
 pub struct NetBufferList {
     pub(crate) nbl: *mut NET_BUFFER_LIST,
-    owned: bool,
     data: Option<Vec<u8>>,
     advance_on_drop: Option<u32>,
 }
@@ -31,7 +30,6 @@ impl NetBufferList {
     pub fn new(nbl: *mut NET_BUFFER_LIST) -> NetBufferList {
         NetBufferList {
             nbl,
-            owned: false,
             data: None,
             advance_on_drop: None,
         }
@@ -104,7 +102,6 @@ impl NetBufferList {
 
                 return Ok(NetBufferList {
                     nbl: new_nbl,
-                    owned: true,
                     data: Some(buffer),
                     advance_on_drop: None,
                 });
@@ -115,19 +112,15 @@ impl NetBufferList {
     }
 
     pub fn get_data_mut(&mut self) -> Option<&mut [u8]> {
-        if self.owned {
-            if let Some(data) = &mut self.data {
-                return Some(data.as_mut_slice());
-            }
+        if let Some(data) = &mut self.data {
+            return Some(data.as_mut_slice());
         }
         return None;
     }
 
     pub fn get_data(&self) -> Option<&[u8]> {
-        if self.owned {
-            if let Some(data) = &self.data {
-                return Some(data.as_slice());
-            }
+        if let Some(data) = &self.data {
+            return Some(data.as_slice());
         }
         return None;
     }
@@ -184,7 +177,7 @@ impl Drop for NetBufferList {
         if let Some(advance_amount) = self.advance_on_drop {
             self.advance(advance_amount);
         }
-        if self.owned {
+        if self.data.is_some() {
             NetworkAllocator::free_net_buffer(self.nbl);
         }
     }
@@ -207,7 +200,6 @@ impl Iterator for NetBufferListIter {
                 self.0 = nbl.Header.next as _;
                 return Some(NetBufferList {
                     nbl,
-                    owned: false,
                     data: None,
                     advance_on_drop: None,
                 });

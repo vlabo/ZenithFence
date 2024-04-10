@@ -6,14 +6,15 @@ import (
 )
 
 const (
-	CommandShutdown         = 0
-	CommandVerdict          = 1
-	CommandUpdateV4         = 2
-	CommandUpdateV6         = 3
-	CommandClearCache       = 4
-	CommandGetLogs          = 5
-	CommandBandwidthStats   = 6
-	CommandPrintMemoryStats = 7
+	CommandShutdown              = 0
+	CommandVerdict               = 1
+	CommandUpdateV4              = 2
+	CommandUpdateV6              = 3
+	CommandClearCache            = 4
+	CommandGetLogs               = 5
+	CommandBandwidthStats        = 6
+	CommandPrintMemoryStats      = 7
+	CommandCleanEndedConnections = 8
 )
 
 type KextVerdict uint8
@@ -111,5 +112,10 @@ func SendGetBandwidthStatsCommand(writer io.Writer) error {
 
 func SendPrintMemoryStatsCommand(writer io.Writer) error {
 	_, err := writer.Write([]byte{CommandPrintMemoryStats})
+	return err
+}
+
+func SendCleanEndedConnectionsCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandCleanEndedConnections})
 	return err
 }

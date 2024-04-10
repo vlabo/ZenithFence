@@ -17,7 +17,7 @@ use wdk::{
 
 use crate::{
     array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection_cache::ConnectionCache,
-    connection_map::Key, dbg, err, id_cache::IdCache, logger, packet_util::Redirect,
+    connection_map::Key, dbg, err, id_cache::IdCache, info, logger, packet_util::Redirect,
 };
 
 pub enum Packet {
@@ -274,39 +274,25 @@ impl Device {
                 }
             }
             CommandType::PrintMemoryStats => {
-                dbg!(
+                info!(
                     "Packet cache: {} entries",
                     self.packet_cache.get_entries_count()
                 );
-                dbg!(
+                info!(
                     "BandwidthStats cache: {} entries",
                     self.bandwidth_stats.get_entries_count()
                 );
-                dbg!(
+                info!(
                     "Connection cache: {} entries\n {}",
                     self.connection_cache.get_entries_count(),
                     self.connection_cache.get_full_cache_info()
                 );
-            } // FIXME(vladimir): add command to clear old connections
+            }
+            CommandType::CleanEndedConnections => {
+                wdk::dbg!("CleanEndedConnections command");
+                self.connection_cache.clean_ended_connections();
+            }
         }
-
-        // Check if connection was pended. If yes call complete to trigger the callout again.
-        // if let Some(classify_defer) = classify_defer {
-        //     match classify_defer.complete(&mut self.filter_engine) {
-        //         Ok(packet_list) => {
-        //             if let Some(packet_list) = packet_list {
-        //                 // Inject back all packets collected while classification was pending.
-        //                 let result = self.injector.inject_packet_list_transport(packet_list);
-        //                 if let Err(err) = result {
-        //                     err!(self.logger, "failed to inject packets: {}", err);
-        //                 }
-        //             }
-        //         }
-        //         Err(err) => {
-        //             err!(self.logger, "error completing connection decision: {}", err);
-        //         }
-        //     }
-        // }
     }
 
     pub fn shutdown(&self) {

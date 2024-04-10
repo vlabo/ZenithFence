@@ -17,7 +17,7 @@ use wdk::filter_engine::layer::{
     FieldsAleAuthRecvAcceptV6, ValueType,
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
-use wdk::filter_engine::packet::Injector;
+use wdk::filter_engine::packet::{Injector, TransportPacketList};
 
 // ALE Layers
 
@@ -354,38 +354,14 @@ fn save_packet(
     let mut packet_list = None;
     match ale_data.protocol {
         IpProtocol::Tcp => {
-            // Does not contain payload
+            if let Direction::Inbound = ale_data.direction {
+                packet_list = create_packet_list(device, callout_data, ale_data);
+            }
         }
         _ => {
-            let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
-            let mut inbound = false;
-            if let Direction::Inbound = ale_data.direction {
-                if ale_data.is_ipv6 {
-                    nbl.retreat(IPV6_HEADER_LEN as u32, true);
-                } else {
-                    nbl.retreat(IPV4_HEADER_LEN as u32, true);
-                }
-                inbound = true;
-            }
-
-            let address: &[u8] = match &ale_data.remote_ip {
-                IpAddress::Ipv4(address) => &address.0,
-                IpAddress::Ipv6(address) => &address.0,
-            };
-            if let Ok(clone) = nbl.clone(&device.network_allocator) {
-                packet_list = Some(Injector::from_ale_callout(
-                    ale_data.is_ipv6,
-                    callout_data,
-                    clone,
-                    address,
-                    inbound,
-                    ale_data.interface_index,
-                    ale_data.sub_interface_index,
-                ));
-            }
+            packet_list = create_packet_list(device, callout_data, ale_data);
         }
     }
-
     if pend {
         match callout_data.pend_operation(None) {
             Ok(classify_defer) => return Ok(Packet::AleLayer(classify_defer, packet_list)),
@@ -397,6 +373,40 @@ fn save_packet(
     } else {
         Err("".into())
     }
+}
+
+fn create_packet_list(
+    device: &Device,
+    callout_data: &mut CalloutData,
+    ale_data: &AleLayerData,
+) -> Option<TransportPacketList> {
+    let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
+    let mut inbound = false;
+    if let Direction::Inbound = ale_data.direction {
+        if ale_data.is_ipv6 {
+            nbl.retreat(IPV6_HEADER_LEN as u32, true);
+        } else {
+            nbl.retreat(IPV4_HEADER_LEN as u32, true);
+        }
+        inbound = true;
+    }
+
+    let address: &[u8] = match &ale_data.remote_ip {
+        IpAddress::Ipv4(address) => &address.0,
+        IpAddress::Ipv6(address) => &address.0,
+    };
+    if let Ok(clone) = nbl.clone(&device.network_allocator) {
+        return Some(Injector::from_ale_callout(
+            ale_data.is_ipv6,
+            callout_data,
+            clone,
+            address,
+            inbound,
+            ale_data.interface_index,
+            ale_data.sub_interface_index,
+        ));
+    }
+    return None;
 }
 
 pub fn endpoint_closure_v4(data: CalloutData) {

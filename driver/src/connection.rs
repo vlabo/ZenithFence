@@ -2,7 +2,10 @@ use alloc::{
     boxed::Box,
     string::{String, ToString},
 };
-use core::fmt::{Debug, Display};
+use core::{
+    fmt::{Debug, Display},
+    sync::atomic::{AtomicU64, Ordering},
+};
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
@@ -93,7 +96,6 @@ impl Debug for Direction {
 
 #[derive(Clone)]
 pub struct ConnectionExtra {
-    // pub(crate) start_timestamp: u64,
     pub(crate) end_timestamp: u64,
     pub(crate) direction: Direction,
 }
@@ -164,10 +166,14 @@ pub trait Connection {
     fn has_ended(&self) -> bool {
         self.get_end_time() > 0
     }
+    /// Returns the timestamp when the connection ended.
     fn get_end_time(&self) -> u64;
+    /// Returns the timestamp when the connection was last accessed.
+    fn get_last_accessed_time(&self) -> u64;
+    /// Sets the timestamp when the connection was last accessed.
+    fn set_last_accessed_time(&self, timestamp: u64);
 }
 
-#[derive(Clone)]
 pub struct ConnectionV4 {
     pub(crate) protocol: IpProtocol,
     pub(crate) local_address: Ipv4Address,
@@ -176,10 +182,10 @@ pub struct ConnectionV4 {
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
     pub(crate) process_id: u64,
+    pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) extra: Box<ConnectionExtra>,
 }
 
-#[derive(Clone)]
 pub struct ConnectionV6 {
     pub(crate) protocol: IpProtocol,
     pub(crate) local_address: Ipv6Address,
@@ -188,6 +194,7 @@ pub struct ConnectionV6 {
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
     pub(crate) process_id: u64,
+    pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) extra: Box<ConnectionExtra>,
 }
 
@@ -212,6 +219,8 @@ impl ConnectionV4 {
             return Err("wrong ip address version".to_string());
         };
 
+        let timestamp = wdk::utils::get_system_timestamp_ms();
+
         Ok(Self {
             protocol: key.protocol,
             local_address,
@@ -220,9 +229,9 @@ impl ConnectionV4 {
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
             process_id,
+            last_accessed_timestamp: AtomicU64::new(timestamp),
             extra: Box::new(ConnectionExtra {
                 direction,
-                // start_timestamp: wdk::utils::get_system_timestamp(),
                 end_timestamp: 0,
             }),
         })
@@ -311,7 +320,35 @@ impl Connection for ConnectionV4 {
     fn get_end_time(&self) -> u64 {
         self.extra.end_timestamp
     }
+
+    fn get_last_accessed_time(&self) -> u64 {
+        self.last_accessed_timestamp.load(Ordering::Relaxed)
+    }
+
+    fn set_last_accessed_time(&self, timestamp: u64) {
+        self.last_accessed_timestamp
+            .store(timestamp, Ordering::Relaxed);
+    }
 }
+
+impl Clone for ConnectionV4 {
+    fn clone(&self) -> Self {
+        Self {
+            protocol: self.protocol,
+            local_address: self.local_address,
+            local_port: self.local_port,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
+            verdict: self.verdict,
+            process_id: self.process_id,
+            last_accessed_timestamp: AtomicU64::new(
+                self.last_accessed_timestamp.load(Ordering::Relaxed),
+            ),
+            extra: self.extra.clone(),
+        }
+    }
+}
+
 impl ConnectionV6 {
     /// Creates a new ipv6 connection from the given key.
     pub fn from_key(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
@@ -322,6 +359,7 @@ impl ConnectionV6 {
         let IpAddress::Ipv6(remote_address) = key.remote_address else {
             return Err("wrong ip address version".to_string());
         };
+        let timestamp = wdk::utils::get_system_timestamp_ms();
 
         Ok(Self {
             protocol: key.protocol,
@@ -331,9 +369,9 @@ impl ConnectionV6 {
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
             process_id,
+            last_accessed_timestamp: AtomicU64::new(timestamp),
             extra: Box::new(ConnectionExtra {
                 direction,
-                // start_timestamp: wdk::utils::get_system_timestamp(),
                 end_timestamp: 0,
             }),
         })
@@ -420,5 +458,32 @@ impl Connection for ConnectionV6 {
 
     fn get_end_time(&self) -> u64 {
         self.extra.end_timestamp
+    }
+
+    fn get_last_accessed_time(&self) -> u64 {
+        self.last_accessed_timestamp.load(Ordering::Relaxed)
+    }
+
+    fn set_last_accessed_time(&self, timestamp: u64) {
+        self.last_accessed_timestamp
+            .store(timestamp, Ordering::Relaxed);
+    }
+}
+
+impl Clone for ConnectionV6 {
+    fn clone(&self) -> Self {
+        Self {
+            protocol: self.protocol,
+            local_address: self.local_address,
+            local_port: self.local_port,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
+            verdict: self.verdict,
+            process_id: self.process_id,
+            last_accessed_timestamp: AtomicU64::new(
+                self.last_accessed_timestamp.load(Ordering::Relaxed),
+            ),
+            extra: self.extra.clone(),
+        }
     }
 }

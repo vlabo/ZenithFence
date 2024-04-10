@@ -16,6 +16,7 @@ pub fn check_ntstatus(status: i32) -> Result<(), String> {
     return Err(status.to_string());
 }
 
-pub fn get_system_timestamp_mili() -> u64 {
-    unsafe { ffi::pm_QuerySystemTime() / 10 }
+pub fn get_system_timestamp_ms() -> u64 {
+    // 100 nano seconds units -> device by 10 -> micro seconds -> divide by 1000 -> milliseconds
+    unsafe { ffi::pm_QuerySystemTime() / 10_000 }
 }

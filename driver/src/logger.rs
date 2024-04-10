@@ -11,7 +11,7 @@ use protocol::info::{LogLine, Severity};
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 #[cfg(debug_assertions)]
-pub const LOG_LEVEL: u8 = Severity::Debug as u8;
+pub const LOG_LEVEL: u8 = Severity::Info as u8;
 
 static mut LOG_LINES: [AtomicPtr<LogLine>; 1024] = unsafe { MaybeUninit::zeroed().assume_init() };
 static START_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
