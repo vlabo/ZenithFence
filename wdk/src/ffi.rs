@@ -528,4 +528,8 @@ extern "C" {
         FreeMdl: bool,
         FreeMdlHandler: *mut c_void,
     );
+
+    /// The KeQuerySystemTime routine obtains the current system time.
+    /// System time is a count of 100-nanosecond intervals since January 1, 1601. System time is typically updated approximately every ten milliseconds. This value is computed for the GMT time zone.
+    pub(crate) fn pm_QuerySystemTime() -> u64;
 }

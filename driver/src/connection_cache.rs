@@ -34,20 +34,6 @@ impl ConnectionCache {
         self.connections_v6.add(connection);
     }
 
-    pub fn set_process_id(&mut self, key: &Key, process_id: u64) {
-        if key.is_ipv6() {
-            let _guard = self.lock_v6.write_lock();
-            if let Some(conn) = self.connections_v6.get_mut(key) {
-                conn.process_id = process_id;
-            }
-        } else {
-            let _guard = self.lock_v4.write_lock();
-            if let Some(conn) = self.connections_v4.get_mut(key) {
-                conn.process_id = process_id;
-            }
-        }
-    }
-
     pub fn update_connection(&mut self, key: Key, verdict: Verdict) -> Option<RedirectInfo> {
         if key.is_ipv6() {
             let _guard = self.lock_v6.write_lock();
@@ -83,24 +69,40 @@ impl ConnectionCache {
         self.connections_v6.read(&key, process_connection)
     }
 
-    pub fn remove_connection_v4(&mut self, key: Key) -> Option<ConnectionV4> {
+    pub fn end_connection_v4(&mut self, key: Key) -> Option<ConnectionV4> {
         let _guard = self.lock_v4.write_lock();
-        self.connections_v4.remove(key)
+        self.connections_v4.end(key)
     }
 
-    pub fn remove_connection_v6(&mut self, key: Key) -> Option<ConnectionV6> {
+    pub fn end_connection_v6(&mut self, key: Key) -> Option<ConnectionV6> {
         let _guard = self.lock_v6.write_lock();
-        self.connections_v6.remove(key)
+        self.connections_v6.end(key)
     }
 
-    pub fn unregister_port_v4(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV4>> {
+    pub fn end_all_on_port_v4(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV4>> {
         let _guard = self.lock_v4.write_lock();
-        self.connections_v4.remove_port(key)
+        self.connections_v4.end_all_on_port(key)
     }
 
-    pub fn unregister_port_v6(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV6>> {
+    pub fn end_all_on_port_v6(&mut self, key: (IpProtocol, u16)) -> Option<Vec<ConnectionV6>> {
         let _guard = self.lock_v6.write_lock();
-        self.connections_v6.remove_port(key)
+        self.connections_v6.end_all_on_port(key)
+    }
+
+    /// Clean all connections that are in the `ended` + 10 minutes after that state.
+    pub fn clean_ended_connections(&mut self) {
+        const TEN_MINUETS: u64 = 10 * 60 * 1000;
+        let before_ten_minutes = wdk::utils::get_system_timestamp_mili() - TEN_MINUETS;
+        {
+            let _guard = self.lock_v4.write_lock();
+            self.connections_v4
+                .clean_ended_connections(before_ten_minutes);
+        }
+        {
+            let _guard = self.lock_v6.write_lock();
+            self.connections_v6
+                .clean_ended_connections(before_ten_minutes);
+        }
     }
 
     pub fn clear(&mut self) {

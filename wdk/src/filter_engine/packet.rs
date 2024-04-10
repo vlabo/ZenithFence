@@ -287,6 +287,24 @@ impl Injector {
             }
         }
     }
+
+    pub fn was_network_packet_injected_by_self_ale(&self, nbl: *const NET_BUFFER_LIST) -> bool {
+        unsafe {
+            let state = FwpsQueryPacketInjectionState0(
+                self.transport_inject_handle,
+                nbl,
+                core::ptr::null_mut(),
+            );
+
+            match state {
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_NOT_INJECTED => false,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_OTHER => false,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTION_STATE_MAX => false,
+            }
+        }
+    }
 }
 
 impl Drop for Injector {

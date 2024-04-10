@@ -13,7 +13,21 @@ use crate::{
     dbg, err,
 };
 
+/// `Redirect` is a trait that defines a method for redirecting network packets.
+///
+/// This trait is used to implement different strategies for redirecting packets,
+/// depending on the specific requirements of the application.
 pub trait Redirect {
+    /// Redirects a network packet based on the provided `RedirectInfo`.
+    ///
+    /// # Arguments
+    ///
+    /// * `redirect_info` - A struct containing information about how to redirect the packet.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the packet was successfully redirected.
+    /// * `Err(String)` if there was an error redirecting the packet.
     fn redirect(&mut self, redirect_info: RedirectInfo) -> Result<(), String>;
 }
 
@@ -41,11 +55,24 @@ impl Redirect for Packet {
             }
             return Ok(());
         }
-        // return Err("can't redirect from ale layer".to_string());
+        // return Err("can't redirect from non packet layer".to_string());
         return Ok(());
     }
 }
 
+/// Redirects an outbound packet to a specified remote address and port.
+///
+/// # Arguments
+///
+/// * `packet` - A mutable reference to the packet data.
+/// * `remote_address` - The IP address to redirect the packet to.
+/// * `remote_port` - The port to redirect the packet to.
+/// * `unify` - If true, the source and destination addresses of the packet will be set to the same value.
+///
+/// This function modifies the packet in-place to change its destination address and port.
+/// It also updates the checksums for the IP and transport layer headers.
+/// If the `unify` parameter is true, it sets the source and destination addresses to be the same.
+/// If the remote address is a loopback address, it sets the source address to the loopback address.
 fn redirect_outbound_packet(
     packet: &mut [u8],
     remote_address: IpAddress,
@@ -114,6 +141,20 @@ fn redirect_outbound_packet(
     }
 }
 
+/// Redirects an inbound packet to a local address.
+///
+/// This function takes a mutable reference to a packet and modifies it in place.
+/// It changes the destination address to the provided local address and the source address
+/// to the original remote address. It also sets the source port to the original remote port.
+/// The function handles both IPv4 and IPv6 addresses.
+///
+/// # Arguments
+///
+/// * `packet` - A mutable reference to the packet data.
+/// * `local_address` - The local IP address to redirect the packet to.
+/// * `original_remote_address` - The original remote IP address of the packet.
+/// * `original_remote_port` - The original remote port of the packet.
+///
 fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: IpAddress,
@@ -194,32 +235,47 @@ fn print_packet(packet: &[u8]) {
     }
 }
 
+/// This function extracts a key from a given IPv4 network buffer list (NBL).
+/// The key contains the protocol, local and remote addresses and ports.
+///
+/// # Arguments
+///
+/// * `nbl` - A reference to the network buffer list from which the key will be extracted.
+/// * `direction` - The direction of the packet (Inbound or Outbound).
+///
+/// # Returns
+///
+/// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
+/// * `Err(String)` - An error message if the function fails to get net_buffer data.
+const HEADERS_LEN: usize = smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN;
+
+fn get_ports(packet: &[u8], protocol: smoltcp::wire::IpProtocol) -> (u16, u16) {
+    match protocol {
+        smoltcp::wire::IpProtocol::Tcp => {
+            let tcp_packet = TcpPacket::new_unchecked(packet);
+            (tcp_packet.src_port(), tcp_packet.dst_port())
+        }
+        smoltcp::wire::IpProtocol::Udp => {
+            let udp_packet = UdpPacket::new_unchecked(packet);
+            (udp_packet.src_port(), udp_packet.dst_port())
+        }
+        _ => (0, 0), // No ports for other protocols
+    }
+}
+
 pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
     // Get bytes
-    let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
-    let Ok(()) = nbl.read_bytes(&mut headers) else {
+    let mut headers = [0; HEADERS_LEN];
+    if nbl.read_bytes(&mut headers).is_err() {
         return Err("failed to get net_buffer data".to_string());
-    };
+    }
 
     // Parse packet
     let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let mut src_port = 0;
-    let mut dst_port = 0;
-    match ip_packet.next_header() {
-        smoltcp::wire::IpProtocol::Tcp => {
-            let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            src_port = tcp_packet.src_port();
-            dst_port = tcp_packet.dst_port();
-        }
-        smoltcp::wire::IpProtocol::Udp => {
-            let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV4_HEADER_LEN..]);
-            src_port = udp_packet.src_port();
-            dst_port = udp_packet.dst_port();
-        }
-        _ => {
-            // No ports for other protocols
-        }
-    };
+    let (src_port, dst_port) = get_ports(
+        &headers[smoltcp::wire::IPV4_HEADER_LEN..],
+        ip_packet.next_header(),
+    );
 
     // Build key
     match direction {
@@ -240,32 +296,30 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
     }
 }
 
+/// This function extracts a key from a given IPv6 network buffer list (NBL).
+/// The key contains the protocol, local and remote addresses and ports.
+///
+/// # Arguments
+///
+/// * `nbl` - A reference to the network buffer list from which the key will be extracted.
+/// * `direction` - The direction of the packet (Inbound or Outbound).
+///
+/// # Returns
+///
+/// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
+/// * `Err(String)` - An error message if the function fails to get net_buffer data.
 pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
     // Get bytes
     let mut headers = [0; smoltcp::wire::IPV6_HEADER_LEN + smoltcp::wire::TCP_HEADER_LEN];
     let Ok(()) = nbl.read_bytes(&mut headers) else {
         return Err("failed to get net_buffer data".to_string());
     };
-
     // Parse packet
     let ip_packet = Ipv6Packet::new_unchecked(&headers);
-    let mut src_port = 0;
-    let mut dst_port = 0;
-    match ip_packet.next_header() {
-        smoltcp::wire::IpProtocol::Tcp => {
-            let tcp_packet = TcpPacket::new_unchecked(&headers[smoltcp::wire::IPV6_HEADER_LEN..]);
-            src_port = tcp_packet.src_port();
-            dst_port = tcp_packet.dst_port();
-        }
-        smoltcp::wire::IpProtocol::Udp => {
-            let udp_packet = UdpPacket::new_unchecked(&headers[smoltcp::wire::IPV6_HEADER_LEN..]);
-            src_port = udp_packet.src_port();
-            dst_port = udp_packet.dst_port();
-        }
-        _ => {
-            // No ports for other protocols
-        }
-    };
+    let (src_port, dst_port) = get_ports(
+        &headers[smoltcp::wire::IPV4_HEADER_LEN..],
+        ip_packet.next_header(),
+    );
 
     // Build key
     match direction {
@@ -286,56 +340,59 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
     }
 }
 
+/// Converts a given key into connection information.
+///
+/// This function takes a key, packet id, process id, and direction as input.
+/// It then uses these to create a new `ConnectionInfoV6` or `ConnectionInfoV4` object,
+/// depending on whether the IP addresses in the key are IPv6 or IPv4 respectively.
+///
+/// # Arguments
+///
+/// * `key` - A reference to the key object containing the connection details.
+/// * `packet_id` - The id of the packet.
+/// * `process_id` - The id of the process.
+/// * `direction` - The direction of the connection.
+///
+/// # Returns
+///
+/// * `Some(Box<dyn Info>)` - A boxed `Info` trait object if the key contains valid IPv4 or IPv6 addresses.
+/// * `None` - If the key does not contain valid IPv4 or IPv6 addresses.
 pub fn key_to_connection_info(
     key: &Key,
     packet_id: u64,
     process_id: u64,
     direction: Direction,
 ) -> Option<Box<dyn Info>> {
-    let mut local_port = 0;
-    let mut remote_port = 0;
-    match key.protocol {
-        IpProtocol::Tcp | IpProtocol::Udp => {
-            local_port = key.local_port;
-            remote_port = key.remote_port;
+    let (local_port, remote_port) = match key.protocol {
+        IpProtocol::Tcp | IpProtocol::Udp => (key.local_port, key.remote_port),
+        _ => (0, 0),
+    };
+
+    match (key.local_address, key.remote_address) {
+        (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
+            Some(Box::new(ConnectionInfoV6::new(
+                packet_id,
+                process_id,
+                direction as u8,
+                u8::from(key.protocol),
+                local_ip.0,
+                remote_ip.0,
+                local_port,
+                remote_port,
+            )))
         }
-        _ => {}
-    }
-    if key.is_ipv6() {
-        let IpAddress::Ipv6(local_ip) = key.local_address else {
-            return None;
-        };
-        let IpAddress::Ipv6(remote_ip) = key.remote_address else {
-            return None;
-        };
-
-        Some(Box::new(ConnectionInfoV6::new(
-            packet_id,
-            process_id,
-            direction as u8,
-            u8::from(key.protocol),
-            local_ip.0,
-            remote_ip.0,
-            local_port,
-            remote_port,
-        )))
-    } else {
-        let IpAddress::Ipv4(local_ip) = key.local_address else {
-            return None;
-        };
-        let IpAddress::Ipv4(remote_ip) = key.remote_address else {
-            return None;
-        };
-
-        Some(Box::new(ConnectionInfoV4::new(
-            packet_id,
-            process_id,
-            direction as u8,
-            u8::from(key.protocol),
-            local_ip.0,
-            remote_ip.0,
-            local_port,
-            remote_port,
-        )))
+        (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
+            Some(Box::new(ConnectionInfoV4::new(
+                packet_id,
+                process_id,
+                direction as u8,
+                u8::from(key.protocol),
+                local_ip.0,
+                remote_ip.0,
+                local_port,
+                remote_port,
+            )))
+        }
+        _ => None,
     }
 }

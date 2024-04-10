@@ -29,10 +29,12 @@ impl Display for Key {
 }
 
 impl Key {
+    /// Returns the protocol and port as a tuple.
     pub fn small(&self) -> (IpProtocol, u16) {
         (self.protocol, self.local_port)
     }
 
+    /// Returns true if the local address is an IPv4 address.
     pub fn is_ipv6(&self) -> bool {
         match self.local_address {
             IpAddress::Ipv4(_) => false,
@@ -40,17 +42,29 @@ impl Key {
         }
     }
 
+    /// Returns true if the local address is a loopback address.
     pub fn is_loopback(&self) -> bool {
         match self.local_address {
             IpAddress::Ipv4(ip) => ip.is_loopback(),
             IpAddress::Ipv6(ip) => ip.is_loopback(),
         }
     }
+
+    /// Returns a new key with the local and remote addresses and ports reversed.
+    pub fn reverse(&self) -> Key {
+        Key {
+            protocol: self.protocol,
+            local_address: self.remote_address,
+            local_port: self.remote_port,
+            remote_address: self.local_address,
+            remote_port: self.local_port,
+        }
+    }
 }
 
 pub struct ConnectionMap<T: Connection>(HashMap<(IpProtocol, u16), Vec<T>>);
 
-impl<T: Connection> ConnectionMap<T> {
+impl<T: Connection + Clone> ConnectionMap<T> {
     pub fn new() -> Self {
         Self(HashMap::new())
     }
@@ -91,38 +105,42 @@ impl<T: Connection> ConnectionMap<T> {
         None
     }
 
-    pub fn remove(&mut self, key: Key) -> Option<T> {
-        let mut index = None;
-        let mut conn = None;
-        let mut delete = false;
+    pub fn end(&mut self, key: Key) -> Option<T> {
         if let Some(connections) = self.0.get_mut(&key.small()) {
-            for (i, conn) in connections.iter().enumerate() {
+            for (_, conn) in connections.iter_mut().enumerate() {
                 if conn.remote_equals(&key) {
-                    index = Some(i);
-                    break;
+                    conn.end(wdk::utils::get_system_timestamp_mili());
+                    return Some(conn.clone());
                 }
             }
-            if let Some(index) = index {
-                conn = Some(connections.remove(index));
-            }
-
-            if connections.is_empty() {
-                delete = true;
-            }
         }
-        if delete {
-            self.0.remove(&key.small());
-        }
-
-        return conn;
+        return None;
     }
 
-    pub fn remove_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<T>> {
-        self.0.remove(&key)
+    pub fn end_all_on_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<T>> {
+        if let Some(connections) = self.0.get_mut(&key) {
+            let mut vec = Vec::with_capacity(connections.len());
+            for (_, conn) in connections.iter_mut().enumerate() {
+                if !conn.has_ended() {
+                    conn.end(wdk::utils::get_system_timestamp_mili());
+                    vec.push(conn.clone());
+                }
+            }
+            return Some(vec);
+        }
+        return None;
     }
 
     pub fn clear(&mut self) {
         self.0.clear();
+    }
+
+    /// Remove all connections that have ended before the given timestamp.
+    pub fn clean_ended_connections(&mut self, timestamp: u64) {
+        for (_, connections) in self.0.iter_mut() {
+            connections.retain(|c| !(c.has_ended() && c.get_end_time() > timestamp));
+        }
+        self.0.retain(|_, v| !v.is_empty());
     }
 
     pub fn get_count(&self) -> usize {

@@ -81,3 +81,9 @@ void* pm_WdfObjectGetTypedContextWorker(WDFOBJECT wdfObject, PCWDF_OBJECT_CONTEX
 DEVICE_OBJECT* pm_GetDeviceObject(WDFDEVICE device) {
     return WdfDeviceWdmGetDeviceObject(device);
 }
+
+UINT64 pm_QuerySystemTime() {
+	UINT64 timestamp = 0;
+	KeQuerySystemTime(&timestamp);
+	return timestamp;
+}

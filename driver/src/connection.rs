@@ -1,4 +1,7 @@
-use alloc::string::{String, ToString};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+};
 use core::fmt::{Debug, Display};
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
@@ -47,22 +50,25 @@ impl Display for Verdict {
 
 #[allow(dead_code)]
 impl Verdict {
+    /// Returns true if the verdict is a redirect.
     pub fn is_redirect(&self) -> bool {
         matches!(self, Verdict::RedirectNameServer | Verdict::RedirectTunnel)
     }
 
+    /// Returns true if the verdict is a permanent verdict.
     pub fn is_permanent(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Verdict::PermanentAccept
-            | Verdict::PermanentBlock
-            | Verdict::PermanentDrop
-            | Verdict::RedirectNameServer
-            | Verdict::RedirectTunnel => true,
-            _ => false,
-        }
+                | Verdict::PermanentBlock
+                | Verdict::PermanentDrop
+                | Verdict::RedirectNameServer
+                | Verdict::RedirectTunnel
+        )
     }
 }
 
+/// Direction of the connection.
 #[derive(Copy, Clone, FromPrimitive)]
 #[repr(u8)]
 pub enum Direction {
@@ -83,6 +89,13 @@ impl Debug for Direction {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self)
     }
+}
+
+#[derive(Clone)]
+pub struct ConnectionExtra {
+    // pub(crate) start_timestamp: u64,
+    pub(crate) end_timestamp: u64,
+    pub(crate) direction: Direction,
 }
 
 pub trait Connection {
@@ -114,6 +127,7 @@ pub trait Connection {
         }
     }
 
+    /// Returns the key of the connection.
     fn get_key(&self) -> Key {
         Key {
             protocol: self.get_protocol(),
@@ -124,18 +138,36 @@ pub trait Connection {
         }
     }
 
+    /// Returns true if the connection is equal to the given key. The key is considered equal if the remote port and address are equal.
     fn remote_equals(&self, key: &Key) -> bool;
+    /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
-
+    /// Returns the protocol of the connection.
     fn get_protocol(&self) -> IpProtocol;
+    /// Returns the verdict of the connection.
     fn get_verdict(&self) -> Verdict;
+    /// Returns the local address of the connection.
     fn get_local_address(&self) -> IpAddress;
+    /// Returns the local port of the connection.
     fn get_local_port(&self) -> u16;
+    /// Returns the remote address of the connection.
     fn get_remote_address(&self) -> IpAddress;
+    /// Returns the remote port of the connection.
     fn get_remote_port(&self) -> u16;
+    /// Returns true if the connection is an IPv6 connection.
     fn is_ipv6(&self) -> bool;
+    /// Returns the direction of the connection.
+    fn get_direction(&self) -> Direction;
+    /// Ends the connection.
+    fn end(&mut self, timestamp: u64);
+    /// Returns true if the connection has ended.
+    fn has_ended(&self) -> bool {
+        self.get_end_time() > 0
+    }
+    fn get_end_time(&self) -> u64;
 }
 
+#[derive(Clone)]
 pub struct ConnectionV4 {
     pub(crate) protocol: IpProtocol,
     pub(crate) local_address: Ipv4Address,
@@ -144,9 +176,10 @@ pub struct ConnectionV4 {
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
     pub(crate) process_id: u64,
-    pub(crate) direction: Direction,
+    pub(crate) extra: Box<ConnectionExtra>,
 }
 
+#[derive(Clone)]
 pub struct ConnectionV6 {
     pub(crate) protocol: IpProtocol,
     pub(crate) local_address: Ipv6Address,
@@ -155,7 +188,7 @@ pub struct ConnectionV6 {
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
     pub(crate) process_id: u64,
-    pub(crate) direction: Direction,
+    pub(crate) extra: Box<ConnectionExtra>,
 }
 
 #[derive(Debug)]
@@ -169,6 +202,7 @@ pub struct RedirectInfo {
 }
 
 impl ConnectionV4 {
+    /// Creates a new ipv4 connection from the given key.
     pub fn from_key(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
         let IpAddress::Ipv4(local_address) = key.local_address else {
             return Err("wrong ip address version".to_string());
@@ -186,7 +220,11 @@ impl ConnectionV4 {
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
             process_id,
-            direction,
+            extra: Box::new(ConnectionExtra {
+                direction,
+                // start_timestamp: wdk::utils::get_system_timestamp(),
+                end_timestamp: 0,
+            }),
         })
     }
 }
@@ -199,7 +237,7 @@ impl Connection for ConnectionV4 {
         if let IpAddress::Ipv4(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);
         }
-        return false;
+        false
     }
 
     fn get_key(&self) -> Key {
@@ -261,8 +299,21 @@ impl Connection for ConnectionV4 {
     fn is_ipv6(&self) -> bool {
         false
     }
+
+    fn get_direction(&self) -> Direction {
+        self.extra.direction
+    }
+
+    fn end(&mut self, timestamp: u64) {
+        self.extra.end_timestamp = timestamp;
+    }
+
+    fn get_end_time(&self) -> u64 {
+        self.extra.end_timestamp
+    }
 }
 impl ConnectionV6 {
+    /// Creates a new ipv6 connection from the given key.
     pub fn from_key(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
         let IpAddress::Ipv6(local_address) = key.local_address else {
             return Err("wrong ip address version".to_string());
@@ -280,7 +331,11 @@ impl ConnectionV6 {
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
             process_id,
-            direction,
+            extra: Box::new(ConnectionExtra {
+                direction,
+                // start_timestamp: wdk::utils::get_system_timestamp(),
+                end_timestamp: 0,
+            }),
         })
     }
 }
@@ -293,7 +348,7 @@ impl Connection for ConnectionV6 {
         if let IpAddress::Ipv6(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);
         }
-        return false;
+        false
     }
     fn get_key(&self) -> Key {
         Key {
@@ -353,5 +408,17 @@ impl Connection for ConnectionV6 {
 
     fn is_ipv6(&self) -> bool {
         true
+    }
+
+    fn get_direction(&self) -> Direction {
+        self.extra.direction
+    }
+
+    fn end(&mut self, timestamp: u64) {
+        self.extra.end_timestamp = timestamp;
+    }
+
+    fn get_end_time(&self) -> u64 {
+        self.extra.end_timestamp
     }
 }

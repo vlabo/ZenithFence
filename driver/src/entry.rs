@@ -106,6 +106,7 @@ unsafe extern "system" fn driver_read(
     let mut read_request = ReadRequest::new(irp);
     let Some(device) = get_device() else {
         read_request.complete();
+        
         return read_request.get_status();
     };
 

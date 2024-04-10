@@ -2,6 +2,8 @@ use alloc::string::{String, ToString};
 use ntstatus::ntstatus::NtStatus;
 use windows_sys::Win32::Foundation::STATUS_SUCCESS;
 
+use crate::ffi;
+
 pub fn check_ntstatus(status: i32) -> Result<(), String> {
     if status == STATUS_SUCCESS {
         return Ok(());
@@ -12,4 +14,8 @@ pub fn check_ntstatus(status: i32) -> Result<(), String> {
     };
 
     return Err(status.to_string());
+}
+
+pub fn get_system_timestamp_mili() -> u64 {
+    unsafe { ffi::pm_QuerySystemTime() / 10 }
 }

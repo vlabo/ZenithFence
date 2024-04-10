@@ -36,7 +36,6 @@ pub fn ip_packet_layer_inbound_v4(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
-
     ip_packet_layer(
         data,
         false,
@@ -156,8 +155,20 @@ fn ip_packet_layer(
 
         let mut is_tmp_verdict = false;
 
-        let mut conn_info =
-            get_or_create_connection_info(&mut device.connection_cache, &key, ipv6, direction);
+        let conn_info = get_connection_info(&mut device.connection_cache, &key, ipv6);
+
+        let Some(mut conn_info) = conn_info else {
+            if matches!(direction, Direction::Inbound) {
+                // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
+                data.action_continue();
+            } else {
+                // err!("Invalid state for: {}", key);
+                // Invalid state
+                data.block_and_absorb();
+            }
+            return;
+        };
+
         // Check if there is action for this connection.
         match conn_info.verdict {
             Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
@@ -195,6 +206,7 @@ fn ip_packet_layer(
             }
         }
 
+        // Clone packet and send to Portmaster if it's a temporary verdict.
         if is_tmp_verdict {
             let packet = match clone_packet(
                 device,
@@ -212,10 +224,7 @@ fn ip_packet_layer(
                 }
             };
 
-            if conn_info.process_id == 0 {
-                crate::crit!("Process id was 0: {} {}", key, direction);
-            }
-
+            // FIXME(vladimir): insert packet payload.
             let packet_id = device.packet_cache.push((key, packet));
             // Send to Portmaster
             if let Some(info) =
@@ -254,12 +263,11 @@ fn clone_packet(
     ))
 }
 
-fn get_or_create_connection_info(
+fn get_connection_info(
     connection_cache: &mut ConnectionCache,
     key: &Key,
     ipv6: bool,
-    direction: Direction,
-) -> ConnectionInfo {
+) -> Option<ConnectionInfo> {
     if ipv6 {
         let conn_info = connection_cache.read_connection_v6(
             &key,
@@ -268,9 +276,7 @@ fn get_or_create_connection_info(
                 Some(ConnectionInfo::from_connection_v6(conn))
             },
         );
-        if conn_info.is_some() {
-            return conn_info.unwrap();
-        }
+        return conn_info;
     } else {
         let conn_info = connection_cache.read_connection_v4(
             &key,
@@ -279,19 +285,6 @@ fn get_or_create_connection_info(
                 Some(ConnectionInfo::from_connection_v4(conn))
             },
         );
-        if conn_info.is_some() {
-            return conn_info.unwrap();
-        }
+        return conn_info;
     }
-    let conn_info;
-    if key.is_ipv6() {
-        let conn = ConnectionV6::from_key(&key, 0, direction).unwrap();
-        conn_info = ConnectionInfo::from_connection_v6(&conn);
-        connection_cache.add_connection_v6(conn);
-    } else {
-        let conn = ConnectionV4::from_key(&key, 0, direction).unwrap();
-        conn_info = ConnectionInfo::from_connection_v4(&conn);
-        connection_cache.add_connection_v4(conn);
-    }
-    return conn_info;
 }

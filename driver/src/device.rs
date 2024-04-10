@@ -159,7 +159,11 @@ impl Device {
                         match verdict {
                             crate::connection::Verdict::Accept
                             | crate::connection::Verdict::PermanentAccept => {
-                                _ = self.inject_packet(packet, false);
+                                if let Err(err) = self.inject_packet(packet, false) {
+                                    err!("failed to inject packet: {}", err);
+                                } else {
+                                    dbg!("packet injected: {}", key);
+                                }
                             }
                             crate::connection::Verdict::RedirectNameServer
                             | crate::connection::Verdict::RedirectTunnel => {
@@ -283,7 +287,7 @@ impl Device {
                     self.connection_cache.get_entries_count(),
                     self.connection_cache.get_full_cache_info()
                 );
-            }
+            } // FIXME(vladimir): add command to clear old connections
         }
 
         // Check if connection was pended. If yes call complete to trigger the callout again.
@@ -320,7 +324,6 @@ impl Device {
                 }
             }
             Packet::AleLayer(defer, tpl) => {
-                // FIXME(vladimir): redirect before inject if needed
                 let _ = defer.complete(&mut self.filter_engine)?;
                 if let Some(packet_list) = tpl {
                     self.injector.inject_packet_list_transport(packet_list)?;
@@ -328,7 +331,10 @@ impl Device {
 
                 return Ok(());
             }
-            Packet::TransportPacketList(_) => todo!(),
+            Packet::TransportPacketList(tpl) => {
+                self.injector.inject_packet_list_transport(tpl)?;
+                return Ok(());
+            }
         }
     }
 }
