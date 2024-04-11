@@ -213,6 +213,7 @@ pub enum Severity {
     Warning = 4,
     Error = 5,
     Critical = 6,
+    Disabled = 7,
 }
 
 pub struct LogLine {

@@ -221,41 +221,100 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     }
     let key = ale_data.as_key();
 
-    struct Info {
-        verdict: Verdict,
-    }
-
     // Check if connection is already in cache.
-    let info = if ale_data.is_ipv6 {
+    let verdict = if ale_data.is_ipv6 {
         device
             .connection_cache
-            .read_connection_v6(&key, |conn| -> Option<Info> {
+            .read_connection_v6(&key, |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
-                Some(Info {
-                    verdict: conn.verdict,
-                })
+                Some(conn.verdict)
             })
     } else {
         device
             .connection_cache
-            .read_connection_v4(&ale_data.as_key(), |conn| -> Option<Info> {
+            .read_connection_v4(&ale_data.as_key(), |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
-                Some(Info {
-                    verdict: conn.verdict,
-                })
+                Some(conn.verdict)
             })
     };
 
-    if !ale_data.reauthorize && info.is_none() {
-        // First packet of connection.
-        // Pend and create postmaster request.
+    // Connection already in cache.
+    if let Some(verdict) = verdict {
+        crate::dbg!("processing existing connection: {} {}", key, verdict);
+        match verdict {
+            // No verdict yet
+            Verdict::Undecided => {
+                crate::dbg!("saving packet: {}", key);
+                // Connection is already pended. Save packet and wait for verdict.
+                match save_packet(device, &mut data, &ale_data, false) {
+                    Ok(packet) => {
+                        let packet_id = device.packet_cache.push((key, packet));
+                        if let Some(info) = key_to_connection_info(
+                            &key,
+                            packet_id,
+                            ale_data.process_id,
+                            ale_data.direction,
+                        ) {
+                            // FIXME(vladimir): insert packet payload.
+                            let _ = device.event_queue.push(info);
+                        }
+                    }
+                    Err(err) => {
+                        crate::err!("failed to pend packet: {}", err);
+                    }
+                };
+                data.block_and_absorb();
+            }
+            // There is a verdict
+            Verdict::PermanentAccept
+            | Verdict::Accept
+            | Verdict::RedirectNameServer
+            | Verdict::RedirectTunnel => {
+                // Continue to packet layer.
+                data.action_permit();
+            }
+            Verdict::PermanentBlock | Verdict::Undeterminable | Verdict::Failed => {
+                // Packet layer will not see this connection.
+                crate::dbg!("permanent block {}", key);
+                data.action_block();
+            }
+            Verdict::PermanentDrop => {
+                // Packet layer will not see this connection.
+                crate::dbg!("permanent drop {}", key);
+                data.block_and_absorb();
+            }
+            Verdict::Block => {
+                if let Direction::Outbound = ale_data.direction {
+                    // Handled by packet layer.
+                    data.action_permit();
+                } else {
+                    // Inbound connections are blocked permanently. This make packet inspection not possible.
+                    // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
+                    data.action_block();
+                }
+            }
+            Verdict::Drop => {
+                if let Direction::Outbound = ale_data.direction {
+                    // Handled by packet layer.
+                    data.action_permit();
+                } else {
+                    // Inbound connections are blocked permanently. This make packet inspection not possible.
+                    // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
+                    data.block_and_absorb();
+                }
+            }
+        }
+    } else {
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
-        match save_packet(device, &mut data, &ale_data, true) {
+        // Only first packet of a connection can be pended: reauthorize == false
+        let can_pend_connection = !ale_data.reauthorize;
+        match save_packet(device, &mut data, &ale_data, can_pend_connection) {
             Ok(packet) => {
                 let packet_id = device.packet_cache.push((key, packet));
                 if let Some(info) =
                     key_to_connection_info(&key, packet_id, ale_data.process_id, ale_data.direction)
                 {
+                    // FIXME(vladimir): insert packet payload.
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -264,75 +323,8 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             }
         };
 
-        data.action_permit();
-    } else {
-        // Connection already in cache.
-        if let Some(info) = info {
-            crate::dbg!("processing existing connection: {} {}", key, info.verdict);
-            match info.verdict {
-                Verdict::PermanentAccept => {
-                    data.action_permit();
-                }
-                Verdict::PermanentBlock | Verdict::Undeterminable => {
-                    crate::dbg!("permanent block {}", key);
-                    data.action_block();
-                }
-                Verdict::PermanentDrop => {
-                    crate::dbg!("permanent drop {}", key);
-                    data.block_and_absorb();
-                }
-                Verdict::Undecided => {
-                    crate::dbg!("saving packet: {}", key);
-                    match save_packet(device, &mut data, &ale_data, false) {
-                        Ok(packet) => {
-                            let packet_id = device.packet_cache.push((key, packet));
-                            if let Some(info) = key_to_connection_info(
-                                &key,
-                                packet_id,
-                                ale_data.process_id,
-                                ale_data.direction,
-                            ) {
-                                let _ = device.event_queue.push(info);
-                            }
-                        }
-                        Err(err) => {
-                            crate::err!("failed to pend packet: {}", err);
-                        }
-                    };
-                    data.block_and_absorb();
-                }
-                Verdict::Accept | Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
-                    data.action_permit();
-                }
-                Verdict::Block => {
-                    if let Direction::Outbound = ale_data.direction {
-                        // Handled by packet layer.
-                        data.action_permit();
-                    } else {
-                        // Inbound connections are blocked permanently. This make packet inspection not possible.
-                        // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
-                        data.action_block();
-                    }
-                }
-                Verdict::Drop | Verdict::Failed => {
-                    if let Direction::Outbound = ale_data.direction {
-                        // Handled by packet layer.
-                        data.action_permit();
-                    } else {
-                        // Inbound connections are blocked permanently. This make packet inspection not possible.
-                        // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
-                        data.block_and_absorb();
-                    }
-                }
-            }
-            return;
-        }
-    }
-
-    if info.is_none() {
         // Connection is not in cache, add it.
         crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
-        // FIXME(vladimir): insert packet payload.
         if ale_data.is_ipv6 {
             let conn =
                 ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
@@ -342,6 +334,9 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
             device.connection_cache.add_connection_v4(conn);
         }
+
+        // Drop packet. It will be re-injected after Portmaster returns a verdict.
+        data.block_and_absorb();
     }
 }
 
@@ -352,26 +347,27 @@ fn save_packet(
     pend: bool,
 ) -> Result<Packet, alloc::string::String> {
     let mut packet_list = None;
+    let mut save_packet_list = true;
     match ale_data.protocol {
         IpProtocol::Tcp => {
-            if let Direction::Inbound = ale_data.direction {
-                packet_list = create_packet_list(device, callout_data, ale_data);
+            if let Direction::Outbound = ale_data.direction {
+                // Only time a packet data is missing is during connect state of outbound TCP connection.
+                // Don't save packet list only if connection is outbound and reauthorize is false.
+                save_packet_list = ale_data.reauthorize;
             }
         }
-        _ => {
-            packet_list = create_packet_list(device, callout_data, ale_data);
-        }
+        _ => {}
+    };
+    if save_packet_list {
+        packet_list = create_packet_list(device, callout_data, ale_data);
     }
-    if pend {
-        match callout_data.pend_operation(None) {
-            Ok(classify_defer) => return Ok(Packet::AleLayer(classify_defer, packet_list)),
-            Err(err) => return Err(alloc::format!("failed to defer connection: {}", err)),
+    if pend && matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        match callout_data.pend_operation(packet_list) {
+            Ok(classify_defer) => Ok(Packet::AleLayer(classify_defer)),
+            Err(err) => Err(alloc::format!("failed to defer connection: {}", err)),
         }
-    }
-    if let Some(packet_list) = packet_list {
-        Ok(Packet::TransportPacketList(packet_list))
     } else {
-        Err("".into())
+        Ok(Packet::AleLayer(callout_data.pend_filter_rest(packet_list)))
     }
 }
 

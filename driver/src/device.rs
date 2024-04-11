@@ -8,7 +8,7 @@ use wdk::{
     filter_engine::{
         callout_data::ClassifyDefer,
         net_buffer::{NetBufferList, NetworkAllocator},
-        packet::{InjectInfo, Injector, TransportPacketList},
+        packet::{InjectInfo, Injector},
         FilterEngine,
     },
     ioqueue::{self, IOQueue},
@@ -22,8 +22,7 @@ use crate::{
 
 pub enum Packet {
     PacketLayer(NetBufferList, InjectInfo),
-    AleLayer(ClassifyDefer, Option<TransportPacketList>),
-    TransportPacketList(TransportPacketList),
+    AleLayer(ClassifyDefer),
 }
 
 // Device Context
@@ -309,17 +308,13 @@ impl Device {
                     Ok(())
                 }
             }
-            Packet::AleLayer(defer, tpl) => {
-                let _ = defer.complete(&mut self.filter_engine)?;
-                if let Some(packet_list) = tpl {
+            Packet::AleLayer(defer) => {
+                let packet_list = defer.complete(&mut self.filter_engine)?;
+                if let Some(packet_list) = packet_list {
                     self.injector.inject_packet_list_transport(packet_list)?;
                 }
 
-                return Ok(());
-            }
-            Packet::TransportPacketList(tpl) => {
-                self.injector.inject_packet_list_transport(tpl)?;
-                return Ok(());
+                Ok(())
             }
         }
     }
