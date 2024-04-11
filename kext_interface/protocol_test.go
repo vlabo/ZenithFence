@@ -169,6 +169,7 @@ func TestGenerateCommandFile(t *testing.T) {
 		kext_interface.CommandClearCache,
 		kext_interface.CommandGetLogs,
 		kext_interface.CommandBandwidthStats,
+		kext_interface.CommandCleanEndedConnections,
 	}
 
 	selected := make([]byte, 5000)
@@ -227,6 +228,10 @@ func TestGenerateCommandFile(t *testing.T) {
 		case kext_interface.CommandPrintMemoryStats:
 			{
 				kext_interface.SendPrintMemoryStatsCommand(file)
+			}
+		case kext_interface.CommandCleanEndedConnections:
+			{
+				kext_interface.SendCleanEndedConnectionsCommand(file)
 			}
 		}
 	}
