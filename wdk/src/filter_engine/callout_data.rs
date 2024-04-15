@@ -7,7 +7,6 @@ use super::{
     classify::ClassifyOut,
     layer::{Layer, Value, ValueType},
     metadata::FwpsIncomingMetadataValues,
-    net_buffer::NetBufferList,
     packet::TransportPacketList,
     stream_data::StreamCalloutIoPacket,
     FilterEngine,
@@ -47,14 +46,14 @@ impl ClassifyDefer {
         }
     }
 
-    pub fn add_net_buffer(&mut self, nbl: NetBufferList) {
-        if let Some(packet_list) = match self {
-            ClassifyDefer::Initial(_, packet_list) => packet_list,
-            ClassifyDefer::Reauthorization(_, packet_list) => packet_list,
-        } {
-            packet_list.net_buffer_list_queue.push(nbl);
-        }
-    }
+    // pub fn add_net_buffer(&mut self, nbl: NetBufferList) {
+    //     if let Some(packet_list) = match self {
+    //         ClassifyDefer::Initial(_, packet_list) => packet_list,
+    //         ClassifyDefer::Reauthorization(_, packet_list) => packet_list,
+    //     } {
+    //         packet_list.net_buffer_list_queue.push(nbl);
+    //     }
+    // }
 }
 
 pub struct CalloutData<'a> {

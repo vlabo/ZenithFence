@@ -1,6 +1,7 @@
 package kext_interface_test
 
 import (
+	"bytes"
 	"io"
 	"math/rand"
 	"os"
@@ -33,33 +34,41 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		} else if info.ConnectionV4 != nil {
 			conn := info.ConnectionV4
-			expected := kext_interface.ConnectionV4{
-				Id:         1,
-				ProcessId:  2,
-				Direction:  3,
-				Protocol:   4,
-				LocalIp:    [4]byte{1, 2, 3, 4},
-				RemoteIp:   [4]byte{2, 3, 4, 5},
-				LocalPort:  5,
-				RemotePort: 6,
+			expected := kext_interface.ConnectionV4Internal{
+				Id:           1,
+				ProcessId:    2,
+				Direction:    3,
+				Protocol:     4,
+				LocalIp:      [4]byte{1, 2, 3, 4},
+				RemoteIp:     [4]byte{2, 3, 4, 5},
+				LocalPort:    5,
+				RemotePort:   6,
+				PayloadLayer: 7,
 			}
-			if *conn != expected {
+			if conn.ConnectionV4Internal != expected {
 				t.Errorf("unexpected ConnectionV4: %+v\n", conn)
+			}
+			if !bytes.Equal(conn.Payload, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+				t.Errorf("unexpected ConnectionV4 payload: %+v\n", conn.Payload)
 			}
 		} else if info.ConnectionV6 != nil {
 			conn := info.ConnectionV6
-			expected := kext_interface.ConnectionV6{
-				Id:         1,
-				ProcessId:  2,
-				Direction:  3,
-				Protocol:   4,
-				LocalIp:    [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-				RemoteIp:   [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
-				LocalPort:  5,
-				RemotePort: 6,
+			expected := kext_interface.ConnectionV6Internal{
+				Id:           1,
+				ProcessId:    2,
+				Direction:    3,
+				Protocol:     4,
+				LocalIp:      [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+				RemoteIp:     [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
+				LocalPort:    5,
+				RemotePort:   6,
+				PayloadLayer: 7,
 			}
-			if *conn != expected {
+			if conn.ConnectionV6Internal != expected {
 				t.Errorf("unexpected ConnectionV6: %+v\n", conn)
+			}
+			if !bytes.Equal(conn.Payload, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+				t.Errorf("unexpected ConnectionV6 payload: %+v\n", conn.Payload)
 			}
 		} else if info.ConnectionEndV4 != nil {
 			endEvent := info.ConnectionEndV4

@@ -5,15 +5,15 @@ use core::{
     mem::MaybeUninit,
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
-use protocol::info::{LogLine, Severity};
+use protocol::info::{Info, Severity};
 
 #[cfg(not(debug_assertions))]
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 #[cfg(debug_assertions)]
-pub const LOG_LEVEL: u8 = Severity::Info as u8;
+pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
-static mut LOG_LINES: [AtomicPtr<LogLine>; 1024] = unsafe { MaybeUninit::zeroed().assume_init() };
+static mut LOG_LINES: [AtomicPtr<Info>; 10000] = unsafe { MaybeUninit::zeroed().assume_init() };
 static START_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
 static END_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
 
@@ -22,16 +22,15 @@ pub fn add_line(severity: Severity, prefix: String, line_str: String) {
     unsafe {
         index %= LOG_LINES.len();
         let ptr = &mut LOG_LINES[index];
-        let line = Box::new(LogLine::new(severity, prefix, line_str));
-        let old = ptr.swap(Box::into_raw(line), Ordering::Release);
+        let line = Box::new(protocol::info::log_line(severity, prefix, line_str));
+        let old = ptr.swap(Box::into_raw(line), Ordering::SeqCst);
         if !old.is_null() {
             _ = Box::from_raw(old);
         }
     }
 }
 
-#[allow(clippy::vec_box)] // Box<LogLine> is used without the Vec later.
-pub fn flush() -> Vec<Box<LogLine>> {
+pub fn flush() -> Vec<Info> {
     let mut vec = Vec::new();
     let end_index = END_INDEX.load(Ordering::Acquire);
     let start_index = START_INDEX.load(Ordering::Acquire);
@@ -42,9 +41,9 @@ pub fn flush() -> Vec<Box<LogLine>> {
         let count = end_index - start_index;
         for i in start_index..start_index + count {
             let index = i % LOG_LINES.len();
-            let ptr = LOG_LINES[index].swap(core::ptr::null_mut(), Ordering::Acquire);
+            let ptr = LOG_LINES[index].swap(core::ptr::null_mut(), Ordering::SeqCst);
             if !ptr.is_null() {
-                vec.push(Box::from_raw(ptr));
+                vec.push(*Box::from_raw(ptr));
             }
         }
     }

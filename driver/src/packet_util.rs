@@ -1,6 +1,4 @@
-use alloc::boxed::Box;
 use alloc::string::{String, ToString};
-use protocol::info::{ConnectionInfoV4, ConnectionInfoV6, Info};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
 };
@@ -317,7 +315,7 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
     // Parse packet
     let ip_packet = Ipv6Packet::new_unchecked(&headers);
     let (src_port, dst_port) = get_ports(
-        &headers[smoltcp::wire::IPV4_HEADER_LEN..],
+        &headers[smoltcp::wire::IPV6_HEADER_LEN..],
         ip_packet.next_header(),
     );
 
@@ -340,59 +338,62 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
     }
 }
 
-/// Converts a given key into connection information.
-///
-/// This function takes a key, packet id, process id, and direction as input.
-/// It then uses these to create a new `ConnectionInfoV6` or `ConnectionInfoV4` object,
-/// depending on whether the IP addresses in the key are IPv6 or IPv4 respectively.
-///
-/// # Arguments
-///
-/// * `key` - A reference to the key object containing the connection details.
-/// * `packet_id` - The id of the packet.
-/// * `process_id` - The id of the process.
-/// * `direction` - The direction of the connection.
-///
-/// # Returns
-///
-/// * `Some(Box<dyn Info>)` - A boxed `Info` trait object if the key contains valid IPv4 or IPv6 addresses.
-/// * `None` - If the key does not contain valid IPv4 or IPv6 addresses.
-pub fn key_to_connection_info(
-    key: &Key,
-    packet_id: u64,
-    process_id: u64,
-    direction: Direction,
-) -> Option<Box<dyn Info>> {
-    let (local_port, remote_port) = match key.protocol {
-        IpProtocol::Tcp | IpProtocol::Udp => (key.local_port, key.remote_port),
-        _ => (0, 0),
-    };
+// Converts a given key into connection information.
+//
+// This function takes a key, packet id, process id, and direction as input.
+// It then uses these to create a new `ConnectionInfoV6` or `ConnectionInfoV4` object,
+// depending on whether the IP addresses in the key are IPv6 or IPv4 respectively.
+//
+// # Arguments
+//
+// * `key` - A reference to the key object containing the connection details.
+// * `packet_id` - The id of the packet.
+// * `process_id` - The id of the process.
+// * `direction` - The direction of the connection.
+//
+// # Returns
+//
+// * `Some(Box<dyn Info>)` - A boxed `Info` trait object if the key contains valid IPv4 or IPv6 addresses.
+// * `None` - If the key does not contain valid IPv4 or IPv6 addresses.
+// pub fn key_to_connection_info(
+//     key: &Key,
+//     packet_id: u64,
+//     process_id: u64,
+//     direction: Direction,
+//     payload: &[u8],
+// ) -> Option<Info> {
+//     let (local_port, remote_port) = match key.protocol {
+//         IpProtocol::Tcp | IpProtocol::Udp => (key.local_port, key.remote_port),
+//         _ => (0, 0),
+//     };
 
-    match (key.local_address, key.remote_address) {
-        (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
-            Some(Box::new(ConnectionInfoV6::new(
-                packet_id,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.0,
-                remote_ip.0,
-                local_port,
-                remote_port,
-            )))
-        }
-        (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
-            Some(Box::new(ConnectionInfoV4::new(
-                packet_id,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.0,
-                remote_ip.0,
-                local_port,
-                remote_port,
-            )))
-        }
-        _ => None,
-    }
-}
+//     match (key.local_address, key.remote_address) {
+//         (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
+//             Some(protocol::info::connection_info_v6(
+//                 packet_id,
+//                 process_id,
+//                 direction as u8,
+//                 u8::from(key.protocol),
+//                 local_ip.0,
+//                 remote_ip.0,
+//                 local_port,
+//                 remote_port,
+//                 payload,
+//             ))
+//         }
+//         (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
+//             Some(protocol::info::connection_info_v4(
+//                 packet_id,
+//                 process_id,
+//                 direction as u8,
+//                 u8::from(key.protocol),
+//                 local_ip.0,
+//                 remote_ip.0,
+//                 local_port,
+//                 remote_port,
+//                 payload,
+//             ))
+//         }
+//         _ => None,
+//     }
+// }

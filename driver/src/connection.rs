@@ -160,6 +160,8 @@ pub trait Connection {
     fn is_ipv6(&self) -> bool;
     /// Returns the direction of the connection.
     fn get_direction(&self) -> Direction;
+    // Returns the process id of the connection.
+    fn get_process_id(&self) -> u64;
     /// Ends the connection.
     fn end(&mut self, timestamp: u64);
     /// Returns true if the connection has ended.
@@ -309,6 +311,10 @@ impl Connection for ConnectionV4 {
         false
     }
 
+    fn get_process_id(&self) -> u64 {
+        self.process_id
+    }
+
     fn get_direction(&self) -> Direction {
         self.extra.direction
     }
@@ -446,6 +452,10 @@ impl Connection for ConnectionV6 {
 
     fn is_ipv6(&self) -> bool {
         true
+    }
+
+    fn get_process_id(&self) -> u64 {
+        self.process_id
     }
 
     fn get_direction(&self) -> Direction {

@@ -13,9 +13,7 @@ use crate::connection_cache::ConnectionCache;
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 use crate::err;
-use crate::packet_util::{
-    get_key_from_nbl_v4, get_key_from_nbl_v6, key_to_connection_info, Redirect,
-};
+use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
 
 // IP packet layers
 pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
@@ -80,17 +78,10 @@ struct ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    fn from_connection_v4(conn: &ConnectionV4) -> Self {
+    fn from_connection<T: Connection>(conn: &T) -> Self {
         ConnectionInfo {
-            verdict: conn.verdict,
-            process_id: conn.process_id,
-            redirect_info: conn.redirect_info(),
-        }
-    }
-    fn from_connection_v6(conn: &ConnectionV6) -> Self {
-        ConnectionInfo {
-            verdict: conn.verdict,
-            process_id: conn.process_id,
+            verdict: conn.get_verdict(),
+            process_id: conn.get_process_id(),
             redirect_info: conn.redirect_info(),
         }
     }
@@ -154,56 +145,69 @@ fn ip_packet_layer(
         }
 
         let mut is_tmp_verdict = false;
+        let is_tcp_or_udp = matches!(
+            key.protocol,
+            smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
+        );
+        let process_id;
 
-        let conn_info = get_connection_info(&mut device.connection_cache, &key, ipv6);
-
-        let Some(mut conn_info) = conn_info else {
-            if matches!(direction, Direction::Inbound) {
-                // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
-                data.action_continue();
-            } else {
-                // err!("Invalid state for: {}", key);
-                // Invalid state
-                data.block_and_absorb();
-            }
-            return;
-        };
-
-        // Check if there is action for this connection.
-        match conn_info.verdict {
-            Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
-                is_tmp_verdict = true
-            }
-            Verdict::PermanentAccept => data.action_permit(),
-            Verdict::PermanentBlock => data.action_block(),
-            Verdict::Undeterminable | Verdict::PermanentDrop | Verdict::Failed => {
-                data.block_and_absorb()
-            }
-            Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
-                if let Some(redirect_info) = conn_info.redirect_info.take() {
-                    match clone_packet(
-                        device,
-                        nbl,
-                        direction,
-                        ipv6,
-                        key.is_loopback(),
-                        interface_index,
-                        sub_interface_index,
-                    ) {
-                        Ok(mut packet) => {
-                            let _ = packet.redirect(redirect_info);
-                            if let Err(err) = device.inject_packet(packet, false) {
-                                err!("failed to inject packet: {}", err);
+        if is_tcp_or_udp {
+            if let Some(mut conn_info) =
+                get_connection_info(&mut device.connection_cache, &key, ipv6)
+            {
+                process_id = conn_info.process_id;
+                // Check if there is action for this connection.
+                match conn_info.verdict {
+                    Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
+                        is_tmp_verdict = true
+                    }
+                    Verdict::PermanentAccept => data.action_permit(),
+                    Verdict::PermanentBlock => data.action_block(),
+                    Verdict::Undeterminable | Verdict::PermanentDrop | Verdict::Failed => {
+                        data.block_and_absorb()
+                    }
+                    Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
+                        if let Some(redirect_info) = conn_info.redirect_info.take() {
+                            match clone_packet(
+                                device,
+                                nbl,
+                                direction,
+                                ipv6,
+                                key.is_loopback(),
+                                interface_index,
+                                sub_interface_index,
+                            ) {
+                                Ok(mut packet) => {
+                                    let _ = packet.redirect(redirect_info);
+                                    if let Err(err) = device.inject_packet(packet, false) {
+                                        err!("failed to inject packet: {}", err);
+                                    }
+                                }
+                                Err(err) => err!("failed to clone packet: {}", err),
                             }
                         }
-                        Err(err) => err!("failed to clone packet: {}", err),
+
+                        // This will block the original packet. Even if injection failed.
+                        data.block_and_absorb();
+                        continue;
                     }
                 }
-
-                // This will block the original packet, not the injected. Even if injection failed.
-                data.block_and_absorb();
-                continue;
+            } else {
+                // TCP and UDP always need to go through ALE layer first.
+                if matches!(direction, Direction::Inbound) {
+                    // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
+                    data.action_continue();
+                } else {
+                    err!("Invalid state for: {}", key);
+                    // Invalid state
+                    data.block_and_absorb();
+                }
+                return;
             }
+        } else {
+            // Everything else treat as a tmp verdict.
+            is_tmp_verdict = true;
+            process_id = 4; // OS PID. TODO: is there a case where it's not the OS?
         }
 
         // Clone packet and send to Portmaster if it's a temporary verdict.
@@ -224,12 +228,11 @@ fn ip_packet_layer(
                 }
             };
 
-            // FIXME(vladimir): insert packet payload.
-            let packet_id = device.packet_cache.push((key, packet));
+            let info = device
+                .packet_cache
+                .push((key, packet), process_id, direction, false);
             // Send to Portmaster
-            if let Some(info) =
-                key_to_connection_info(&key, packet_id, conn_info.process_id, direction)
-            {
+            if let Some(info) = info {
                 let _ = device.event_queue.push(info);
             }
             data.block_and_absorb();
@@ -273,7 +276,7 @@ fn get_connection_info(
             &key,
             |conn: &ConnectionV6| -> Option<ConnectionInfo> {
                 // Function is is behind spin lock. Just copy and return.
-                Some(ConnectionInfo::from_connection_v6(conn))
+                Some(ConnectionInfo::from_connection(conn))
             },
         );
         return conn_info;
@@ -282,7 +285,7 @@ fn get_connection_info(
             &key,
             |conn: &ConnectionV4| -> Option<ConnectionInfo> {
                 // Function is is behind spin lock. Just copy and return.
-                Some(ConnectionInfo::from_connection_v4(conn))
+                Some(ConnectionInfo::from_connection(conn))
             },
         );
         return conn_info;

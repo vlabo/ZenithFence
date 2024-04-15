@@ -1,7 +1,6 @@
 use alloc::{
     boxed::Box,
     string::{String, ToString},
-    vec::Vec,
 };
 use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use windows_sys::Win32::{
@@ -25,7 +24,7 @@ use super::{callout_data::CalloutData, net_buffer::NetBufferList};
 
 pub struct TransportPacketList {
     ipv6: bool,
-    pub net_buffer_list_queue: Vec<NetBufferList>,
+    pub net_buffer_list_queue: NetBufferList,
     remote_ip: [u8; 16],
     endpoint_handle: u64,
     remote_scope_id: SCOPE_ID,
@@ -113,7 +112,7 @@ impl Injector {
 
         TransportPacketList {
             ipv6,
-            net_buffer_list_queue: alloc::vec![net_buffer_list],
+            net_buffer_list_queue: net_buffer_list,
             remote_ip,
             endpoint_handle: callout_data.get_transport_endpoint_handle().unwrap_or(0),
             remote_scope_id: callout_data
@@ -154,46 +153,45 @@ impl Injector {
             };
             let address_family = if packet_list.ipv6 { AF_INET6 } else { AF_INET };
 
-            for net_buffer_list in packet_list.net_buffer_list_queue {
-                // Escape the stack. Packet buffer should be valid until the packet is injected.
-                let boxed_nbl = Box::new(net_buffer_list);
-                let raw_nbl = boxed_nbl.nbl;
-                let raw_ptr = Box::into_raw(boxed_nbl);
+            let net_buffer_list = packet_list.net_buffer_list_queue;
+            // Escape the stack. Packet buffer should be valid until the packet is injected.
+            let boxed_nbl = Box::new(net_buffer_list);
+            let raw_nbl = boxed_nbl.nbl;
+            let raw_ptr = Box::into_raw(boxed_nbl);
 
-                // Inject
-                let status = if packet_list.inbound {
-                    FwpsInjectTransportReceiveAsync0(
-                        self.transport_inject_handle,
-                        0,
-                        core::ptr::null_mut(),
-                        0,
-                        address_family,
-                        UNSPECIFIED_COMPARTMENT_ID,
-                        packet_list.interface_index,
-                        packet_list.sub_interface_index,
-                        raw_nbl,
-                        free_packet,
-                        raw_ptr as _,
-                    )
-                } else {
-                    FwpsInjectTransportSendAsync1(
-                        self.transport_inject_handle,
-                        0,
-                        packet_list.endpoint_handle,
-                        0,
-                        &mut send_params,
-                        address_family,
-                        UNSPECIFIED_COMPARTMENT_ID,
-                        raw_nbl,
-                        free_packet,
-                        raw_ptr as _,
-                    )
-                };
-                // Check for success
-                if let Err(err) = check_ntstatus(status) {
-                    _ = Box::from_raw(raw_ptr);
-                    return Err(err);
-                }
+            // Inject
+            let status = if packet_list.inbound {
+                FwpsInjectTransportReceiveAsync0(
+                    self.transport_inject_handle,
+                    0,
+                    core::ptr::null_mut(),
+                    0,
+                    address_family,
+                    UNSPECIFIED_COMPARTMENT_ID,
+                    packet_list.interface_index,
+                    packet_list.sub_interface_index,
+                    raw_nbl,
+                    free_packet,
+                    raw_ptr as _,
+                )
+            } else {
+                FwpsInjectTransportSendAsync1(
+                    self.transport_inject_handle,
+                    0,
+                    packet_list.endpoint_handle,
+                    0,
+                    &mut send_params,
+                    address_family,
+                    UNSPECIFIED_COMPARTMENT_ID,
+                    raw_nbl,
+                    free_packet,
+                    raw_ptr as _,
+                )
+            };
+            // Check for success
+            if let Err(err) = check_ntstatus(status) {
+                _ = Box::from_raw(raw_ptr);
+                return Err(err);
             }
         }
 

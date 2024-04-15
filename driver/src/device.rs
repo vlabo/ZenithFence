@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use alloc::string::String;
 use num_traits::FromPrimitive;
 use protocol::{command::CommandType, info::Info};
@@ -29,8 +28,8 @@ pub enum Packet {
 pub struct Device {
     pub(crate) filter_engine: FilterEngine,
     pub(crate) read_leftover: ArrayHolder,
-    pub(crate) event_queue: IOQueue<Box<dyn Info>>,
-    pub(crate) packet_cache: IdCache<(Key, Packet)>,
+    pub(crate) event_queue: IOQueue<Info>,
+    pub(crate) packet_cache: IdCache,
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
@@ -66,7 +65,7 @@ impl Device {
     /// Cleanup is called just before drop.
     // pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&mut self, read_request: &mut ReadRequest, mut info: Box<dyn Info>) {
+    fn write_buffer(&mut self, read_request: &mut ReadRequest, info: Info) {
         let bytes = info.as_bytes();
         let count = read_request.write(bytes);
 

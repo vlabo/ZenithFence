@@ -3,11 +3,7 @@ use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 
 use crate::info;
-use crate::packet_util::key_to_connection_info;
-use alloc::boxed::Box;
-use protocol::info::{
-    ConnectionEndEventV4Info, ConnectionEndEventV6Info, ConnectionInfoV4, ConnectionInfoV6, Info,
-};
+use protocol::info::Info;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
@@ -39,7 +35,7 @@ struct AleLayerData {
 
 #[allow(dead_code)]
 impl AleLayerData {
-    fn as_connection_info_v4(&self, id: u64) -> Option<Box<dyn Info>> {
+    fn as_connection_info_v4(&self, id: u64, payload: &[u8]) -> Option<Info> {
         let mut local_port = 0;
         let mut remote_port = 0;
         match self.protocol {
@@ -56,7 +52,7 @@ impl AleLayerData {
             return None;
         };
 
-        Some(Box::new(ConnectionInfoV4::new(
+        Some(protocol::info::connection_info_v4(
             id,
             self.process_id,
             self.direction as u8,
@@ -65,10 +61,12 @@ impl AleLayerData {
             remote_ip.0,
             local_port,
             remote_port,
-        )))
+            4, // Transport layer
+            payload,
+        ))
     }
 
-    fn as_connection_info_v6(&self, id: u64) -> Option<Box<dyn Info>> {
+    fn as_connection_info_v6(&self, id: u64, payload: &[u8]) -> Option<Info> {
         let mut local_port = 0;
         let mut remote_port = 0;
         match self.protocol {
@@ -85,7 +83,7 @@ impl AleLayerData {
             return None;
         };
 
-        Some(Box::new(ConnectionInfoV6::new(
+        Some(protocol::info::connection_info_v6(
             id,
             self.process_id,
             self.direction as u8,
@@ -94,7 +92,9 @@ impl AleLayerData {
             remote_ip.0,
             local_port,
             remote_port,
-        )))
+            4, // Transport layer
+            payload,
+        ))
     }
 
     fn as_key(&self) -> Key {
@@ -211,14 +211,20 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     let Some(device) = crate::entry::get_device() else {
         return;
     };
-    // Check if packet was previously injected from the packet layer.
-    if device
-        .injector
-        .was_network_packet_injected_by_self(data.get_layer_data() as _, ale_data.is_ipv6)
-    {
-        // data.action_permit();
-        return;
+
+    match ale_data.protocol {
+        IpProtocol::Tcp | IpProtocol::Udp => {
+            // Only TCP and UDP make sense to be supported in the ALE layer.
+            // Everything else is not associated with a connection and will be handled in the packet layer.
+        }
+        _ => {
+            // Outbound: Will be handled by packet layer next.
+            // Inbound: Was already handled by the packet layer.
+            data.action_permit();
+            return;
+        }
     }
+
     let key = ale_data.as_key();
 
     // Check if connection is already in cache.
@@ -248,14 +254,13 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 // Connection is already pended. Save packet and wait for verdict.
                 match save_packet(device, &mut data, &ale_data, false) {
                     Ok(packet) => {
-                        let packet_id = device.packet_cache.push((key, packet));
-                        if let Some(info) = key_to_connection_info(
-                            &key,
-                            packet_id,
+                        let info = device.packet_cache.push(
+                            (key, packet),
                             ale_data.process_id,
                             ale_data.direction,
-                        ) {
-                            // FIXME(vladimir): insert packet payload.
+                            true,
+                        );
+                        if let Some(info) = info {
                             let _ = device.event_queue.push(info);
                         }
                     }
@@ -310,11 +315,13 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         let can_pend_connection = !ale_data.reauthorize;
         match save_packet(device, &mut data, &ale_data, can_pend_connection) {
             Ok(packet) => {
-                let packet_id = device.packet_cache.push((key, packet));
-                if let Some(info) =
-                    key_to_connection_info(&key, packet_id, ale_data.process_id, ale_data.direction)
-                {
-                    // FIXME(vladimir): insert packet payload.
+                let info = device.packet_cache.push(
+                    (key, packet),
+                    ale_data.process_id,
+                    ale_data.direction,
+                    true,
+                );
+                if let Some(info) = info {
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -352,7 +359,7 @@ fn save_packet(
         IpProtocol::Tcp => {
             if let Direction::Outbound = ale_data.direction {
                 // Only time a packet data is missing is during connect state of outbound TCP connection.
-                // Don't save packet list only if connection is outbound and reauthorize is false.
+                // Don't save packet list only if connection is outbound, reauthorize is false and the protocol is TCP.
                 save_packet_list = ale_data.reauthorize;
             }
         }
@@ -422,7 +429,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
 
         let conn = device.connection_cache.end_connection_v4(key);
         if let Some(conn) = conn {
-            let info = Box::new(ConnectionEndEventV4Info::new(
+            let info = protocol::info::connection_end_event_v4_info(
                 data.get_process_id().unwrap_or(0),
                 conn.get_direction() as u8,
                 u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
@@ -430,7 +437,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
                 conn.remote_address.0,
                 conn.local_port,
                 conn.remote_port,
-            ));
+            );
             let _ = device.event_queue.push(info);
         }
     } else {
@@ -463,7 +470,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
 
             let conn = device.connection_cache.end_connection_v6(key);
             if let Some(conn) = conn {
-                let info = Box::new(ConnectionEndEventV6Info::new(
+                let info = protocol::info::connection_end_event_v6_info(
                     data.get_process_id().unwrap_or(0),
                     conn.get_direction() as u8,
                     u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
@@ -471,7 +478,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                     conn.remote_address.0,
                     conn.local_port,
                     conn.remote_port,
-                ));
+                );
                 let _ = device.event_queue.push(info);
             }
         }
@@ -497,7 +504,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = Box::new(ConnectionEndEventV4Info::new(
+                    let info = protocol::info::connection_end_event_v4_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -505,7 +512,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
-                    ));
+                    );
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -524,7 +531,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = Box::new(ConnectionEndEventV6Info::new(
+                    let info = protocol::info::connection_end_event_v6_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -532,7 +539,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
-                    ));
+                    );
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -551,7 +558,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = Box::new(ConnectionEndEventV4Info::new(
+                    let info = protocol::info::connection_end_event_v4_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -559,7 +566,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
-                    ));
+                    );
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -578,7 +585,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = Box::new(ConnectionEndEventV6Info::new(
+                    let info = protocol::info::connection_end_event_v6_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -586,7 +593,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
-                    ));
+                    );
                     let _ = device.event_queue.push(info);
                 }
             }
