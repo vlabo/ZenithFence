@@ -18,7 +18,7 @@ const (
 
 var ErrorUnknownInfoType = errors.New("unknown info type")
 
-type ConnectionV4Internal struct {
+type connectionV4Internal struct {
 	Id           uint64
 	ProcessId    uint64
 	Direction    byte
@@ -31,7 +31,7 @@ type ConnectionV4Internal struct {
 }
 
 type ConnectionV4 struct {
-	ConnectionV4Internal
+	connectionV4Internal
 	Payload []byte
 }
 
@@ -46,7 +46,7 @@ func (c *ConnectionV4) Compare(other *ConnectionV4) bool {
 		c.RemotePort == other.RemotePort
 }
 
-type ConnectionV6Internal struct {
+type connectionV6Internal struct {
 	Id           uint64
 	ProcessId    uint64
 	Direction    byte
@@ -59,7 +59,7 @@ type ConnectionV6Internal struct {
 }
 
 type ConnectionV6 struct {
-	ConnectionV6Internal
+	connectionV6Internal
 	Payload []byte
 }
 
@@ -147,8 +147,8 @@ func RecvInfo(reader io.Reader) (*Info, error) {
 	switch infoType {
 	case InfoConnectionIpv4:
 		{
-			var new ConnectionV4Internal
-			err = binary.Read(reader, binary.LittleEndian, &new)
+			var fixedSizeValues connectionV4Internal
+			err = binary.Read(reader, binary.LittleEndian, &fixedSizeValues)
 			if err != nil {
 				return nil, err
 			}
@@ -158,14 +158,14 @@ func RecvInfo(reader io.Reader) (*Info, error) {
 			if err != nil {
 				return nil, err
 			}
-			newFull := ConnectionV4{ConnectionV4Internal: new, Payload: make([]byte, size)}
-			err = binary.Read(reader, binary.LittleEndian, &newFull.Payload)
-			return &Info{ConnectionV4: &newFull}, nil
+			newInfo := ConnectionV4{connectionV4Internal: fixedSizeValues, Payload: make([]byte, size)}
+			err = binary.Read(reader, binary.LittleEndian, &newInfo.Payload)
+			return &Info{ConnectionV4: &newInfo}, nil
 		}
 	case InfoConnectionIpv6:
 		{
-			var new ConnectionV6Internal
-			err = binary.Read(reader, binary.LittleEndian, &new)
+			var fixedSizeValues connectionV6Internal
+			err = binary.Read(reader, binary.LittleEndian, &fixedSizeValues)
 			if err != nil {
 				return nil, err
 			}
@@ -175,9 +175,9 @@ func RecvInfo(reader io.Reader) (*Info, error) {
 			if err != nil {
 				return nil, err
 			}
-			newFull := ConnectionV6{ConnectionV6Internal: new, Payload: make([]byte, size)}
-			err = binary.Read(reader, binary.LittleEndian, &newFull.Payload)
-			return &Info{ConnectionV6: &newFull}, nil
+			newInfo := ConnectionV6{connectionV6Internal: fixedSizeValues, Payload: make([]byte, size)}
+			err = binary.Read(reader, binary.LittleEndian, &newInfo.Payload)
+			return &Info{ConnectionV6: &newInfo}, nil
 		}
 	case InfoConnectionEndEventV4:
 		{

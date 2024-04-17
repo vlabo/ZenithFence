@@ -1,4 +1,4 @@
-package kext_interface_test
+package kext_interface
 
 import (
 	"bytes"
@@ -6,8 +6,6 @@ import (
 	"math/rand"
 	"os"
 	"testing"
-
-	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
 )
 
 func TestRustInfoFile(t *testing.T) {
@@ -17,7 +15,7 @@ func TestRustInfoFile(t *testing.T) {
 	}
 	defer file.Close()
 	for {
-		info, err := kext_interface.RecvInfo(file)
+		info, err := RecvInfo(file)
 		if err != nil {
 			if err != io.EOF {
 				t.Errorf("unexpected error: %s\n", err)
@@ -34,7 +32,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		} else if info.ConnectionV4 != nil {
 			conn := info.ConnectionV4
-			expected := kext_interface.ConnectionV4Internal{
+			expected := connectionV4Internal{
 				Id:           1,
 				ProcessId:    2,
 				Direction:    3,
@@ -45,7 +43,7 @@ func TestRustInfoFile(t *testing.T) {
 				RemotePort:   6,
 				PayloadLayer: 7,
 			}
-			if conn.ConnectionV4Internal != expected {
+			if conn.connectionV4Internal != expected {
 				t.Errorf("unexpected ConnectionV4: %+v\n", conn)
 			}
 			if !bytes.Equal(conn.Payload, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
@@ -53,7 +51,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		} else if info.ConnectionV6 != nil {
 			conn := info.ConnectionV6
-			expected := kext_interface.ConnectionV6Internal{
+			expected := connectionV6Internal{
 				Id:           1,
 				ProcessId:    2,
 				Direction:    3,
@@ -64,7 +62,7 @@ func TestRustInfoFile(t *testing.T) {
 				RemotePort:   6,
 				PayloadLayer: 7,
 			}
-			if conn.ConnectionV6Internal != expected {
+			if conn.connectionV6Internal != expected {
 				t.Errorf("unexpected ConnectionV6: %+v\n", conn)
 			}
 			if !bytes.Equal(conn.Payload, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
@@ -72,7 +70,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		} else if info.ConnectionEndV4 != nil {
 			endEvent := info.ConnectionEndV4
-			expected := kext_interface.ConnectionEndV4{
+			expected := ConnectionEndV4{
 				ProcessId:  1,
 				Direction:  2,
 				Protocol:   3,
@@ -86,7 +84,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		} else if info.ConnectionEndV6 != nil {
 			endEvent := info.ConnectionEndV6
-			expected := kext_interface.ConnectionEndV6{
+			expected := ConnectionEndV6{
 				ProcessId:  1,
 				Direction:  2,
 				Protocol:   3,
@@ -108,7 +106,7 @@ func TestRustInfoFile(t *testing.T) {
 				if len(stats.ValuesV4) != 2 {
 					t.Errorf("unexpected Bandwidth stats value length: %d\n", len(stats.ValuesV4))
 				}
-				expected1 := kext_interface.BandwidthValueV4{
+				expected1 := BandwidthValueV4{
 					LocalIP:          [4]byte{1, 2, 3, 4},
 					LocalPort:        1,
 					RemoteIP:         [4]byte{2, 3, 4, 5},
@@ -119,7 +117,7 @@ func TestRustInfoFile(t *testing.T) {
 				if stats.ValuesV4[0] != expected1 {
 					t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", stats.ValuesV4[0], expected1)
 				}
-				expected2 := kext_interface.BandwidthValueV4{
+				expected2 := BandwidthValueV4{
 					LocalIP:          [4]byte{1, 2, 3, 4},
 					LocalPort:        5,
 					RemoteIP:         [4]byte{2, 3, 4, 5},
@@ -136,7 +134,7 @@ func TestRustInfoFile(t *testing.T) {
 					t.Errorf("unexpected Bandwidth stats value length: %d\n", len(stats.ValuesV6))
 				}
 
-				expected1 := kext_interface.BandwidthValueV6{
+				expected1 := BandwidthValueV6{
 					LocalIP:          [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 					LocalPort:        1,
 					RemoteIP:         [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
@@ -147,7 +145,7 @@ func TestRustInfoFile(t *testing.T) {
 				if stats.ValuesV6[0] != expected1 {
 					t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", stats.ValuesV6[0], expected1)
 				}
-				expected2 := kext_interface.BandwidthValueV6{
+				expected2 := BandwidthValueV6{
 					LocalIP:          [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 					LocalPort:        5,
 					RemoteIP:         [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
@@ -171,14 +169,14 @@ func TestGenerateCommandFile(t *testing.T) {
 	}
 	defer file.Close()
 	enums := []byte{
-		kext_interface.CommandShutdown,
-		kext_interface.CommandVerdict,
-		kext_interface.CommandUpdateV4,
-		kext_interface.CommandUpdateV6,
-		kext_interface.CommandClearCache,
-		kext_interface.CommandGetLogs,
-		kext_interface.CommandBandwidthStats,
-		kext_interface.CommandCleanEndedConnections,
+		CommandShutdown,
+		CommandVerdict,
+		CommandUpdateV4,
+		CommandUpdateV6,
+		CommandClearCache,
+		CommandGetLogs,
+		CommandBandwidthStats,
+		CommandCleanEndedConnections,
 	}
 
 	selected := make([]byte, 5000)
@@ -188,20 +186,20 @@ func TestGenerateCommandFile(t *testing.T) {
 
 	for _, value := range selected {
 		switch value {
-		case kext_interface.CommandShutdown:
+		case CommandShutdown:
 			{
-				kext_interface.SendShutdownCommand(file)
+				SendShutdownCommand(file)
 			}
-		case kext_interface.CommandVerdict:
+		case CommandVerdict:
 			{
-				kext_interface.SendVerdictCommand(file, kext_interface.Verdict{
+				SendVerdictCommand(file, Verdict{
 					Id:      1,
 					Verdict: 2,
 				})
 			}
-		case kext_interface.CommandUpdateV4:
+		case CommandUpdateV4:
 			{
-				kext_interface.SendUpdateV4Command(file, kext_interface.UpdateV4{
+				SendUpdateV4Command(file, UpdateV4{
 					Protocol:      1,
 					LocalAddress:  [4]byte{1, 2, 3, 4},
 					LocalPort:     2,
@@ -210,10 +208,10 @@ func TestGenerateCommandFile(t *testing.T) {
 					Verdict:       4,
 				})
 			}
-		case kext_interface.CommandUpdateV6:
+		case CommandUpdateV6:
 			{
 
-				kext_interface.SendUpdateV6Command(file, kext_interface.UpdateV6{
+				SendUpdateV6Command(file, UpdateV6{
 					Protocol:      1,
 					LocalAddress:  [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 					LocalPort:     2,
@@ -222,25 +220,25 @@ func TestGenerateCommandFile(t *testing.T) {
 					Verdict:       4,
 				})
 			}
-		case kext_interface.CommandClearCache:
+		case CommandClearCache:
 			{
-				kext_interface.SendClearCacheCommand(file)
+				SendClearCacheCommand(file)
 			}
-		case kext_interface.CommandGetLogs:
+		case CommandGetLogs:
 			{
-				kext_interface.SendGetLogsCommand(file)
+				SendGetLogsCommand(file)
 			}
-		case kext_interface.CommandBandwidthStats:
+		case CommandBandwidthStats:
 			{
-				kext_interface.SendGetBandwidthStatsCommand(file)
+				SendGetBandwidthStatsCommand(file)
 			}
-		case kext_interface.CommandPrintMemoryStats:
+		case CommandPrintMemoryStats:
 			{
-				kext_interface.SendPrintMemoryStatsCommand(file)
+				SendPrintMemoryStatsCommand(file)
 			}
-		case kext_interface.CommandCleanEndedConnections:
+		case CommandCleanEndedConnections:
 			{
-				kext_interface.SendCleanEndedConnectionsCommand(file)
+				SendCleanEndedConnectionsCommand(file)
 			}
 		}
 	}
