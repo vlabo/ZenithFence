@@ -1,4 +1,3 @@
-use alloc::string::String;
 use alloc::vec::Vec;
 
 #[repr(u8)]
@@ -87,9 +86,16 @@ pub struct Info(Vec<u8>);
 
 impl Info {
     fn new(info_type: InfoType, size: usize) -> Self {
-        let mut vec = Vec::with_capacity(size + 1); // +1 for the info type
+        let mut vec = Vec::with_capacity(size + 5); // +1 for the info type +4 for the size.
         push_bytes!(&mut vec, info_type);
         push_bytes!(&mut vec, size as u32);
+        Self(vec)
+    }
+
+    fn with_capacity(info_type: InfoType, capacity: usize) -> Self {
+        let mut vec = Vec::with_capacity(capacity + 5); // +1 for the info type + 4 for the size.
+        push_bytes!(&mut vec, info_type);
+        push_bytes!(&mut vec, 0 as u32);
         Self(vec)
     }
 
@@ -99,8 +105,36 @@ impl Info {
         assert_eq!(size, self.0.len() - 5);
     }
 
+    fn update_size(&mut self) {
+        let size = self.0.len() - 5;
+        let bytes = &mut self.0;
+        bytes[1] = size as u8;
+        bytes[2] = (size >> 8) as u8;
+        bytes[3] = (size >> 16) as u8;
+        bytes[4] = (size >> 24) as u8;
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         return self.0.as_slice();
+    }
+}
+
+impl core::fmt::Write for Info {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+        const MAX_CAPACITY: usize = 500;
+
+        let space_left = self.0.capacity() - self.0.len();
+        if s.len() > space_left {
+            if self.0.capacity() < MAX_CAPACITY {
+                self.0.reserve(MAX_CAPACITY);
+            } else {
+                return Ok(());
+            }
+        }
+
+        self.0.extend_from_slice(s.as_bytes());
+        self.update_size();
+        Ok(())
     }
 }
 
@@ -261,15 +295,22 @@ pub enum Severity {
     Disabled = 7,
 }
 
-pub fn log_line(severity: Severity, prefix: String, line: String) -> Info {
-    let mut size = get_combined_size!(severity);
-    size += prefix.len() + line.len();
+// pub fn log_line(severity: Severity, prefix: String, line: String) -> Info {
+//     let mut size = get_combined_size!(severity);
+//     size += prefix.len() + line.len();
 
-    let mut info = Info::new(InfoType::LogLine, size);
+//     let mut info = Info::new(InfoType::LogLine, size);
+//     let vec = &mut info.0;
+//     push_bytes!(vec, severity as u8);
+//     push_bytes!(vec, prefix.as_bytes());
+//     push_bytes!(vec, line.as_bytes());
+//     info
+// }
+
+pub fn log_line(severity: Severity, capacity: usize) -> Info {
+    let mut info = Info::with_capacity(InfoType::LogLine, capacity);
     let vec = &mut info.0;
     push_bytes!(vec, severity as u8);
-    push_bytes!(vec, prefix.as_bytes());
-    push_bytes!(vec, line.as_bytes());
     info
 }
 
@@ -404,11 +445,9 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
     for value in selected {
         file.write_all(&match value {
             InfoType::LogLine => {
-                let info = log_line(
-                    Severity::Trace,
-                    "prefix: ".to_string(),
-                    "test log".to_string(),
-                );
+                let mut info = log_line(Severity::Trace, 5);
+                use std::fmt::Write;
+                _ = write!(info, "prefix: test log");
                 info.assert_size();
                 info.0
             }

@@ -164,6 +164,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         self.0.retain(|_, v| !v.is_empty());
     }
 
+    #[allow(dead_code)]
     pub fn get_count(&self) -> usize {
         let mut count = 0;
         for conn in self.0.values() {

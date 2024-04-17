@@ -264,6 +264,7 @@ impl Bandwidth {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_entries_count(&self) -> usize {
         let mut size = 0;
         {

@@ -114,6 +114,7 @@ impl ConnectionCache {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_entries_count(&self) -> usize {
         let mut size = 0;
         {
@@ -129,6 +130,7 @@ impl ConnectionCache {
         return size;
     }
 
+    #[allow(dead_code)]
     pub fn get_full_cache_info(&self) -> String {
         let mut info = String::new();
         let now = wdk::utils::get_system_timestamp_ms();

@@ -16,7 +16,7 @@ use wdk::{
 
 use crate::{
     array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection_cache::ConnectionCache,
-    connection_map::Key, dbg, err, id_cache::IdCache, info, logger, packet_util::Redirect,
+    connection_map::Key, dbg, err, id_cache::IdCache, logger, packet_util::Redirect,
 };
 
 pub enum Packet {
@@ -272,19 +272,21 @@ impl Device {
                 }
             }
             CommandType::PrintMemoryStats => {
-                info!(
-                    "Packet cache: {} entries",
-                    self.packet_cache.get_entries_count()
-                );
-                info!(
-                    "BandwidthStats cache: {} entries",
-                    self.bandwidth_stats.get_entries_count()
-                );
-                info!(
-                    "Connection cache: {} entries\n {}",
-                    self.connection_cache.get_entries_count(),
-                    self.connection_cache.get_full_cache_info()
-                );
+                // Getting the information takes a long time and interferes with the callouts causing the device to crash.
+                // TODO(vladimir): Make more optimized version
+                // info!(
+                //     "Packet cache: {} entries",
+                //     self.packet_cache.get_entries_count()
+                // );
+                // info!(
+                //     "BandwidthStats cache: {} entries",
+                //     self.bandwidth_stats.get_entries_count()
+                // );
+                // info!(
+                //     "Connection cache: {} entries\n {}",
+                //     self.connection_cache.get_entries_count(),
+                //     self.connection_cache.get_full_cache_info()
+                // );
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");

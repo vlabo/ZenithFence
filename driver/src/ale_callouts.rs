@@ -3,7 +3,6 @@ use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 
 use crate::info;
-use protocol::info::Info;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
@@ -33,70 +32,7 @@ struct AleLayerData {
     sub_interface_index: u32,
 }
 
-#[allow(dead_code)]
 impl AleLayerData {
-    fn as_connection_info_v4(&self, id: u64, payload: &[u8]) -> Option<Info> {
-        let mut local_port = 0;
-        let mut remote_port = 0;
-        match self.protocol {
-            IpProtocol::Tcp | IpProtocol::Udp => {
-                local_port = self.local_port;
-                remote_port = self.remote_port;
-            }
-            _ => {}
-        }
-        let IpAddress::Ipv4(local_ip) = self.local_ip else {
-            return None;
-        };
-        let IpAddress::Ipv4(remote_ip) = self.remote_ip else {
-            return None;
-        };
-
-        Some(protocol::info::connection_info_v4(
-            id,
-            self.process_id,
-            self.direction as u8,
-            u8::from(self.protocol),
-            local_ip.0,
-            remote_ip.0,
-            local_port,
-            remote_port,
-            4, // Transport layer
-            payload,
-        ))
-    }
-
-    fn as_connection_info_v6(&self, id: u64, payload: &[u8]) -> Option<Info> {
-        let mut local_port = 0;
-        let mut remote_port = 0;
-        match self.protocol {
-            IpProtocol::Tcp | IpProtocol::Udp => {
-                local_port = self.local_port;
-                remote_port = self.remote_port;
-            }
-            _ => {}
-        }
-        let IpAddress::Ipv6(local_ip) = self.local_ip else {
-            return None;
-        };
-        let IpAddress::Ipv6(remote_ip) = self.remote_ip else {
-            return None;
-        };
-
-        Some(protocol::info::connection_info_v6(
-            id,
-            self.process_id,
-            self.direction as u8,
-            u8::from(self.protocol),
-            local_ip.0,
-            remote_ip.0,
-            local_port,
-            remote_port,
-            4, // Transport layer
-            payload,
-        ))
-    }
-
     fn as_key(&self) -> Key {
         let mut local_port = 0;
         let mut remote_port = 0;

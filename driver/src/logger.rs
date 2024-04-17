@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::{
     mem::MaybeUninit,
@@ -11,18 +10,20 @@ use protocol::info::{Info, Severity};
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 #[cfg(debug_assertions)]
-pub const LOG_LEVEL: u8 = Severity::Error as u8;
+pub const LOG_LEVEL: u8 = Severity::Trace as u8;
 
-static mut LOG_LINES: [AtomicPtr<Info>; 10000] = unsafe { MaybeUninit::zeroed().assume_init() };
+pub const MAX_LOG_LINE_SIZE: usize = 150;
+
+static mut LOG_LINES: [AtomicPtr<Info>; 1024] = unsafe { MaybeUninit::zeroed().assume_init() };
 static START_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
 static END_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
 
-pub fn add_line(severity: Severity, prefix: String, line_str: String) {
+pub fn add_line(log_line: Info) {
     let mut index = END_INDEX.fetch_add(1, Ordering::Acquire);
     unsafe {
         index %= LOG_LINES.len();
         let ptr = &mut LOG_LINES[index];
-        let line = Box::new(protocol::info::log_line(severity, prefix, line_str));
+        let line = Box::new(log_line);
         let old = ptr.swap(Box::into_raw(line), Ordering::SeqCst);
         if !old.is_null() {
             _ = Box::from_raw(old);
@@ -53,9 +54,19 @@ pub fn flush() -> Vec<Info> {
 }
 
 #[macro_export]
+macro_rules! log_internal {
+    ($log_line:expr, $($arg:tt)*) => ({
+        use core::fmt::Write;
+        _ = write!($log_line, "{}:{} ", file!(), line!());
+        _ = write!($log_line, $($arg)*);
+        $crate::logger::add_line($log_line);
+    });
+}
+
+#[macro_export]
 macro_rules! crit {
     ($($arg:tt)*) => ({
-        if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
+        if protocol::info::Severity::Critical as u8 >= $crate::logger::LOG_LEVEL {
             let message = alloc::format!($($arg)*);
             $crate::logger::add_line(protocol::info::Severity::Critical, alloc::format!("{}:{} ", file!(), line!()), message)
         }
@@ -66,18 +77,8 @@ macro_rules! crit {
 macro_rules! err {
     ($($arg:tt)*) => ({
         if protocol::info::Severity::Error as u8 >= $crate::logger::LOG_LEVEL {
-            let message = alloc::format!($($arg)*);
-            $crate::logger::add_line(protocol::info::Severity::Error, alloc::format!("{}:{} ", file!(), line!()), message)
-        }
-    });
-}
-
-#[macro_export]
-macro_rules! dbg {
-    ($($arg:tt)*) => ({
-        if protocol::info::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
-            let message = alloc::format!($($arg)*);
-            $crate::logger::add_line(protocol::info::Severity::Debug, alloc::format!("{}:{} ", file!(), line!()), message)
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Error, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
         }
     });
 }
@@ -86,8 +87,18 @@ macro_rules! dbg {
 macro_rules! warn {
     ($($arg:tt)*) => ({
         if protocol::info::Severity::Warning as u8 >= $crate::logger::LOG_LEVEL {
-            let message = alloc::format!($($arg)*);
-            $crate::logger::add_line(protocol::info::Severity::Warning, alloc::format!("{}:{} ", file!(), line!()), message)
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Warning, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
+        }
+    });
+}
+
+#[macro_export]
+macro_rules! dbg {
+    ($($arg:tt)*) => ({
+        if protocol::info::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Debug, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
         }
     });
 }
@@ -96,8 +107,8 @@ macro_rules! warn {
 macro_rules! info {
     ($($arg:tt)*) => ({
         if protocol::info::Severity::Info as u8 >= $crate::logger::LOG_LEVEL {
-            let message = alloc::format!($($arg)*);
-            $crate::logger::add_line(protocol::info::Severity::Info, alloc::format!("{}:{} ", file!(), line!()), message)
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Info, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
         }
     });
 }

@@ -12,8 +12,8 @@ use crate::connection::{
 use crate::connection_cache::ConnectionCache;
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
-use crate::err;
 use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
+use crate::{err, warn};
 
 // IP packet layers
 pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
@@ -88,9 +88,16 @@ impl ConnectionInfo {
 }
 
 fn fast_track_pm_packets(key: &Key, direction: Direction) -> bool {
-    if let Direction::Outbound = direction {
-        if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
-            return key.local_address == key.remote_address;
+    match direction {
+        Direction::Outbound => {
+            if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
+                return key.local_address == key.remote_address;
+            }
+        }
+        Direction::Inbound => {
+            if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
+                return key.local_address == key.remote_address;
+            }
         }
     }
 
@@ -134,7 +141,7 @@ fn ip_packet_layer(
         } {
             Ok(key) => key,
             Err(err) => {
-                err!("failed to get key from nbl: {}", err);
+                warn!("failed to get key from nbl: {}", err);
                 return;
             }
         };
@@ -149,7 +156,7 @@ fn ip_packet_layer(
             key.protocol,
             smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
         );
-        let process_id;
+        let mut process_id = 0;
 
         if is_tcp_or_udp {
             if let Some(mut conn_info) =
@@ -207,7 +214,6 @@ fn ip_packet_layer(
         } else {
             // Everything else treat as a tmp verdict.
             is_tmp_verdict = true;
-            process_id = 4; // OS PID. TODO: is there a case where it's not the OS?
         }
 
         // Clone packet and send to Portmaster if it's a temporary verdict.
