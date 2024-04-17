@@ -204,12 +204,12 @@ fn ip_packet_layer(
                 if matches!(direction, Direction::Inbound) {
                     // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
                     data.action_continue();
+                    return;
                 } else {
+                    // This happens sometimes. Leave the decision for portmaster. TODO(vladimir): Find out why.
                     err!("Invalid state for: {}", key);
-                    // Invalid state
-                    data.block_and_absorb();
+                    is_tmp_verdict = true;
                 }
-                return;
             }
         } else {
             // Everything else treat as a tmp verdict.

@@ -9,16 +9,6 @@ use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
-// static mut DRIVER_CONFIG: WdfObjectContextTypeInfo =
-// WdfObjectContextTypeInfo::default("DriverContext\0");
-
-// Compile time check. Function should not be executed.
-// #[allow(dead_code)]
-// pub fn ensure_correctness() {
-//     // Ensure that zeroed state is a valid state.
-//     let _: device::Device = unsafe { MaybeUninit::zeroed().assume_init() };
-// }
-
 static mut DEVICE: *mut device::Device = core::ptr::null_mut();
 pub fn get_device() -> Option<&'static mut device::Device> {
     return unsafe { DEVICE.as_mut() };
@@ -32,11 +22,6 @@ pub extern "system" fn driver_entry(
     registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
 ) -> windows_sys::Win32::Foundation::NTSTATUS {
     info!("Starting initialization...");
-
-    // Setup object attribute.
-    // let mut object_attributes = WdfObjectAttributes::new();
-    // object_attributes.add_context::<device::Device>(unsafe { &mut DRIVER_CONFIG });
-    // object_attributes.set_cleanup_fn(device_cleanup);
 
     // Initialize driver object.
     let mut driver = match interface::init_driver_object(
@@ -73,21 +58,6 @@ pub extern "system" fn driver_entry(
     STATUS_SUCCESS
 }
 
-// device_cleanup cleanup function is called when the current device object will be removed.
-// extern "system" fn device_cleanup(device: HANDLE) {
-//     let device = interface::get_device_context_from_wdf_device::<device::Device>(device, unsafe {
-//         &DRIVER_CONFIG
-//     });
-
-//     unsafe {
-//         // Call drop without freeing memory. Memory is manged by the kernel.
-//         if let Some(device) = device.as_mut() {
-//             device.cleanup();
-//             core::ptr::drop_in_place(device);
-//         }
-//     }
-// }
-
 // driver_unload function is called when service delete is called from user-space.
 unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
@@ -106,12 +76,11 @@ unsafe extern "system" fn driver_read(
     let mut read_request = ReadRequest::new(irp);
     let Some(device) = get_device() else {
         read_request.complete();
-        
+
         return read_request.get_status();
     };
 
     device.read(&mut read_request);
-
     read_request.get_status()
 }
 

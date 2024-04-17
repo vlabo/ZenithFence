@@ -7,7 +7,7 @@ use core::{
 use protocol::info::{Info, Severity};
 
 #[cfg(not(debug_assertions))]
-pub const LOG_LEVEL: u8 = Severity::Error as u8;
+pub const LOG_LEVEL: u8 = Severity::Warning as u8;
 
 #[cfg(debug_assertions)]
 pub const LOG_LEVEL: u8 = Severity::Trace as u8;

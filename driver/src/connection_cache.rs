@@ -91,7 +91,6 @@ impl ConnectionCache {
         self.connections_v6.end_all_on_port(key)
     }
 
-    /// Clean all connections that are in the `ended` + 10 minutes after that state.
     pub fn clean_ended_connections(&mut self) {
         {
             let _guard = self.lock_v4.write_lock();

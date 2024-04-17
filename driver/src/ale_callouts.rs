@@ -229,8 +229,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                     // Handled by packet layer.
                     data.action_permit();
                 } else {
-                    // Inbound connections are blocked permanently. This make packet inspection not possible.
-                    // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
+                    // packet layer will still see the packets.
                     data.action_block();
                 }
             }
@@ -239,8 +238,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                     // Handled by packet layer.
                     data.action_permit();
                 } else {
-                    // Inbound connections are blocked permanently. This make packet inspection not possible.
-                    // TODO(vladimir): Save packets from the packet layer and inject them after decision is made. This will allow packet inspection.
+                    // packet layer will still see the packets.
                     data.block_and_absorb();
                 }
             }

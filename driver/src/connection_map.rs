@@ -142,17 +142,17 @@ impl<T: Connection + Clone> ConnectionMap<T> {
     pub fn clean_ended_connections(&mut self) {
         let now = wdk::utils::get_system_timestamp_ms();
         const TEN_MINUETS: u64 = Duration::from_secs(60 * 10).as_millis() as u64;
-        let ten_minutes = now - TEN_MINUETS;
-        let one_minute = now - Duration::from_secs(60).as_millis() as u64;
+        let before_ten_minutes = now - TEN_MINUETS;
+        let before_one_minute = now - Duration::from_secs(60).as_millis() as u64;
 
         for (_, connections) in self.0.iter_mut() {
             connections.retain(|c| {
-                if c.has_ended() && c.get_end_time() < one_minute {
+                if c.has_ended() && c.get_end_time() < before_one_minute {
                     // Ended more than 1 minute ago
                     return false;
                 }
 
-                if c.get_last_accessed_time() < ten_minutes {
+                if c.get_last_accessed_time() < before_ten_minutes {
                     // Last active more than 10 minutes ago
                     return false;
                 }
