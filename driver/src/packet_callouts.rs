@@ -203,7 +203,7 @@ fn ip_packet_layer(
                 // TCP and UDP always need to go through ALE layer first.
                 if matches!(direction, Direction::Inbound) {
                     // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
-                    data.action_continue();
+                    data.action_permit();
                     return;
                 } else {
                     // This happens sometimes. Leave the decision for portmaster. TODO(vladimir): Find out why.

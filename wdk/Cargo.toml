@@ -13,6 +13,7 @@ version = "1.0.2"
 default-features = false 
 features = ["alloc"]
 
+# WARNING: Do not update. The version was choosen for a reason. See wdk/README.md for more detiels.
 [dependencies.windows-sys]
 git = "https://github.com/microsoft/windows-rs"
 rev = "41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"

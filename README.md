@@ -1,7 +1,12 @@
 # Portmaster Windows kext
 Implementation of Safing's Portmaster Windows kernel extension in Rust.
 
-> This is still work in progress.
+### Documentation 
+
+- [Driver](driver/README.md) -> entry point.
+- [WDK](wdk/README.md) -> Windows Driver Kit interface.
+- [Packet Path](PacketDoc.md) -> Detiled documentation of what happens to a packet when it enters the kernel extension.
+- [Release](release/README.md) -> Guide how to do a release build
 
 ### Building
 
