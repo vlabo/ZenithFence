@@ -152,13 +152,12 @@ fn ip_packet_layer(
         }
 
         let mut is_tmp_verdict = false;
-        let is_tcp_or_udp = matches!(
-            key.protocol,
-            smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
-        );
         let mut process_id = 0;
 
-        if is_tcp_or_udp {
+        if matches!(
+            key.protocol,
+            smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
+        ) {
             if let Some(mut conn_info) =
                 get_connection_info(&mut device.connection_cache, &key, ipv6)
             {
@@ -212,7 +211,7 @@ fn ip_packet_layer(
                 }
             }
         } else {
-            // Everything else treat as a tmp verdict.
+            // Every other protocol treat as a tmp verdict.
             is_tmp_verdict = true;
         }
 
