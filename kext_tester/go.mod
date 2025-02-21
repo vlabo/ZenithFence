@@ -7,4 +7,4 @@ require (
 	golang.org/x/sys v0.12.0
 )
 
-require github.com/vlabo/portmaster_windows_rust_kext/kext_interface v0.0.0-20230926223220-00e6ae52b8fc // indirect
+require github.com/vlabo/zenithfence/kext_interface v0.0.0-20230926223220-00e6ae52b8fc // indirect

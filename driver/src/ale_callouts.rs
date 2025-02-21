@@ -276,7 +276,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             device.connection_cache.add_connection_v4(conn);
         }
 
-        // Drop packet. It will be re-injected after Portmaster returns a verdict.
+        // Drop packet. It will be re-injected after user space returns a verdict.
         data.block_and_absorb();
     }
 }

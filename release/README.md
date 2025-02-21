@@ -18,8 +18,8 @@ cd kext_release_v.../
 
 ### Let Microsoft Sign
 - Go to https://partner.microsoft.com/en-us/dashboard/hardware/driver/New
-- Enter "PortmasterKext vX.X.X #1" as the product name
-- Upload `portmaster-kext_vX-X-X.cab`
+- Enter "ZenithFence vX.X.X #1" as the product name
+- Upload `ZenithFence_vX-X-X.cab`
 - Select the Windows 10 versions that you compiled and tested on
 - Wait for the process to finish, download the `.zip`.
 

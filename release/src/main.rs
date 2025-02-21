@@ -23,10 +23,7 @@ fn main() {
     .unwrap();
     let mut zip = zip::ZipWriter::new(file);
 
-    let version_file = format!(
-        "portmaster-kext_v{}-{}-{}",
-        VERSION[0], VERSION[1], VERSION[2]
-    );
+    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
 
     // Write files to zip
     zip.add_directory("cab", FileOptions::default()).unwrap();
@@ -74,7 +71,7 @@ fn get_inf_content() -> String {
     let reg = Handlebars::new();
     let today = Local::now();
     reg.render_template(
-        include_str!("../templates/PortmasterKext64.inf"),
+        include_str!("../templates/ZenithFence64.inf"),
         &json!({"date": today.format("%m/%d/%Y").to_string(), "version": version_str()}),
     )
     .unwrap()
@@ -82,12 +79,9 @@ fn get_inf_content() -> String {
 
 fn get_ddf_content() -> String {
     let reg = Handlebars::new();
-    let version_file = format!(
-        "portmaster-kext_v{}-{}-{}",
-        VERSION[0], VERSION[1], VERSION[2]
-    );
+    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
     reg.render_template(
-        include_str!("../templates/PortmasterKext.ddf"),
+        include_str!("../templates/ZenithFence.ddf"),
         &json!({"version_file": version_file}),
     )
     .unwrap()
@@ -95,10 +89,7 @@ fn get_ddf_content() -> String {
 
 fn get_build_cab_script_content() -> String {
     let reg = Handlebars::new();
-    let version_file = format!(
-        "portmaster-kext_v{}-{}-{}",
-        VERSION[0], VERSION[1], VERSION[2]
-    );
+    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
 
     reg
         .render_template(

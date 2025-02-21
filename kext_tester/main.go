@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/vlabo/portmaster_windows_rust_kext/kext_interface"
+	"github.com/vlabo/zenithfence/kext_interface"
 )
 
 type Verdict int8
@@ -36,7 +36,7 @@ const (
 )
 
 func main() {
-	driverName := "PortmasterKext"
+	driverName := "ZenithFence"
 	sysPath := "C:\\Dev\\driver.sys"
 	kext, err := kext_interface.CreateKextService(driverName, sysPath)
 	if err != nil {

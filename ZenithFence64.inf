@@ -4,7 +4,7 @@ Class = WFPCALLOUTS
 ClassGuid = {57465043-616C-6C6F-7574-5F636C617373}
 Provider = %Provider%
 CatalogFile = ZenithFence64.Cat
-DriverVer = {{date}},{{version}}
+DriverVer = 01/01/2019,1.0.11.0
 
 [SourceDisksNames]
 1 = %DiskName%
@@ -41,7 +41,7 @@ ErrorControl = 1 ; SERVICE_ERROR_NORMAL
 ServiceBinary = %12%\ZenithFence64.sys
 
 [Strings]
-Provider = "Copany name"
+Provider = "Company Name"
 DiskName = "ZenithFence Installation Disk"
 Description = "ZenithFence Driver"
 ServiceName = "ZenithFence"

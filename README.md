@@ -1,5 +1,5 @@
-# Portmaster Windows kext
-Implementation of Safing's Portmaster Windows kernel extension in Rust.
+# ZenithFence Windows kernel driver
+Windows kernel extension that monitor and fileters network traffic.
 
 ### Documentation 
 
@@ -10,7 +10,7 @@ Implementation of Safing's Portmaster Windows kernel extension in Rust.
 
 ### Building
 
-The Windows Portmaster Kernel Extension is currently only developed and tested for the amd64 (64-bit) architecture.
+The Windows ZenithFence Kernel Extension is currently only developed and tested for the amd64 (64-bit) architecture.
 
 __Prerequesites:__
 

@@ -21,20 +21,20 @@ For outgoing connections this logic fallows:
   - Packet enters in one of the ALE layer
   - Packet is TCP or UDP
     1. Save and absorb packet.
-    2. Send an event to Portmaster. 
+    2. Send an event to User space. 
     2. Create a cache entry.
   - If Packet is not TCP/UDP forward to packet layer
 
 For incoming connection this logic fallow:
   - Packet enter in one of the Packet layer, if packet is TCP or UDP it will be forwarded to ALE layer. From there:
     1. Save packet and absorb.
-    2. Send an event to Portmaster. 
+    2. Send an event to User space. 
     2. Create a cache entry.
-    3. Wait for Portmasters decision.
+    3. Wait for User space decision.
   - If Packet is not TCP/UDP. It will be handled only by the packet layer. 
 
 
-If more packets arrive before Portmaster returns a decision, packet will be absorbed and another event will be sent.
+If more packets arrive before User space returns a decision, packet will be absorbed and another event will be sent.
 For Outgoing connection this will happen in ALE layer.
 For Incoming connection this will happen in Packet layer. 
 
@@ -52,7 +52,7 @@ The next steps depend of the direction of the packet and the verdict
   - Allow / Block / Drop directly in the ALE layer. They always go through the packet layer first no need to do anything special
 
 Fallowing specifics apply to the ALE layer:  
-1. Connections with flag `reauthorize == false` are special. When the flag is `false` that means that a applications is calling a function `connect()` or `accept()` for a connection. This is a special case because we control the result of the function, telling the application that it's allowed or not allowed to continue with the connection. Since we are making request to Portmaster we need to take longer time. This is done with pending the packet. This allows the kernel extension to pause the event and continue when it has the verdict. See `ale_callouts.rs -> save_packet()` function.
+1. Connections with flag `reauthorize == false` are special. When the flag is `false` that means that a applications is calling a function `connect()` or `accept()` for a connection. This is a special case because we control the result of the function, telling the application that it's allowed or not allowed to continue with the connection. Since we are making request to User sace we need to take longer time. This is done with pending the packet. This allows the kernel extension to pause the event and continue when it has the verdict. See `ale_callouts.rs -> save_packet()` function.
 2. If packet payload is present it is from the transport layer.
 
 
@@ -64,20 +64,20 @@ The logic for the packet is split in two:
 
 The packet layer will not process packets that miss a cache entry:  
 - Incoming packet: it will forward it to the ALE layer.
-- Outgoing packet: this is treated as invalid state since ALE should be the entry for the packets. If it happens the packet layer will create a request to Portmaster for it.
+- Outgoing packet: this is treated as invalid state since ALE should be the entry for the packets. If it happens the packet layer will create a request to User space for it.
 
 For packets with a cache entry:
 - Permanent Verdict: apply the verdict.
 - Redirect Verdict: copy the packet, modify and inject. Drop the original packet.
-- Temporary verdict: send request to Portmaster.
+- Temporary verdict: send request to User space.
 
-After portmaster returns the verdict for the packet. If its allowed it will be modified (if needed) and injected everything else will be dropped.
+After user space returns the verdict for the packet. If its allowed it will be modified (if needed) and injected everything else will be dropped.
 The packet layer will permit all injected packets.
 
 ### Not TCP or UDP protocols -> ICMP, IGMP ...
 
 Does packets are treated as with temporary verdict. There will be no cache entry for them.
-Every packet will be send to Portmaster for a decision and re-injected if allowed.
+Every packet will be send to User space for a decision and re-injected if allowed.
 
 ## Connection Cache
 

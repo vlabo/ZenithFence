@@ -156,8 +156,8 @@ impl FilterEngine {
     fn register_sublayer(&self) -> Result<(), String> {
         let result = ffi::register_sublayer(
             self.handle,
-            "PortmasterSublayer",
-            "The Portmaster sublayer holds all it's filters.",
+            "ZenithFenceSublayer",
+            "The ZenithFence sublayer holds all it's filters.",
             self.sublayer_guid,
         );
         if let Err(code) = result {

@@ -27,7 +27,7 @@ pub extern "system" fn driver_entry(
     let mut driver = match interface::init_driver_object(
         driver_object,
         registry_path,
-        "PortmasterKext",
+        "ZenithFence",
         core::ptr::null_mut(),
     ) {
         Ok(driver) => driver,

@@ -15,18 +15,18 @@ This file contains the entry point and calling all the needed initialization cod
 Holds the global state of the driver.  
 Initialization: Setting up global state, Filter engine and callouts.  
 
-Portmaster communication:
+ZenithFence communication:
 The communication happens concurrently with the File read/write API.
 That means when Pormtaster sends a command the kernel extension will start to process it and queue the result in the `IOQueue`.
 
-`fn read()` -> called on read request from Portmaster  
-- `IOQueue` holds all the events queued for Portmaster.
+`fn read()` -> called on read request from User space  
+- `IOQueue` holds all the events queued for User space.
 
-Blocks until there is a element that can be poped or shutdown request is sent from Portmaster.
+Blocks until there is a element that can be poped or shutdown request is sent from User space.
 If there is more then one event in the queue it will write as much as it can in the supplied buffer.
 
-`fn write()` -> called on write request from Portmaster.  
-Used when Portmaster wants to send a command to kernel extension.
+`fn write()` -> called on write request from User space.  
+Used when User space wants to send a command to kernel extension.
 Verdict Response, GetLogs ... (see `protocol` for list of all the commands)
 
 

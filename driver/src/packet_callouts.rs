@@ -205,7 +205,7 @@ fn ip_packet_layer(
                     data.action_permit();
                     return;
                 } else {
-                    // This happens sometimes. Leave the decision for portmaster. TODO(vladimir): Find out why.
+                    // This happens sometimes. Leave the decision for user space. TODO(vladimir): Find out why.
                     err!("Invalid state for: {}", key);
                     is_tmp_verdict = true;
                 }
@@ -215,7 +215,7 @@ fn ip_packet_layer(
             is_tmp_verdict = true;
         }
 
-        // Clone packet and send to Portmaster if it's a temporary verdict.
+        // Clone packet and send to user space if it's a temporary verdict.
         if is_tmp_verdict {
             let packet = match clone_packet(
                 device,
@@ -236,7 +236,7 @@ fn ip_packet_layer(
             let info = device
                 .packet_cache
                 .push((key, packet), process_id, direction, false);
-            // Send to Portmaster
+            // Send to ZenithFence
             if let Some(info) = info {
                 let _ = device.event_queue.push(info);
             }
