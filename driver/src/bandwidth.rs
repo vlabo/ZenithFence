@@ -76,7 +76,7 @@ impl Bandwidth {
                 received_bytes: value.received_bytes as u64,
             });
         }
-        Some(protocol::info::bandiwth_stats_array_v4(
+        Some(protocol::info::bandwidth_stats_array_v4(
             u8::from(IpProtocol::Tcp),
             values,
         ))
@@ -103,7 +103,7 @@ impl Bandwidth {
                 received_bytes: value.received_bytes as u64,
             });
         }
-        Some(protocol::info::bandiwth_stats_array_v6(
+        Some(protocol::info::bandwidth_stats_array_v6(
             u8::from(IpProtocol::Tcp),
             values,
         ))
@@ -130,7 +130,7 @@ impl Bandwidth {
                 received_bytes: value.received_bytes as u64,
             });
         }
-        Some(protocol::info::bandiwth_stats_array_v4(
+        Some(protocol::info::bandwidth_stats_array_v4(
             u8::from(IpProtocol::Udp),
             values,
         ))
@@ -143,7 +143,7 @@ impl Bandwidth {
             if self.stats_tcp_v6.is_empty() {
                 return None;
             }
-            stats_map = core::mem::replace(&mut self.stats_tcp_v6, DeviceHashMap::new());
+            stats_map = core::mem::replace(&mut self.stats_udp_v6, DeviceHashMap::new());
         }
 
         let mut values = alloc::vec::Vec::with_capacity(stats_map.len());
@@ -157,7 +157,7 @@ impl Bandwidth {
                 received_bytes: value.received_bytes as u64,
             });
         }
-        Some(protocol::info::bandiwth_stats_array_v6(
+        Some(protocol::info::bandwidth_stats_array_v6(
             u8::from(IpProtocol::Udp),
             values,
         ))

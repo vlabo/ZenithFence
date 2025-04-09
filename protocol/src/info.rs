@@ -381,7 +381,7 @@ impl PushBytes for BandwidthValueV6 {
     }
 }
 
-pub fn bandiwth_stats_array_v4(protocol: u8, values: Vec<BandwidthValueV4>) -> Info {
+pub fn bandwidth_stats_array_v4(protocol: u8, values: Vec<BandwidthValueV4>) -> Info {
     let mut size = get_combined_size!(protocol, values.len() as u32);
 
     if !values.is_empty() {
@@ -398,7 +398,7 @@ pub fn bandiwth_stats_array_v4(protocol: u8, values: Vec<BandwidthValueV4>) -> I
     info
 }
 
-pub fn bandiwth_stats_array_v6(protocol: u8, values: Vec<BandwidthValueV6>) -> Info {
+pub fn bandwidth_stats_array_v6(protocol: u8, values: Vec<BandwidthValueV6>) -> Info {
     let mut size = get_combined_size!(protocol, values.len() as u32);
 
     if !values.is_empty() {
@@ -520,7 +520,7 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                     transmitted_bytes: 7,
                     received_bytes: 8,
                 });
-                let info = bandiwth_stats_array_v4(1, vec);
+                let info = bandwidth_stats_array_v4(1, vec);
                 info.assert_size();
                 info.0
             }
@@ -542,7 +542,7 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                     transmitted_bytes: 7,
                     received_bytes: 8,
                 });
-                let info = bandiwth_stats_array_v6(1, vec);
+                let info = bandwidth_stats_array_v6(1, vec);
                 info.assert_size();
                 info.0
             }
