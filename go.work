@@ -1,5 +1,0 @@
-go 1.20
-
-use ./kext_interface
-
-use ./kext_tester

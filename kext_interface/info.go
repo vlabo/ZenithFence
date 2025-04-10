@@ -1,19 +1,20 @@
 package kext_interface
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
 )
 
 const (
-	InfoLogLine              = 0
-	InfoConnectionIpv4       = 1
-	InfoConnectionIpv6       = 2
-	InfoConnectionEndEventV4 = 3
-	InfoConnectionEndEventV6 = 4
-	InfoBandwidthStatsV4     = 5
-	InfoBandwidthStatsV6     = 6
+	infoLogLine              byte = 0
+	infoConnectionIpv4       byte = 1
+	infoConnectionIpv6       byte = 2
+	infoConnectionEndEventV4 byte = 3
+	infoConnectionEndEventV6 byte = 4
+	infoBandwidthStatsV4     byte = 5
+	infoBandwidthStatsV6     byte = 6
 )
 
 var ErrorUnknownInfoType = errors.New("unknown info type")
@@ -117,22 +118,154 @@ type BandwidthValueV6 struct {
 	ReceivedBytes    uint64
 }
 
-type BandwidthStatsArray struct {
+type BandwidthStatsV4 struct {
 	Protocol uint8
-	ValuesV4 []BandwidthValueV4
-	ValuesV6 []BandwidthValueV6
+	Values   []BandwidthValueV4
 }
 
-type Info struct {
-	ConnectionV4    *ConnectionV4
-	ConnectionV6    *ConnectionV6
-	ConnectionEndV4 *ConnectionEndV4
-	ConnectionEndV6 *ConnectionEndV6
-	LogLine         *LogLine
-	BandwidthStats  *BandwidthStatsArray
+type BandwidthStatsV6 struct {
+	Protocol uint8
+	Values   []BandwidthValueV6
 }
 
-func RecvInfo(reader io.Reader) (*Info, error) {
+func parseConnectionV4(data []byte) (Info, error) {
+	conn := &ConnectionV4{}
+	reader := bytes.NewReader(data)
+
+	// Read fixed size values
+	err := binary.Read(reader, binary.LittleEndian, &conn.connectionV4Internal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read size of payload
+	var size uint32
+	err = binary.Read(reader, binary.LittleEndian, &size)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the array
+	conn.Payload = make([]byte, size)
+	err = binary.Read(reader, binary.LittleEndian, conn.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func parseConnectionV6(data []byte) (Info, error) {
+	conn := &ConnectionV6{}
+	reader := bytes.NewReader(data)
+
+	// Read fixed size values
+	err := binary.Read(reader, binary.LittleEndian, &conn.connectionV6Internal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read size of payload
+	var size uint32
+	err = binary.Read(reader, binary.LittleEndian, &size)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the array
+	conn.Payload = make([]byte, size)
+	err = binary.Read(reader, binary.LittleEndian, conn.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func parseConnectionEndV6(data []byte) (Info, error) {
+	var new ConnectionEndV6
+	reader := bytes.NewReader(data)
+
+	err := binary.Read(reader, binary.LittleEndian, &new)
+	if err != nil {
+		return nil, err
+	}
+	return &new, nil
+}
+
+func parseConnectionEndV4(data []byte) (Info, error) {
+	var new ConnectionEndV4
+	reader := bytes.NewReader(data)
+
+	err := binary.Read(reader, binary.LittleEndian, &new)
+	if err != nil {
+		return nil, err
+	}
+	return &new, nil
+}
+
+func parseLogLine(data []byte) (Info, error) {
+	var logLine LogLine
+	reader := bytes.NewReader(data)
+
+	err := binary.Read(reader, binary.LittleEndian, &logLine.Severity)
+	if err != nil {
+		return nil, err
+	}
+	// Read string
+	line := make([]byte, len(data)-1) // -1 for the severity enum.
+	err = binary.Read(reader, binary.LittleEndian, &line)
+	logLine.Line = string(line)
+	return &logLine, nil
+}
+
+func parseBandwidthStatsV4(data []byte) (Info, error) {
+	var bandwidth BandwidthStatsV4
+	reader := bytes.NewReader(data)
+
+	// Read Protocol
+	err := binary.Read(reader, binary.LittleEndian, &bandwidth.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	// Read size of array
+	var size uint32
+	err = binary.Read(reader, binary.LittleEndian, &size)
+	if err != nil {
+		return nil, err
+	}
+	// Read array
+	bandwidth.Values = make([]BandwidthValueV4, size)
+	for i := 0; i < int(size); i++ {
+		binary.Read(reader, binary.LittleEndian, &bandwidth.Values[i])
+	}
+	return &bandwidth, nil
+}
+
+func parseBandwidthStatsV6(data []byte) (Info, error) {
+	var bandwidth BandwidthStatsV6
+	reader := bytes.NewReader(data)
+
+	// Read Protocol
+	err := binary.Read(reader, binary.LittleEndian, &bandwidth.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	// Read size of array
+	var size uint32
+	err = binary.Read(reader, binary.LittleEndian, &size)
+	if err != nil {
+		return nil, err
+	}
+	// Read array
+	bandwidth.Values = make([]BandwidthValueV6, size)
+	for i := 0; i < int(size); i++ {
+		binary.Read(reader, binary.LittleEndian, &bandwidth.Values[i])
+	}
+	return &bandwidth, nil
+}
+
+type Info interface{}
+
+func RecvInfo(reader io.Reader) (Info, error) {
 	var infoType byte
 	err := binary.Read(reader, binary.LittleEndian, &infoType)
 	if err != nil {
@@ -143,121 +276,31 @@ func RecvInfo(reader io.Reader) (*Info, error) {
 	var size uint32
 	err = binary.Read(reader, binary.LittleEndian, &size)
 
-	// Read data
-	switch infoType {
-	case InfoConnectionIpv4:
-		{
-			var fixedSizeValues connectionV4Internal
-			err = binary.Read(reader, binary.LittleEndian, &fixedSizeValues)
-			if err != nil {
-				return nil, err
-			}
-			// Read size of payload
-			var size uint32
-			err = binary.Read(reader, binary.LittleEndian, &size)
-			if err != nil {
-				return nil, err
-			}
-			newInfo := ConnectionV4{connectionV4Internal: fixedSizeValues, Payload: make([]byte, size)}
-			err = binary.Read(reader, binary.LittleEndian, &newInfo.Payload)
-			return &Info{ConnectionV4: &newInfo}, nil
-		}
-	case InfoConnectionIpv6:
-		{
-			var fixedSizeValues connectionV6Internal
-			err = binary.Read(reader, binary.LittleEndian, &fixedSizeValues)
-			if err != nil {
-				return nil, err
-			}
-			// Read size of payload
-			var size uint32
-			err = binary.Read(reader, binary.LittleEndian, &size)
-			if err != nil {
-				return nil, err
-			}
-			newInfo := ConnectionV6{connectionV6Internal: fixedSizeValues, Payload: make([]byte, size)}
-			err = binary.Read(reader, binary.LittleEndian, &newInfo.Payload)
-			return &Info{ConnectionV6: &newInfo}, nil
-		}
-	case InfoConnectionEndEventV4:
-		{
-			var new ConnectionEndV4
-			err = binary.Read(reader, binary.LittleEndian, &new)
-			if err != nil {
-				return nil, err
-			}
-			return &Info{ConnectionEndV4: &new}, nil
-		}
-	case InfoConnectionEndEventV6:
-		{
-			var new ConnectionEndV6
-			err = binary.Read(reader, binary.LittleEndian, &new)
-			if err != nil {
-				return nil, err
-			}
-			return &Info{ConnectionEndV6: &new}, nil
-		}
-	case InfoLogLine:
-		{
-			var logLine = LogLine{}
-			// Read severity
-			err = binary.Read(reader, binary.LittleEndian, &logLine.Severity)
-			if err != nil {
-				return nil, err
-			}
-			// Read string
-			var line = make([]byte, size-1) // -1 for the severity enum.
-			err = binary.Read(reader, binary.LittleEndian, &line)
-			logLine.Line = string(line)
-			return &Info{LogLine: &logLine}, nil
-		}
-	case InfoBandwidthStatsV4:
-		{
-			// Read Protocol
-			var protocol uint8
-			err = binary.Read(reader, binary.LittleEndian, &protocol)
-			if err != nil {
-				return nil, err
-			}
-			// Read size of array
-			var size uint32
-			err = binary.Read(reader, binary.LittleEndian, &size)
-			if err != nil {
-				return nil, err
-			}
-			// Read array
-			var stats_array = make([]BandwidthValueV4, size)
-			for i := 0; i < int(size); i++ {
-				binary.Read(reader, binary.LittleEndian, &stats_array[i])
-			}
-
-			return &Info{BandwidthStats: &BandwidthStatsArray{Protocol: protocol, ValuesV4: stats_array}}, nil
-		}
-	case InfoBandwidthStatsV6:
-		{
-			// Read Protocol
-			var protocol uint8
-			err = binary.Read(reader, binary.LittleEndian, &protocol)
-			if err != nil {
-				return nil, err
-			}
-			// Read size of array
-			var size uint32
-			err = binary.Read(reader, binary.LittleEndian, &size)
-			if err != nil {
-				return nil, err
-			}
-			// Read array
-			var stats_array = make([]BandwidthValueV6, size)
-			for i := 0; i < int(size); i++ {
-				binary.Read(reader, binary.LittleEndian, &stats_array[i])
-			}
-
-			return &Info{BandwidthStats: &BandwidthStatsArray{Protocol: protocol, ValuesV6: stats_array}}, nil
-		}
+	data := make([]byte, size)
+	n, err := reader.Read(data)
+	if err != nil {
+		return nil, err
 	}
 
-	unknownData := make([]byte, size)
-	reader.Read(unknownData)
+	if n != int(size) {
+		return nil, errors.New("not enough data read")
+	}
+
+	// Map of infoType to parser functions
+	parsers := map[byte]func([]byte) (Info, error){
+		infoConnectionIpv4:       parseConnectionV4,
+		infoConnectionIpv6:       parseConnectionV6,
+		infoConnectionEndEventV4: parseConnectionEndV4,
+		infoConnectionEndEventV6: parseConnectionEndV6,
+		infoLogLine:              parseLogLine,
+		infoBandwidthStatsV4:     parseBandwidthStatsV4,
+		infoBandwidthStatsV6:     parseBandwidthStatsV6,
+	}
+
+	parser, ok := parsers[infoType]
+	if ok {
+		return parser(data)
+	}
+
 	return nil, ErrorUnknownInfoType
 }
