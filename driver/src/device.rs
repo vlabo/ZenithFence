@@ -149,11 +149,6 @@ impl Device {
                         // Add verdict in the cache.
                         let redirect_info = self.connection_cache.update_connection(key, verdict);
 
-                        // if verdict.is_permanent() {
-                        //     dbg!(self.logger, "resetting filters {}: {}", key, verdict);
-                        //     _ = self.filter_engine.reset_all_filters();
-                        // }
-
                         match verdict {
                             crate::connection::Verdict::Accept
                             | crate::connection::Verdict::PermanentAccept => {
@@ -307,8 +302,8 @@ impl Device {
             // Set any verdict. Driver will unload after that and the filter will not be active.
             _ = self
                 .connection_cache
-                .update_connection(key, crate::connection::Verdict::PermanentAccept);
-            _ = self.inject_packet(packet, false);
+                .update_connection(key, crate::connection::Verdict::PermanentBlock);
+            _ = self.inject_packet(packet, true); // Blocked must be set, so it only handles the ALE layer.
         }
     }
 
