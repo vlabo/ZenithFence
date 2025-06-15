@@ -14,6 +14,9 @@ pub struct ConnectionCache {
     connections_v6: ConnectionMap<ConnectionV6>,
     lock_v4: RwSpinLock,
     lock_v6: RwSpinLock,
+
+    tmp_ended_connections_buffer_v4: Vec<ConnectionV4>,
+    tmp_ended_connections_buffer_v6: Vec<ConnectionV6>,
 }
 
 impl ConnectionCache {
@@ -23,6 +26,8 @@ impl ConnectionCache {
             connections_v6: ConnectionMap::new(),
             lock_v4: RwSpinLock::default(),
             lock_v6: RwSpinLock::default(),
+            tmp_ended_connections_buffer_v4: Vec::with_capacity(100),
+            tmp_ended_connections_buffer_v6: Vec::with_capacity(100),
         }
     }
 
@@ -91,15 +96,24 @@ impl ConnectionCache {
         self.connections_v6.end_all_on_port(key)
     }
 
-    pub fn clean_ended_connections(&mut self) {
+    pub fn clean_ended_connections<'a>(
+        &'a mut self,
+    ) -> (&'a mut Vec<ConnectionV4>, &'a mut Vec<ConnectionV6>) {
         {
             let _guard = self.lock_v4.write_lock();
-            self.connections_v4.clean_ended_connections();
+            self.connections_v4
+                .clean_ended_connections(&mut self.tmp_ended_connections_buffer_v4);
         }
+
         {
             let _guard = self.lock_v6.write_lock();
-            self.connections_v6.clean_ended_connections();
+            self.connections_v6
+                .clean_ended_connections(&mut self.tmp_ended_connections_buffer_v6);
         }
+        return (
+            &mut self.tmp_ended_connections_buffer_v4,
+            &mut self.tmp_ended_connections_buffer_v6,
+        );
     }
 
     pub fn clear(&mut self) {

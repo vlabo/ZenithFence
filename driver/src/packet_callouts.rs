@@ -205,9 +205,9 @@ fn ip_packet_layer(
                     data.action_permit();
                     return;
                 } else {
-                    // This happens sometimes. Leave the decision for user space. TODO(vladimir): Find out why.
-                    err!("Invalid state for: {}", key);
-                    is_tmp_verdict = true;
+                    // This happens when connection is closed and there are leftover packets that cannot be associated to a connection.
+                    data.block_and_absorb();
+                    return;
                 }
             }
         } else {

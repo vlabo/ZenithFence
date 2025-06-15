@@ -139,29 +139,47 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         self.0.clear();
     }
 
-    pub fn clean_ended_connections(&mut self) {
+    pub fn clean_ended_connections(&mut self, removed_connections: &mut Vec<T>) {
+        // Have a limit how much connections can be removed at once.
+        // Removing thousand connections at once can take significant time that can cause callouts to block and the OS to crash.
+        const LIMIT_OF_REMOVED_CONNECTIONS: u32 = 100;
+
         let now = wdk::utils::get_system_timestamp_ms();
-        const TEN_MINUETS: u64 = Duration::from_secs(60 * 10).as_millis() as u64;
-        let before_ten_minutes = now - TEN_MINUETS;
+        const TWO_MINUETS: u64 = Duration::from_secs(60 * 2).as_millis() as u64;
+        let before_two_minutes = now - TWO_MINUETS;
         let before_one_minute = now - Duration::from_secs(60).as_millis() as u64;
 
-        for (_, connections) in self.0.iter_mut() {
+        let mut removed_count = 0;
+
+        self.0.retain(|_, connections| {
             connections.retain(|c| {
+                if removed_count >= LIMIT_OF_REMOVED_CONNECTIONS {
+                    // Limit reached, keep the rest.
+                    return true;
+                }
+
                 if c.has_ended() && c.get_end_time() < before_one_minute {
                     // Ended more than 1 minute ago
+                    // End event was already reported, no need to add it to removed_connections.
+                    removed_count += 1;
                     return false;
                 }
 
-                if c.get_last_accessed_time() < before_ten_minutes {
-                    // Last active more than 10 minutes ago
-                    return false;
+                if removed_connections.capacity() > removed_connections.len() {
+                    // Only remove connections if there is enough space in the supplied array.
+                    if c.get_last_accessed_time() < before_two_minutes {
+                        // Last active more than 2 minutes ago
+                        removed_connections.push(c.clone());
+                        removed_count += 1;
+                        return false;
+                    }
                 }
 
                 // Keep
                 return true;
             });
-        }
-        self.0.retain(|_, v| !v.is_empty());
+            !connections.is_empty()
+        });
     }
 
     #[allow(dead_code)]

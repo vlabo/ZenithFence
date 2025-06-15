@@ -15,8 +15,9 @@ use wdk::{
 };
 
 use crate::{
-    array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection_cache::ConnectionCache,
-    connection_map::Key, dbg, err, id_cache::IdCache, logger, packet_util::Redirect,
+    array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection::Connection,
+    connection_cache::ConnectionCache, connection_map::Key, dbg, err, id_cache::IdCache, logger,
+    packet_util::Redirect,
 };
 
 pub enum Packet {
@@ -285,7 +286,39 @@ impl Device {
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
-                self.connection_cache.clean_ended_connections();
+                let (conn_v4, conn_v6) = self.connection_cache.clean_ended_connections();
+
+                // Process ended ipv4 connections
+                for conn in conn_v4.iter() {
+                    let info = protocol::info::connection_end_event_v4_info(
+                        conn.process_id,
+                        conn.get_direction() as u8,
+                        conn.protocol.into(),
+                        conn.local_address.0,
+                        conn.remote_address.0,
+                        conn.local_port,
+                        conn.remote_port,
+                    );
+                    _ = self.event_queue.push(info);
+                }
+                // Connections process clear the buffer
+                conn_v4.clear();
+
+                // Process ended ipv6 connections
+                for conn in conn_v6.iter() {
+                    let info = protocol::info::connection_end_event_v6_info(
+                        conn.process_id,
+                        conn.get_direction() as u8,
+                        conn.protocol.into(),
+                        conn.local_address.0,
+                        conn.remote_address.0,
+                        conn.local_port,
+                        conn.remote_port,
+                    );
+                    _ = self.event_queue.push(info);
+                }
+                // Connections process clear the buffer
+                conn_v6.clear();
             }
         }
     }
