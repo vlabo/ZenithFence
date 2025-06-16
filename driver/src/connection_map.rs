@@ -1,9 +1,9 @@
 use core::{fmt::Display, time::Duration};
 
-use crate::connection::Connection;
-use alloc::vec::Vec;
-use hashbrown::HashMap;
+use crate::connection::{Connection, RedirectInfo, Verdict};
+use alloc::{sync::Arc, vec::Vec};
 use smoltcp::wire::{IpAddress, IpProtocol};
+use wdk::rw_spin_lock::Mutex;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 pub struct Key {
@@ -29,11 +29,6 @@ impl Display for Key {
 }
 
 impl Key {
-    /// Returns the protocol and port as a tuple.
-    pub fn small(&self) -> (IpProtocol, u16) {
-        (self.protocol, self.local_port)
-    }
-
     /// Returns true if the local address is an IPv4 address.
     pub fn is_ipv6(&self) -> bool {
         match self.local_address {
@@ -63,46 +58,80 @@ impl Key {
     }
 }
 
-pub struct ConnectionMap<T: Connection>(HashMap<(IpProtocol, u16), Vec<T>>);
+struct Port<T: Connection> {
+    conns: Vec<T>,
+}
+
+pub struct ConnectionMap<T: Connection> {
+    tcp: Vec<Option<Arc<Mutex<Port<T>>>>>,
+    udp: Vec<Option<Arc<Mutex<Port<T>>>>>,
+}
 
 impl<T: Connection + Clone> ConnectionMap<T> {
     pub fn new() -> Self {
-        Self(HashMap::new())
+        let mut tcp = Vec::with_capacity(u16::MAX as usize);
+        let mut udp = Vec::with_capacity(u16::MAX as usize);
+        unsafe {
+            tcp.set_len(tcp.capacity());
+            udp.set_len(udp.capacity());
+        }
+
+        Self { tcp, udp }
     }
 
     pub fn add(&mut self, conn: T) {
-        let key = conn.get_key().small();
-        if let Some(connections) = self.0.get_mut(&key) {
-            connections.push(conn);
-        } else {
-            self.0.insert(key, alloc::vec![conn]);
-        }
+        let array = match conn.get_protocol() {
+            IpProtocol::Tcp => &mut self.tcp,
+            IpProtocol::Udp => &mut self.udp,
+            _ => return,
+        };
+
+        let port = match array[conn.get_local_port() as usize].clone() {
+            Some(port) => port.clone(),
+            None => {
+                let p = Arc::new(Mutex::new(Port {
+                    conns: Vec::<T>::with_capacity(1),
+                }));
+                array[conn.get_local_port() as usize] = Some(p.clone());
+                p
+            }
+        };
+
+        let mut port = port.write_lock();
+        port.conns.push(conn);
     }
 
-    pub fn get_mut(&mut self, key: &Key) -> Option<&mut T> {
-        if let Some(connections) = self.0.get_mut(&key.small()) {
-            for conn in connections {
-                if conn.remote_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    return Some(conn);
-                }
+    pub fn update_verdict(&mut self, key: Key, verdict: Verdict) -> Option<RedirectInfo> {
+        let port = match self.find_port(key.protocol, key.local_port) {
+            Some(ptr) => ptr,
+            None => return None,
+        };
+        let mut port = port.write_lock();
+
+        for conn in &mut port.conns {
+            if conn.remote_equals(&key) {
+                conn.set_verdict(verdict);
+                return conn.redirect_info();
             }
         }
-
-        None
+        return None;
     }
 
     pub fn read<C>(&self, key: &Key, read_connection: fn(&T) -> Option<C>) -> Option<C> {
-        if let Some(connections) = self.0.get(&key.small()) {
-            for conn in connections {
-                if conn.remote_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    return read_connection(conn);
-                }
-                if conn.redirect_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    return read_connection(conn);
-                }
+        let port = match self.find_port(key.protocol, key.local_port) {
+            Some(ptr) => ptr,
+            None => return None,
+        };
+        let mut port = port.write_lock();
+
+        for conn in &mut port.conns {
+            if conn.remote_equals(key) {
+                conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+                return read_connection(conn);
+            }
+            if conn.redirect_equals(key) {
+                conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+                return read_connection(conn);
             }
         }
 
@@ -110,33 +139,41 @@ impl<T: Connection + Clone> ConnectionMap<T> {
     }
 
     pub fn end(&mut self, key: Key) -> Option<T> {
-        if let Some(connections) = self.0.get_mut(&key.small()) {
-            for (_, conn) in connections.iter_mut().enumerate() {
-                if conn.remote_equals(&key) {
-                    conn.end(wdk::utils::get_system_timestamp_ms());
-                    return Some(conn.clone());
-                }
+        let port = match self.find_port(key.protocol, key.local_port) {
+            Some(ptr) => ptr,
+            None => return None,
+        };
+        let mut port = port.write_lock();
+
+        for (_, conn) in port.conns.iter_mut().enumerate() {
+            if conn.remote_equals(&key) {
+                conn.end(wdk::utils::get_system_timestamp_ms());
+                return Some(conn.clone());
             }
         }
         return None;
     }
 
     pub fn end_all_on_port(&mut self, key: (IpProtocol, u16)) -> Option<Vec<T>> {
-        if let Some(connections) = self.0.get_mut(&key) {
-            let mut vec = Vec::with_capacity(connections.len());
-            for (_, conn) in connections.iter_mut().enumerate() {
-                if !conn.has_ended() {
-                    conn.end(wdk::utils::get_system_timestamp_ms());
-                    vec.push(conn.clone());
-                }
+        let port = match self.find_port(key.0, key.1) {
+            Some(ptr) => ptr,
+            None => return None,
+        };
+        let mut port = port.write_lock();
+
+        let mut vec = Vec::with_capacity(port.conns.len());
+        for (_, conn) in port.conns.iter_mut().enumerate() {
+            if !conn.has_ended() {
+                conn.end(wdk::utils::get_system_timestamp_ms());
+                vec.push(conn.clone());
             }
-            return Some(vec);
         }
-        return None;
+        return Some(vec);
     }
 
     pub fn clear(&mut self) {
-        self.0.clear();
+        self.tcp.clear();
+        self.udp.clear();
     }
 
     pub fn clean_ended_connections(&mut self, removed_connections: &mut Vec<T>) {
@@ -151,47 +188,72 @@ impl<T: Connection + Clone> ConnectionMap<T> {
 
         let mut removed_count = 0;
 
-        self.0.retain(|_, connections| {
-            connections.retain(|c| {
-                if removed_count >= LIMIT_OF_REMOVED_CONNECTIONS {
-                    // Limit reached, keep the rest.
-                    return true;
+        fn clean_ports<T: Connection + Clone>(
+            ports: &mut [Option<Arc<Mutex<Port<T>>>>],
+            removed_connections: &mut Vec<T>,
+            removed_count: &mut u32,
+            before_one_minute: u64,
+            before_two_minutes: u64,
+        ) {
+            for p in ports {
+                let mut is_empty = false;
+                if let Some(port_arc) = p {
+                    let mut port = port_arc.write_lock();
+                    port.conns.retain(|c| {
+                        if *removed_count >= LIMIT_OF_REMOVED_CONNECTIONS {
+                            // Limit reached, keep the rest.
+                            return true;
+                        }
+
+                        if c.has_ended() && c.get_end_time() < before_one_minute {
+                            // Ended more than 1 minute ago
+                            // End event was already reported, no need to add it to removed_connections.
+                            *removed_count += 1;
+                            return false;
+                        }
+
+                        if removed_connections.capacity() > removed_connections.len() {
+                            // Only remove connections if there is enough space in the supplied array.
+                            if c.get_last_accessed_time() < before_two_minutes {
+                                // Last active more than 2 minutes ago
+                                removed_connections.push(c.clone());
+                                *removed_count += 1;
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    is_empty = port.conns.is_empty();
                 }
-
-                if c.has_ended() && c.get_end_time() < before_one_minute {
-                    // Ended more than 1 minute ago
-                    // End event was already reported, no need to add it to removed_connections.
-                    removed_count += 1;
-                    return false;
+                if is_empty {
+                    *p = None;
                 }
-
-                if removed_connections.capacity() > removed_connections.len() {
-                    // Only remove connections if there is enough space in the supplied array.
-                    if c.get_last_accessed_time() < before_two_minutes {
-                        // Last active more than 2 minutes ago
-                        removed_connections.push(c.clone());
-                        removed_count += 1;
-                        return false;
-                    }
-                }
-
-                // Keep
-                return true;
-            });
-            !connections.is_empty()
-        });
-    }
-
-    #[allow(dead_code)]
-    pub fn get_count(&self) -> usize {
-        let mut count = 0;
-        for conn in self.0.values() {
-            count += conn.len();
+            }
         }
-        return count;
+
+        clean_ports(
+            &mut self.tcp,
+            removed_connections,
+            &mut removed_count,
+            before_one_minute,
+            before_two_minutes,
+        );
+        clean_ports(
+            &mut self.udp,
+            removed_connections,
+            &mut removed_count,
+            before_one_minute,
+            before_two_minutes,
+        );
     }
 
-    pub fn iter(&self) -> hashbrown::hash_map::Iter<'_, (IpProtocol, u16), Vec<T>> {
-        self.0.iter()
+    fn find_port(&self, protocol: IpProtocol, port: u16) -> Option<Arc<Mutex<Port<T>>>> {
+        let array = match protocol {
+            IpProtocol::Tcp => &self.tcp,
+            IpProtocol::Udp => &self.udp,
+            _ => return None,
+        };
+
+        return array[port as usize].clone();
     }
 }
