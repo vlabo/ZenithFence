@@ -5,12 +5,7 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 use protocol::info::{Info, Severity};
-
-#[cfg(not(debug_assertions))]
-pub const LOG_LEVEL: u8 = Severity::Warning as u8;
-
-#[cfg(debug_assertions)]
-pub const LOG_LEVEL: u8 = Severity::Trace as u8;
+pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 pub const MAX_LOG_LINE_SIZE: usize = 150;
 const SIZE_OF_LOG_LINE_BUFFER: usize = 1024;

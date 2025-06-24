@@ -302,6 +302,7 @@ impl WdfObjectAttributes {
 #[link(name = "wmilib", kind = "static")]
 #[link(name = "NtosKrnl", kind = "static")]
 #[link(name = "ndis", kind = "static")]
+#[link(name = "hal", kind = "static")]
 #[link(name = "c_helper", kind = "static")]
 extern "C" {
     /// The FwpsCalloutUnregisterById0 function unregisters a callout from the filter engine.
@@ -532,4 +533,8 @@ extern "C" {
     /// The KeQuerySystemTime routine obtains the current system time.
     /// System time is a count of 100-nanosecond intervals since January 1, 1601. System time is typically updated approximately every ten milliseconds. This value is computed for the GMT time zone.
     pub(crate) fn pm_QuerySystemTime() -> u64;
+
+    /// The KeQueryPerformanceCounter routine retrieves the current value and frequency of the performance counter.
+    /// Use KeQueryPerformanceCounter to acquire high resolution (<1µs) time stamps for time interval measurements.
+    pub(crate) fn KeQueryPerformanceCounter(frequency: *mut i64) -> i64;
 }
