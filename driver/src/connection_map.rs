@@ -177,38 +177,26 @@ impl<T: Connection + Clone> ConnectionMap<T> {
     }
 
     pub fn clean_ended_connections(&mut self, removed_connections: &mut Vec<T>) {
-        // Have a limit how much connections can be removed at once.
-        // Removing thousand connections at once can take significant time that can cause callouts to block and the OS to crash.
-        const LIMIT_OF_REMOVED_CONNECTIONS: u32 = 100;
-
         let now = wdk::utils::get_system_timestamp_ms();
         const TWO_MINUETS: u64 = Duration::from_secs(60 * 2).as_millis() as u64;
         let before_two_minutes = now - TWO_MINUETS;
         let before_one_minute = now - Duration::from_secs(60).as_millis() as u64;
 
-        let mut removed_count = 0;
-
         fn clean_ports<T: Connection + Clone>(
             ports: &mut [Option<Arc<Mutex<Port<T>>>>],
             removed_connections: &mut Vec<T>,
-            removed_count: &mut u32,
             before_one_minute: u64,
             before_two_minutes: u64,
         ) {
             for p in ports {
                 let mut is_empty = false;
                 if let Some(port_arc) = p {
+                    // Lock port
                     let mut port = port_arc.write_lock();
                     port.conns.retain(|c| {
-                        if *removed_count >= LIMIT_OF_REMOVED_CONNECTIONS {
-                            // Limit reached, keep the rest.
-                            return true;
-                        }
-
                         if c.has_ended() && c.get_end_time() < before_one_minute {
                             // Ended more than 1 minute ago
                             // End event was already reported, no need to add it to removed_connections.
-                            *removed_count += 1;
                             return false;
                         }
 
@@ -217,7 +205,6 @@ impl<T: Connection + Clone> ConnectionMap<T> {
                             if c.get_last_accessed_time() < before_two_minutes {
                                 // Last active more than 2 minutes ago
                                 removed_connections.push(c.clone());
-                                *removed_count += 1;
                                 return false;
                             }
                         }
@@ -225,6 +212,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
                     });
                     is_empty = port.conns.is_empty();
                 }
+                // If there are no more connections in the port. Clean it.
                 if is_empty {
                     *p = None;
                 }
@@ -234,14 +222,12 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         clean_ports(
             &mut self.tcp,
             removed_connections,
-            &mut removed_count,
             before_one_minute,
             before_two_minutes,
         );
         clean_ports(
             &mut self.udp,
             removed_connections,
-            &mut removed_count,
             before_one_minute,
             before_two_minutes,
         );
@@ -254,6 +240,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
             _ => return None,
         };
 
+        // Copy the Arc. This will hold active reference to the port while it is alive.
         return array[port as usize].clone();
     }
 }

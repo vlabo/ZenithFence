@@ -166,15 +166,15 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     // Check if connection is already in cache.
     let verdict = if ale_data.is_ipv6 {
         device
-            .connection_cache
-            .read_connection_v6(&key, |conn| -> Option<Verdict> {
+            .connections_v6
+            .read(&key, |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
                 Some(conn.verdict)
             })
     } else {
         device
-            .connection_cache
-            .read_connection_v4(&ale_data.as_key(), |conn| -> Option<Verdict> {
+            .connections_v4
+            .read(&ale_data.as_key(), |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
                 Some(conn.verdict)
             })
@@ -269,11 +269,11 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         if ale_data.is_ipv6 {
             let conn =
                 ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.add_connection_v6(conn);
+            device.connections_v6.add(conn);
         } else {
             let conn =
                 ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.add_connection_v4(conn);
+            device.connections_v4.add(conn);
         }
 
         // Drop packet. It will be re-injected after user space returns a verdict.
@@ -361,7 +361,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
             remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
         };
 
-        let conn = device.connection_cache.end_connection_v4(key);
+        let conn = device.connections_v4.end(key);
         if let Some(conn) = conn {
             let info = protocol::info::connection_end_event_v4_info(
                 data.get_process_id().unwrap_or(0),
@@ -402,7 +402,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                 remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
             };
 
-            let conn = device.connection_cache.end_connection_v6(key);
+            let conn = device.connections_v6.end(key);
             if let Some(conn) = conn {
                 let info = protocol::info::connection_end_event_v6_info(
                     data.get_process_id().unwrap_or(0),
@@ -426,7 +426,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
     match data.layer {
         layer::Layer::AleResourceAssignmentV4Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV4;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
+            if let Some(conns) = device.connections_v4.end_all_on_port((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -453,7 +453,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceAssignmentV6Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV6;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
+            if let Some(conns) = device.connections_v6.end_all_on_port((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -480,7 +480,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceReleaseV4 => {
             type Fields = layer::FieldsAleResourceReleaseV4;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
+            if let Some(conns) = device.connections_v4.end_all_on_port((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -507,7 +507,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceReleaseV6 => {
             type Fields = layer::FieldsAleResourceReleaseV6;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
+            if let Some(conns) = device.connections_v6.end_all_on_port((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {

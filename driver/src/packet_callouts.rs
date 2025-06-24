@@ -9,7 +9,6 @@ use crate::connection::{
     Connection, ConnectionV4, ConnectionV6, Direction, RedirectInfo, Verdict, PM_DNS_PORT,
     PM_SPN_PORT,
 };
-use crate::connection_cache::ConnectionCache;
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
@@ -158,8 +157,9 @@ fn ip_packet_layer(
             key.protocol,
             smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
         ) {
+            // TCP and UDP always need to go through ALE layer first.
             if let Some(mut conn_info) =
-                get_connection_info(&mut device.connection_cache, &key, ipv6)
+                get_connection_info(device, &key, ipv6)
             {
                 process_id = conn_info.process_id;
                 // Check if there is action for this connection.
@@ -272,12 +272,12 @@ fn clone_packet(
 }
 
 fn get_connection_info(
-    connection_cache: &mut ConnectionCache,
+    device: &Device,
     key: &Key,
     ipv6: bool,
 ) -> Option<ConnectionInfo> {
     if ipv6 {
-        let conn_info = connection_cache.read_connection_v6(
+        let conn_info = device.connections_v6.read(
             &key,
             |conn: &ConnectionV6| -> Option<ConnectionInfo> {
                 // Function is is behind spin lock. Just copy and return.
@@ -286,7 +286,7 @@ fn get_connection_info(
         );
         return conn_info;
     } else {
-        let conn_info = connection_cache.read_connection_v4(
+        let conn_info = device.connections_v4.read(
             &key,
             |conn: &ConnectionV4| -> Option<ConnectionInfo> {
                 // Function is is behind spin lock. Just copy and return.
