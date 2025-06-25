@@ -15,17 +15,10 @@ use wdk::{
 };
 
 use crate::{
-    array_holder::ArrayHolder,
-    bandwidth::Bandwidth,
-    callouts,
-    connection::{Connection, ConnectionV4, ConnectionV6},
-    connection_map::{ConnectionMap, Key},
-    dbg, err,
-    id_cache::IdCache,
-    logger,
+    array_holder::ArrayHolder, bandwidth::Bandwidth, callouts, connection::Connection,
+    connection_cache::ConnectionCache, connection_map::Key, dbg, err, id_cache::IdCache, logger,
     packet_util::Redirect,
 };
-use alloc::vec::Vec;
 
 pub enum Packet {
     PacketLayer(NetBufferList, InjectInfo),
@@ -38,8 +31,7 @@ pub struct Device {
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) event_queue: IOQueue<Info>,
     pub(crate) packet_cache: IdCache,
-    pub(crate) connections_v4: ConnectionMap<ConnectionV4>,
-    pub(crate) connections_v6: ConnectionMap<ConnectionV6>,
+    pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
     pub(crate) bandwidth_stats: Bandwidth,
@@ -64,8 +56,7 @@ impl Device {
             read_leftover: ArrayHolder::default(),
             event_queue: IOQueue::new(),
             packet_cache: IdCache::new(),
-            connections_v4: ConnectionMap::new(),
-            connections_v6: ConnectionMap::new(),
+            connection_cache: ConnectionCache::new(),
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
             bandwidth_stats: Bandwidth::new(),
@@ -157,11 +148,7 @@ impl Device {
                     if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
                         dbg!("Verdict received {}: {}", key, verdict);
                         // Add verdict in the cache.
-                        let redirect_info = if key.is_ipv6() {
-                            self.connections_v6.update_verdict(key, verdict)
-                        } else {
-                            self.connections_v4.update_verdict(key, verdict)
-                        };
+                        let redirect_info = self.connection_cache.update_connection(key, verdict);
 
                         match verdict {
                             crate::connection::Verdict::Accept
@@ -202,20 +189,18 @@ impl Device {
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
                     dbg!("Verdict update received {:?}: {}", update, verdict);
-                    _classify_defer = self.connections_v4.update_verdict(
-                        Key {
-                            protocol: IpProtocol::from(update.protocol),
-                            local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                &update.local_address,
-                            )),
-                            local_port: update.local_port,
-                            remote_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                &update.remote_address,
-                            )),
-                            remote_port: update.remote_port,
-                        },
-                        verdict,
-                    );
+                    let key = Key {
+                        protocol: IpProtocol::from(update.protocol),
+                        local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
+                            &update.local_address,
+                        )),
+                        local_port: update.local_port,
+                        remote_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
+                            &update.remote_address,
+                        )),
+                        remote_port: update.remote_port,
+                    };
+                    _classify_defer = self.connection_cache.update_connection(key, verdict);
                 } else {
                     err!("invalid verdict value: {}", update.verdict);
                 }
@@ -226,28 +211,25 @@ impl Device {
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
                     dbg!("Verdict update received {:?}: {}", update, verdict);
-                    _classify_defer = self.connections_v6.update_verdict(
-                        Key {
-                            protocol: IpProtocol::from(update.protocol),
-                            local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                &update.local_address,
-                            )),
-                            local_port: update.local_port,
-                            remote_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                &update.remote_address,
-                            )),
-                            remote_port: update.remote_port,
-                        },
-                        verdict,
-                    );
+                    let key = Key {
+                        protocol: IpProtocol::from(update.protocol),
+                        local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
+                            &update.local_address,
+                        )),
+                        local_port: update.local_port,
+                        remote_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
+                            &update.remote_address,
+                        )),
+                        remote_port: update.remote_port,
+                    };
+                    _classify_defer = self.connection_cache.update_connection(key, verdict);
                 } else {
                     err!("invalid verdict value: {}", update.verdict);
                 }
             }
             CommandType::ClearCache => {
                 wdk::dbg!("ClearCache command");
-                self.connections_v4.clear();
-                self.connections_v6.clear();
+                self.connection_cache.clear();
                 if let Err(err) = self.filter_engine.reset_all_filters() {
                     err!("failed to reset filters: {}", err);
                 }
@@ -300,8 +282,7 @@ impl Device {
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
-                let mut conn_v4 = Vec::with_capacity(100);
-                self.connections_v4.clean_ended_connections(&mut conn_v4);
+                let (conn_v4, conn_v6) = self.connection_cache.clean_ended_connections();
 
                 // Process ended ipv4 connections
                 for conn in conn_v4.iter() {
@@ -316,8 +297,8 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
-                let mut conn_v6 = Vec::with_capacity(100);
-                self.connections_v6.clean_ended_connections(&mut conn_v6);
+
+                conn_v4.clear();
 
                 // Process ended ipv6 connections
                 for conn in conn_v6.iter() {
@@ -332,6 +313,7 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
+                conn_v6.clear();
             }
         }
     }
@@ -347,8 +329,8 @@ impl Device {
             let packet = el.value.1;
             // Set any verdict. Driver will unload after that and the filter will not be active.
             _ = self
-                .connections_v4
-                .update_verdict(key, crate::connection::Verdict::PermanentBlock);
+                .connection_cache
+                .update_connection(key, crate::connection::Verdict::PermanentBlock);
             _ = self.inject_packet(packet, true); // Blocked must be set, so it only handles the ALE layer.
         }
     }

@@ -10,6 +10,7 @@ mod bandwidth;
 mod callouts;
 mod common;
 mod connection;
+mod connection_cache;
 mod connection_map;
 mod device;
 mod driver_hashmap;

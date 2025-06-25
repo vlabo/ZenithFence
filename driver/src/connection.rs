@@ -200,6 +200,22 @@ pub struct RedirectInfo {
     pub(crate) redirect_address: IpAddress,
 }
 
+pub struct ConnectionInfo {
+    pub verdict: Verdict,
+    pub process_id: u64,
+    pub redirect_info: Option<RedirectInfo>,
+}
+
+impl ConnectionInfo {
+    pub fn from_connection<T: Connection>(conn: &T) -> Self {
+        ConnectionInfo {
+            verdict: conn.get_verdict(),
+            process_id: conn.get_process_id(),
+            redirect_info: conn.redirect_info(),
+        }
+    }
+}
+
 impl ConnectionV4 {
     /// Creates a new ipv4 connection from the given key.
     pub fn from_key(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
