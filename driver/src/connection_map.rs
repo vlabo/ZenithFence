@@ -1,7 +1,7 @@
 use core::{fmt::Display, time::Duration};
 
 use crate::connection::{Connection, RedirectInfo, Verdict};
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
 
@@ -63,20 +63,16 @@ struct Port<T: Connection> {
 }
 
 pub struct ConnectionMap<T: Connection> {
-    tcp: Vec<Option<Arc<Mutex<Port<T>>>>>,
-    udp: Vec<Option<Arc<Mutex<Port<T>>>>>,
+    tcp: Box<[Option<Arc<Mutex<Port<T>>>>]>,
+    udp: Box<[Option<Arc<Mutex<Port<T>>>>]>,
 }
 
 impl<T: Connection + Clone> ConnectionMap<T> {
     pub fn new() -> Self {
-        let mut tcp = Vec::with_capacity(u16::MAX as usize);
-        let mut udp = Vec::with_capacity(u16::MAX as usize);
-        unsafe {
-            tcp.set_len(tcp.capacity());
-            udp.set_len(udp.capacity());
+        Self {
+            tcp: vec![None; u16::MAX as usize].into_boxed_slice(),
+            udp: vec![None; u16::MAX as usize].into_boxed_slice(),
         }
-
-        Self { tcp, udp }
     }
 
     pub fn add(&mut self, conn: T) {
@@ -171,9 +167,10 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         return Some(vec);
     }
 
+    // clear zeros out the map. Do not use it after calling function.
     pub fn clear(&mut self) {
-        self.tcp.clear();
-        self.udp.clear();
+        self.tcp = vec![None; 0].into_boxed_slice();
+        self.udp = vec![None; 0].into_boxed_slice();
     }
 
     pub fn clean_ended_connections(&mut self, removed_connections: &mut Vec<T>) {
