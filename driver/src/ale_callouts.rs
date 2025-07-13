@@ -167,7 +167,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     let verdict = if ale_data.is_ipv6 {
         device
             .connection_cache
-            .v4
+            .v6
             .read(&key, |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
                 Some(conn.verdict)
@@ -175,7 +175,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     } else {
         device
             .connection_cache
-            .v6
+            .v4
             .read(&ale_data.as_key(), |conn| -> Option<Verdict> {
                 // Function is behind spin lock, just copy and return.
                 Some(conn.verdict)

@@ -167,10 +167,15 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         return Some(vec);
     }
 
-    // clear zeros out the map. Do not use it after calling function.
+    /// clear removes all verdicts from the cache.
     pub fn clear(&mut self) {
-        self.tcp = vec![None; 0].into_boxed_slice();
-        self.udp = vec![None; 0].into_boxed_slice();
+        // Reset all values in the array
+        for c in &mut self.tcp {
+            _ = c.take()
+        }
+        for c in &mut self.udp {
+            _ = c.take()
+        }
     }
 
     pub fn clean_ended_connections(&mut self, removed_connections: &mut Vec<T>) {
