@@ -77,7 +77,7 @@ impl<T> Mutex<T> {
     }
 }
 
-// MutexReadGuard is a mutex write guard lock
+// MutexWriteGuard is a mutex write guard lock
 pub struct MutexWriteGuard<'a, T> {
     lock: &'a Mutex<T>,
     old_irq: u8,

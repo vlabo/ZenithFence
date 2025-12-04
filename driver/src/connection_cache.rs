@@ -54,7 +54,7 @@ impl ConnectionCache {
             let conn_info = self
                 .v6
                 .read(&key, |conn: &ConnectionV6| -> Option<ConnectionInfo> {
-                    // Function is is behind spin lock. Just copy and return.
+                    // Function is behind spin lock. Just copy and return.
                     Some(ConnectionInfo::from_connection(conn))
                 });
             return conn_info;

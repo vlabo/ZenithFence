@@ -51,7 +51,7 @@ impl IdCache {
 
     #[allow(dead_code)]
     pub fn get_entries_count(&self) -> usize {
-        let values = self.values.write_lock();
+        let values = self.values.read_lock();
         return values.len();
     }
 
