@@ -5,6 +5,7 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 use protocol::info::{Info, Severity};
+
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 pub const MAX_LOG_LINE_SIZE: usize = 150;

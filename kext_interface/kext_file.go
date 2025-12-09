@@ -14,7 +14,7 @@ type KextFile struct {
 }
 
 func (f *KextFile) Read(buffer []byte) (int, error) {
-	if f.read_slice == nil || len(f.read_slice) == 0 {
+	if len(f.read_slice) == 0 {
 		err := f.refill_read_buffer()
 		if err != nil {
 			return 0, err
@@ -85,7 +85,6 @@ func (f *KextFile) deviceIOControl(code uint32, inData []byte, outData []byte) (
 		inDataPtr, inDataSize,
 		outDataPtr, outDataSize,
 		nil, overlapped)
-
 	if err != nil {
 		return nil, err
 	}

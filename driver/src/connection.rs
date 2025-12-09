@@ -129,17 +129,6 @@ pub trait Connection {
         }
     }
 
-    /// Returns the key of the connection.
-    fn get_key(&self) -> Key {
-        Key {
-            protocol: self.get_protocol(),
-            local_address: self.get_local_address(),
-            local_port: self.get_local_port(),
-            remote_address: self.get_remote_address(),
-            remote_port: self.get_remote_port(),
-        }
-    }
-
     /// Returns true if the connection is equal to the given key. The key is considered equal if the remote port and address are equal.
     fn remote_equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
@@ -174,6 +163,7 @@ pub trait Connection {
     fn get_last_accessed_time(&self) -> u64;
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
+    fn set_verdict(&mut self, verdict: Verdict);
 }
 
 pub struct ConnectionV4 {
@@ -208,6 +198,22 @@ pub struct RedirectInfo {
     pub(crate) redirect_port: u16,
     pub(crate) unify: bool,
     pub(crate) redirect_address: IpAddress,
+}
+
+pub struct ConnectionInfo {
+    pub verdict: Verdict,
+    pub process_id: u64,
+    pub redirect_info: Option<RedirectInfo>,
+}
+
+impl ConnectionInfo {
+    pub fn from_connection<T: Connection>(conn: &T) -> Self {
+        ConnectionInfo {
+            verdict: conn.get_verdict(),
+            process_id: conn.get_process_id(),
+            redirect_info: conn.redirect_info(),
+        }
+    }
 }
 
 impl ConnectionV4 {
@@ -249,16 +255,6 @@ impl Connection for ConnectionV4 {
             return self.remote_address.eq(remote_address);
         }
         false
-    }
-
-    fn get_key(&self) -> Key {
-        Key {
-            protocol: self.protocol,
-            local_address: IpAddress::Ipv4(self.local_address),
-            local_port: self.local_port,
-            remote_address: IpAddress::Ipv4(self.remote_address),
-            remote_port: self.remote_port,
-        }
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -335,6 +331,10 @@ impl Connection for ConnectionV4 {
         self.last_accessed_timestamp
             .store(timestamp, Ordering::Relaxed);
     }
+
+    fn set_verdict(&mut self, verdict: Verdict) {
+        self.verdict = verdict;
+    }
 }
 
 impl Clone for ConnectionV4 {
@@ -393,15 +393,6 @@ impl Connection for ConnectionV6 {
             return self.remote_address.eq(remote_address);
         }
         false
-    }
-    fn get_key(&self) -> Key {
-        Key {
-            protocol: self.protocol,
-            local_address: IpAddress::Ipv6(self.local_address),
-            local_port: self.local_port,
-            remote_address: IpAddress::Ipv6(self.remote_address),
-            remote_port: self.remote_port,
-        }
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -477,6 +468,10 @@ impl Connection for ConnectionV6 {
     fn set_last_accessed_time(&self, timestamp: u64) {
         self.last_accessed_timestamp
             .store(timestamp, Ordering::Relaxed);
+    }
+
+    fn set_verdict(&mut self, verdict: Verdict) {
+        self.verdict = verdict;
     }
 }
 

@@ -5,11 +5,7 @@ use wdk::filter_engine::layer;
 use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
 use wdk::filter_engine::packet::InjectInfo;
 
-use crate::connection::{
-    Connection, ConnectionV4, ConnectionV6, Direction, RedirectInfo, Verdict, PM_DNS_PORT,
-    PM_SPN_PORT,
-};
-use crate::connection_cache::ConnectionCache;
+use crate::connection::{Direction, Verdict, PM_DNS_PORT, PM_SPN_PORT};
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
@@ -69,22 +65,6 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
         interface_index,
         sub_interface_index,
     );
-}
-
-struct ConnectionInfo {
-    verdict: Verdict,
-    process_id: u64,
-    redirect_info: Option<RedirectInfo>,
-}
-
-impl ConnectionInfo {
-    fn from_connection<T: Connection>(conn: &T) -> Self {
-        ConnectionInfo {
-            verdict: conn.get_verdict(),
-            process_id: conn.get_process_id(),
-            redirect_info: conn.redirect_info(),
-        }
-    }
 }
 
 fn fast_track_pm_packets(key: &Key, direction: Direction) -> bool {
@@ -158,9 +138,8 @@ fn ip_packet_layer(
             key.protocol,
             smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
         ) {
-            if let Some(mut conn_info) =
-                get_connection_info(&mut device.connection_cache, &key, ipv6)
-            {
+            // TCP and UDP always need to go through ALE layer first.
+            if let Some(mut conn_info) = device.connection_cache.get_connection_info(&key) {
                 process_id = conn_info.process_id;
                 // Check if there is action for this connection.
                 match conn_info.verdict {
@@ -269,30 +248,4 @@ fn clone_packet(
             sub_interface_index,
         },
     ))
-}
-
-fn get_connection_info(
-    connection_cache: &mut ConnectionCache,
-    key: &Key,
-    ipv6: bool,
-) -> Option<ConnectionInfo> {
-    if ipv6 {
-        let conn_info = connection_cache.read_connection_v6(
-            &key,
-            |conn: &ConnectionV6| -> Option<ConnectionInfo> {
-                // Function is is behind spin lock. Just copy and return.
-                Some(ConnectionInfo::from_connection(conn))
-            },
-        );
-        return conn_info;
-    } else {
-        let conn_info = connection_cache.read_connection_v4(
-            &key,
-            |conn: &ConnectionV4| -> Option<ConnectionInfo> {
-                // Function is is behind spin lock. Just copy and return.
-                Some(ConnectionInfo::from_connection(conn))
-            },
-        );
-        return conn_info;
-    }
 }

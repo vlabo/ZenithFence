@@ -189,20 +189,18 @@ impl Device {
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
                     dbg!("Verdict update received {:?}: {}", update, verdict);
-                    _classify_defer = self.connection_cache.update_connection(
-                        Key {
-                            protocol: IpProtocol::from(update.protocol),
-                            local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                &update.local_address,
-                            )),
-                            local_port: update.local_port,
-                            remote_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                                &update.remote_address,
-                            )),
-                            remote_port: update.remote_port,
-                        },
-                        verdict,
-                    );
+                    let key = Key {
+                        protocol: IpProtocol::from(update.protocol),
+                        local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
+                            &update.local_address,
+                        )),
+                        local_port: update.local_port,
+                        remote_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
+                            &update.remote_address,
+                        )),
+                        remote_port: update.remote_port,
+                    };
+                    _classify_defer = self.connection_cache.update_connection(key, verdict);
                 } else {
                     err!("invalid verdict value: {}", update.verdict);
                 }
@@ -213,20 +211,18 @@ impl Device {
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
                     dbg!("Verdict update received {:?}: {}", update, verdict);
-                    _classify_defer = self.connection_cache.update_connection(
-                        Key {
-                            protocol: IpProtocol::from(update.protocol),
-                            local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                &update.local_address,
-                            )),
-                            local_port: update.local_port,
-                            remote_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                                &update.remote_address,
-                            )),
-                            remote_port: update.remote_port,
-                        },
-                        verdict,
-                    );
+                    let key = Key {
+                        protocol: IpProtocol::from(update.protocol),
+                        local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
+                            &update.local_address,
+                        )),
+                        local_port: update.local_port,
+                        remote_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
+                            &update.remote_address,
+                        )),
+                        remote_port: update.remote_port,
+                    };
+                    _classify_defer = self.connection_cache.update_connection(key, verdict);
                 } else {
                     err!("invalid verdict value: {}", update.verdict);
                 }
@@ -301,7 +297,7 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
-                // Connections process clear the buffer
+
                 conn_v4.clear();
 
                 // Process ended ipv6 connections
@@ -317,7 +313,6 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
-                // Connections process clear the buffer
                 conn_v6.clear();
             }
         }
