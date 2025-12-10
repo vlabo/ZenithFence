@@ -5,10 +5,9 @@ use wdk::filter_engine::layer;
 use wdk::filter_engine::net_buffer::{NetBufferList, NetBufferListIter};
 use wdk::filter_engine::packet::InjectInfo;
 
-use crate::connection::{Direction, Verdict, PM_DNS_PORT, PM_SPN_PORT};
-use crate::connection_map::Key;
+use crate::connection::{Direction, Verdict};
 use crate::device::{Device, Packet};
-use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
+use crate::packet_util::{recalc_header_checksums, get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
 use crate::{err, warn};
 
 // IP packet layers
@@ -16,6 +15,7 @@ pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    let compartment_id = data.get_value_u32(Fields::CompartmentId as usize) as i32;
 
     ip_packet_layer(
         data,
@@ -23,6 +23,7 @@ pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
         Direction::Outbound,
         interface_index,
         sub_interface_index,
+        compartment_id,
     );
 }
 
@@ -30,12 +31,14 @@ pub fn ip_packet_layer_inbound_v4(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    let compartment_id = data.get_value_u32(Fields::CompartmentId as usize) as i32;
     ip_packet_layer(
         data,
         false,
         Direction::Inbound,
         interface_index,
         sub_interface_index,
+        compartment_id,
     );
 }
 
@@ -43,6 +46,7 @@ pub fn ip_packet_layer_outbound_v6(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    let compartment_id = data.get_value_u32(Fields::CompartmentId as usize) as i32;
 
     ip_packet_layer(
         data,
@@ -50,6 +54,7 @@ pub fn ip_packet_layer_outbound_v6(data: CalloutData) {
         Direction::Outbound,
         interface_index,
         sub_interface_index,
+        compartment_id,
     );
 }
 
@@ -57,6 +62,7 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
     let sub_interface_index = data.get_value_u32(Fields::SubInterfaceIndex as usize);
+    let compartment_id = data.get_value_u32(Fields::CompartmentId as usize) as i32;
 
     ip_packet_layer(
         data,
@@ -64,24 +70,8 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
         Direction::Inbound,
         interface_index,
         sub_interface_index,
+        compartment_id,
     );
-}
-
-fn fast_track_pm_packets(key: &Key, direction: Direction) -> bool {
-    match direction {
-        Direction::Outbound => {
-            if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
-                return key.local_address == key.remote_address;
-            }
-        }
-        Direction::Inbound => {
-            if key.local_port == PM_DNS_PORT || key.local_port == PM_SPN_PORT {
-                return key.local_address == key.remote_address;
-            }
-        }
-    }
-
-    return false;
 }
 
 fn ip_packet_layer(
@@ -90,6 +80,7 @@ fn ip_packet_layer(
     direction: Direction,
     interface_index: u32,
     sub_interface_index: u32,
+    compartment_id: i32,
 ) {
     let Some(device) = crate::entry::get_device() else {
         return;
@@ -104,7 +95,7 @@ fn ip_packet_layer(
 
     for mut nbl in NetBufferListIter::new(data.get_layer_data() as _) {
         if let Direction::Inbound = direction {
-            // The header is not part of the NBL for incoming packets. Move the beginning of the buffer back so we get access to it.
+            // The first index to the packet is set to the transport header. Retreat to the IP header.
             // The NBL will auto advance after it loses scope.
             if ipv6 {
                 nbl.retreat(IPV6_HEADER_LEN as u32, true);
@@ -125,11 +116,6 @@ fn ip_packet_layer(
                 return;
             }
         };
-
-        if fast_track_pm_packets(&key, direction) {
-            data.action_permit();
-            return;
-        }
 
         let mut is_tmp_verdict = false;
         let mut process_id = 0;
@@ -161,6 +147,7 @@ fn ip_packet_layer(
                                 key.is_loopback(),
                                 interface_index,
                                 sub_interface_index,
+                                compartment_id,
                             ) {
                                 Ok(mut packet) => {
                                     let _ = packet.redirect(redirect_info);
@@ -181,6 +168,7 @@ fn ip_packet_layer(
                 // TCP and UDP always need to go through ALE layer first.
                 if matches!(direction, Direction::Inbound) {
                     // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
+                    warn!("connection not found for inbound packet: {}", key);
                     data.action_permit();
                     return;
                 } else {
@@ -196,6 +184,9 @@ fn ip_packet_layer(
 
         // Clone packet and send to user space if it's a temporary verdict.
         if is_tmp_verdict {
+            // The decision for the packet is not jet made. If clone fails, it should not allow the packet.
+            data.block_and_absorb();
+
             let packet = match clone_packet(
                 device,
                 nbl,
@@ -204,6 +195,7 @@ fn ip_packet_layer(
                 key.is_loopback(),
                 interface_index,
                 sub_interface_index,
+                compartment_id,
             ) {
                 Ok(p) => p,
                 Err(err) => {
@@ -215,11 +207,10 @@ fn ip_packet_layer(
             let info = device
                 .packet_cache
                 .push((key, packet), process_id, direction, false);
-            // Send to ZenithFence
+            // Send to Userspace
             if let Some(info) = info {
                 let _ = device.event_queue.push(info);
             }
-            data.block_and_absorb();
         }
     }
 }
@@ -232,12 +223,16 @@ fn clone_packet(
     loopback: bool,
     interface_index: u32,
     sub_interface_index: u32,
+    compartment_id: i32,
 ) -> Result<Packet, String> {
-    let clone = nbl.clone(&device.network_allocator)?;
+    let mut clone = nbl.clone(&device.network_allocator)?;
     let inbound = match direction {
         Direction::Outbound => false,
         Direction::Inbound => true,
     };
+    if let Some(data) = clone.get_data_mut() {
+        recalc_header_checksums(data, ipv6);
+    }
     Ok(Packet::PacketLayer(
         clone,
         InjectInfo {
@@ -246,6 +241,7 @@ fn clone_packet(
             loopback,
             interface_index,
             sub_interface_index,
+            compartment_id,
         },
     ))
 }

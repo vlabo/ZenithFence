@@ -131,6 +131,8 @@ impl Device {
             err!("Unknown command number: {}", buffer[0]);
             return;
         };
+
+        // Skip command byte.
         buffer = &buffer[1..];
 
         let mut _classify_defer = None;
