@@ -6,7 +6,7 @@ use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SCOPE_ID},
-    System::Kernel::UNSPECIFIED_COMPARTMENT_ID,
+    System::Kernel::{COMPARTMENT_ID, UNSPECIFIED_COMPARTMENT_ID},
 };
 
 use crate::{
@@ -40,6 +40,7 @@ pub struct InjectInfo {
     pub loopback: bool,
     pub interface_index: u32,
     pub sub_interface_index: u32,
+    pub compartment_id: COMPARTMENT_ID,
 }
 
 pub struct Injector {
@@ -224,7 +225,7 @@ impl Injector {
                     inject_handle,
                     0,
                     0,
-                    UNSPECIFIED_COMPARTMENT_ID,
+                    inject_info.compartment_id,
                     inject_info.interface_index,
                     inject_info.sub_interface_index,
                     nbl,
@@ -239,7 +240,7 @@ impl Injector {
                     inject_handle,
                     0,
                     0,
-                    UNSPECIFIED_COMPARTMENT_ID,
+                    inject_info.compartment_id,
                     nbl,
                     free_packet,
                     (packet_pointer as *mut NetBufferList) as _,
