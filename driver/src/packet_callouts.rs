@@ -7,7 +7,9 @@ use wdk::filter_engine::packet::InjectInfo;
 
 use crate::connection::{Direction, Verdict};
 use crate::device::{Device, Packet};
-use crate::packet_util::{recalc_header_checksums, get_key_from_nbl_v4, get_key_from_nbl_v6, Redirect};
+use crate::packet_util::{
+    get_key_from_nbl_v4, get_key_from_nbl_v6, recalc_header_checksums, Redirect,
+};
 use crate::{err, warn};
 
 // IP packet layers
@@ -120,12 +122,18 @@ fn ip_packet_layer(
         let mut is_tmp_verdict = false;
         let mut process_id = 0;
 
+        let packet_size = nbl.get_data_length();
+
         if matches!(
             key.protocol,
             smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
         ) {
             // TCP and UDP always need to go through ALE layer first.
-            if let Some(mut conn_info) = device.connection_cache.get_connection_info(&key) {
+            if let Some(mut conn_info) = device.connection_cache.get_connection_and_update_bw_usage(
+                &key,
+                packet_size,
+                direction,
+            ) {
                 process_id = conn_info.process_id;
                 // Check if there is action for this connection.
                 match conn_info.verdict {

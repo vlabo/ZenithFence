@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Verdict};
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
@@ -373,6 +375,10 @@ pub fn endpoint_closure_v4(data: CalloutData) {
                 conn.remote_address.0,
                 conn.local_port,
                 conn.remote_port,
+                conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
             );
             let _ = device.event_queue.push(info);
         }
@@ -414,6 +420,10 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                     conn.remote_address.0,
                     conn.local_port,
                     conn.remote_port,
+                    conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                 );
                 let _ = device.event_queue.push(info);
             }
@@ -448,6 +458,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -475,6 +489,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -502,6 +520,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -529,6 +551,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.0,
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }

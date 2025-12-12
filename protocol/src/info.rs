@@ -8,8 +8,9 @@ enum InfoType {
     ConnectionIpv6 = 2,
     ConnectionEndEventV4 = 3,
     ConnectionEndEventV6 = 4,
-    BandwidthStatsV4 = 5,
-    BandwidthStatsV6 = 6,
+    ConnectionUpdateEventV4 = 5,
+    ConnectionUpdateEventV6 = 6,
+    ConnectionUpdateEnd = 7,
 }
 
 // Fallow this pattern when adding new packets: [InfoType: u8, data_size_in_bytes: u32, data: ...]
@@ -138,6 +139,7 @@ impl core::fmt::Write for Info {
     }
 }
 
+// connection_info_v4 creates an Info packet for a connection (IPv4).
 pub fn connection_info_v4(
     id: u64,
     process_id: u64,
@@ -180,6 +182,7 @@ pub fn connection_info_v4(
     info
 }
 
+// connection_info_v6 creates an Info packet for a connection (IPv6).
 pub fn connection_info_v6(
     id: u64,
     process_id: u64,
@@ -223,6 +226,7 @@ pub fn connection_info_v6(
     info
 }
 
+// connection_end_event_v4_info creates an Info packet for a connection end event (IPv4).
 pub fn connection_end_event_v4_info(
     process_id: u64,
     direction: u8,
@@ -231,6 +235,10 @@ pub fn connection_end_event_v4_info(
     remote_ip: [u8; 4],
     local_port: u16,
     remote_port: u16,
+    rx_bytes: u64,
+    rx_packets: u64,
+    tx_bytes: u64,
+    tx_packets: u64,
 ) -> Info {
     let size = get_combined_size!(
         process_id,
@@ -239,7 +247,11 @@ pub fn connection_end_event_v4_info(
         local_ip,
         remote_ip,
         local_port,
-        remote_port
+        remote_port,
+        rx_bytes,
+        rx_packets,
+        tx_bytes,
+        tx_packets
     );
     let mut info = Info::new(InfoType::ConnectionEndEventV4, size);
     let vec = &mut info.0;
@@ -250,9 +262,14 @@ pub fn connection_end_event_v4_info(
     push_bytes!(vec, remote_ip);
     push_bytes!(vec, local_port);
     push_bytes!(vec, remote_port);
+    push_bytes!(vec, rx_bytes);
+    push_bytes!(vec, rx_packets);
+    push_bytes!(vec, tx_bytes);
+    push_bytes!(vec, tx_packets);
     info
 }
 
+// connection_end_event_v6_info creates an Info packet for a connection end event (IPv6).
 pub fn connection_end_event_v6_info(
     process_id: u64,
     direction: u8,
@@ -261,6 +278,10 @@ pub fn connection_end_event_v6_info(
     remote_ip: [u8; 16],
     local_port: u16,
     remote_port: u16,
+    rx_bytes: u64,
+    rx_packets: u64,
+    tx_bytes: u64,
+    tx_packets: u64,
 ) -> Info {
     let size = get_combined_size!(
         process_id,
@@ -269,7 +290,11 @@ pub fn connection_end_event_v6_info(
         local_ip,
         remote_ip,
         local_port,
-        remote_port
+        remote_port,
+        rx_bytes,
+        rx_packets,
+        tx_bytes,
+        tx_packets
     );
     let mut info = Info::new(InfoType::ConnectionEndEventV6, size);
     let vec = &mut info.0;
@@ -280,6 +305,90 @@ pub fn connection_end_event_v6_info(
     push_bytes!(vec, remote_ip);
     push_bytes!(vec, local_port);
     push_bytes!(vec, remote_port);
+    push_bytes!(vec, rx_bytes);
+    push_bytes!(vec, rx_packets);
+    push_bytes!(vec, tx_bytes);
+    push_bytes!(vec, tx_packets);
+    info
+}
+
+// connection_update_event_v4_info creates an Info packet for a connection update event (IPv4).
+pub fn connection_update_event_v4_info(
+    protocol: u8,
+    local_ip: [u8; 4],
+    remote_ip: [u8; 4],
+    local_port: u16,
+    remote_port: u16,
+    rx_bytes: u64,
+    rx_packets: u64,
+    tx_bytes: u64,
+    tx_packets: u64,
+) -> Info {
+    let size = get_combined_size!(
+        protocol,
+        local_ip,
+        remote_ip,
+        local_port,
+        remote_port,
+        rx_bytes,
+        rx_packets,
+        tx_bytes,
+        tx_packets
+    );
+    let mut info = Info::new(InfoType::ConnectionUpdateEventV4, size);
+    let vec = &mut info.0;
+    push_bytes!(vec, protocol);
+    push_bytes!(vec, local_ip);
+    push_bytes!(vec, remote_ip);
+    push_bytes!(vec, local_port);
+    push_bytes!(vec, remote_port);
+    push_bytes!(vec, rx_bytes);
+    push_bytes!(vec, rx_packets);
+    push_bytes!(vec, tx_bytes);
+    push_bytes!(vec, tx_packets);
+    info
+}
+
+// connection_update_event_v6_info creates an Info packet for a connection update event (IPv6).
+pub fn connection_update_event_v6_info(
+    protocol: u8,
+    local_ip: [u8; 16],
+    remote_ip: [u8; 16],
+    local_port: u16,
+    remote_port: u16,
+    rx_bytes: u64,
+    rx_packets: u64,
+    tx_bytes: u64,
+    tx_packets: u64,
+) -> Info {
+    let size = get_combined_size!(
+        protocol,
+        local_ip,
+        remote_ip,
+        local_port,
+        remote_port,
+        rx_bytes,
+        rx_packets,
+        tx_bytes,
+        tx_packets
+    );
+    let mut info = Info::new(InfoType::ConnectionUpdateEventV6, size);
+    let vec = &mut info.0;
+    push_bytes!(vec, protocol);
+    push_bytes!(vec, local_ip);
+    push_bytes!(vec, remote_ip);
+    push_bytes!(vec, local_port);
+    push_bytes!(vec, remote_port);
+    push_bytes!(vec, rx_bytes);
+    push_bytes!(vec, rx_packets);
+    push_bytes!(vec, tx_bytes);
+    push_bytes!(vec, tx_packets);
+    info
+}
+
+// connection_update_end_info signals the end of connection updates.
+pub fn connection_update_end_info() -> Info {
+    let info = Info::new(InfoType::ConnectionUpdateEnd, 0);
     info
 }
 
@@ -295,123 +404,11 @@ pub enum Severity {
     Disabled = 7,
 }
 
-// pub fn log_line(severity: Severity, prefix: String, line: String) -> Info {
-//     let mut size = get_combined_size!(severity);
-//     size += prefix.len() + line.len();
-
-//     let mut info = Info::new(InfoType::LogLine, size);
-//     let vec = &mut info.0;
-//     push_bytes!(vec, severity as u8);
-//     push_bytes!(vec, prefix.as_bytes());
-//     push_bytes!(vec, line.as_bytes());
-//     info
-// }
-
+// log_line creates an Info packet for a log line.
 pub fn log_line(severity: Severity, capacity: usize) -> Info {
     let mut info = Info::with_capacity(InfoType::LogLine, capacity);
     let vec = &mut info.0;
     push_bytes!(vec, severity as u8);
-    info
-}
-
-// Special struct for Bandwidth stats
-pub struct BandwidthValueV4 {
-    pub local_ip: [u8; 4],
-    pub local_port: u16,
-    pub remote_ip: [u8; 4],
-    pub remote_port: u16,
-    pub transmitted_bytes: u64,
-    pub received_bytes: u64,
-}
-
-impl BandwidthValueV4 {
-    fn get_size(&self) -> usize {
-        get_combined_size!(
-            self.local_ip,
-            self.local_port,
-            self.remote_ip,
-            self.remote_port,
-            self.transmitted_bytes,
-            self.received_bytes
-        )
-    }
-}
-
-impl PushBytes for BandwidthValueV4 {
-    fn push(self, vec: &mut Vec<u8>) {
-        push_bytes!(vec, self.local_ip);
-        push_bytes!(vec, self.local_port);
-        push_bytes!(vec, self.remote_ip);
-        push_bytes!(vec, self.remote_port);
-        push_bytes!(vec, self.transmitted_bytes);
-        push_bytes!(vec, self.received_bytes);
-    }
-}
-
-pub struct BandwidthValueV6 {
-    pub local_ip: [u8; 16],
-    pub local_port: u16,
-    pub remote_ip: [u8; 16],
-    pub remote_port: u16,
-    pub transmitted_bytes: u64,
-    pub received_bytes: u64,
-}
-
-impl BandwidthValueV6 {
-    fn get_size(&self) -> usize {
-        get_combined_size!(
-            self.local_ip,
-            self.local_port,
-            self.remote_ip,
-            self.remote_port,
-            self.transmitted_bytes,
-            self.received_bytes
-        )
-    }
-}
-
-impl PushBytes for BandwidthValueV6 {
-    fn push(self, vec: &mut Vec<u8>) {
-        push_bytes!(vec, self.local_ip);
-        push_bytes!(vec, self.local_port);
-        push_bytes!(vec, self.remote_ip);
-        push_bytes!(vec, self.remote_port);
-        push_bytes!(vec, self.transmitted_bytes);
-        push_bytes!(vec, self.received_bytes);
-    }
-}
-
-pub fn bandwidth_stats_array_v4(protocol: u8, values: Vec<BandwidthValueV4>) -> Info {
-    let mut size = get_combined_size!(protocol, values.len() as u32);
-
-    if !values.is_empty() {
-        size += values[0].get_size() * values.len();
-    }
-
-    let mut info = Info::new(InfoType::BandwidthStatsV4, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, values.len() as u32);
-    for v in values {
-        push_bytes!(vec, v);
-    }
-    info
-}
-
-pub fn bandwidth_stats_array_v6(protocol: u8, values: Vec<BandwidthValueV6>) -> Info {
-    let mut size = get_combined_size!(protocol, values.len() as u32);
-
-    if !values.is_empty() {
-        size += values[0].get_size() * values.len();
-    }
-
-    let mut info = Info::new(InfoType::BandwidthStatsV6, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, values.len() as u32);
-    for v in values {
-        push_bytes!(vec, v);
-    }
     info
 }
 
@@ -432,8 +429,9 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
         InfoType::ConnectionIpv6,
         InfoType::ConnectionEndEventV4,
         InfoType::ConnectionEndEventV6,
-        InfoType::BandwidthStatsV4,
-        InfoType::BandwidthStatsV6,
+        InfoType::ConnectionUpdateEventV4,
+        InfoType::ConnectionUpdateEventV6,
+        InfoType::ConnectionUpdateEnd,
     ];
 
     let mut selected: Vec<InfoType> = Vec::with_capacity(1000);
@@ -467,7 +465,6 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                 info.assert_size();
                 info.0
             }
-
             InfoType::ConnectionIpv6 => {
                 let info = connection_info_v6(
                     1,
@@ -485,7 +482,19 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                 info.0
             }
             InfoType::ConnectionEndEventV4 => {
-                let info = connection_end_event_v4_info(1, 2, 3, [1, 2, 3, 4], [2, 3, 4, 5], 4, 5);
+                let info = connection_end_event_v4_info(
+                    1,
+                    2,
+                    3,
+                    [1, 2, 3, 4],
+                    [2, 3, 4, 5],
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                );
                 info.assert_size();
                 info.0
             }
@@ -498,51 +507,46 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                     [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                     4,
                     5,
+                    6,
+                    7,
+                    8,
+                    9,
                 );
                 info.assert_size();
                 info.0
             }
-            InfoType::BandwidthStatsV4 => {
-                let mut vec = Vec::new();
-                vec.push(BandwidthValueV4 {
-                    local_ip: [1, 2, 3, 4],
-                    local_port: 1,
-                    remote_ip: [2, 3, 4, 5],
-                    remote_port: 2,
-                    transmitted_bytes: 3,
-                    received_bytes: 4,
-                });
-                vec.push(BandwidthValueV4 {
-                    local_ip: [1, 2, 3, 4],
-                    local_port: 5,
-                    remote_ip: [2, 3, 4, 5],
-                    remote_port: 6,
-                    transmitted_bytes: 7,
-                    received_bytes: 8,
-                });
-                let info = bandwidth_stats_array_v4(1, vec);
+            InfoType::ConnectionUpdateEventV4 => {
+                let info = connection_update_event_v4_info(
+                    1,
+                    [1, 2, 3, 4],
+                    [2, 3, 4, 5],
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                );
                 info.assert_size();
                 info.0
             }
-            InfoType::BandwidthStatsV6 => {
-                let mut vec = Vec::new();
-                vec.push(BandwidthValueV6 {
-                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                    local_port: 1,
-                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    remote_port: 2,
-                    transmitted_bytes: 3,
-                    received_bytes: 4,
-                });
-                vec.push(BandwidthValueV6 {
-                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                    local_port: 5,
-                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    remote_port: 6,
-                    transmitted_bytes: 7,
-                    received_bytes: 8,
-                });
-                let info = bandwidth_stats_array_v6(1, vec);
+            InfoType::ConnectionUpdateEventV6 => {
+                let info = connection_update_event_v6_info(
+                    1,
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                );
+                info.assert_size();
+                info.0
+            }
+            InfoType::ConnectionUpdateEnd => {
+                let info = connection_update_end_info();
                 info.assert_size();
                 info.0
             }

@@ -5,7 +5,7 @@ use wdk::{
     filter_engine::{callout::Callout, layer::Layer},
 };
 
-use crate::{ale_callouts, packet_callouts, stream_callouts};
+use crate::{ale_callouts, packet_callouts};
 
 pub fn get_callout_vec() -> Vec<Callout> {
     alloc::vec![
@@ -104,44 +104,6 @@ pub fn get_callout_vec() -> Vec<Callout> {
             consts::FWP_ACTION_CALLOUT_INSPECTION,
             FilterType::NonResettable,
             ale_callouts::ale_resource_monitor,
-        ),
-        // -----------------------------------------
-        // Stream layer
-        Callout::new(
-            "StreamLayerV4",
-            "Stream layer for ipv4",
-            0xe2ca13bf_9710_4caa_a45c_e8c78b5ac780,
-            Layer::StreamV4,
-            consts::FWP_ACTION_CALLOUT_INSPECTION,
-            FilterType::NonResettable,
-            stream_callouts::stream_layer_tcp_v4,
-        ),
-        Callout::new(
-            "StreamLayerV6",
-            "Stream layer for ipv6",
-            0x66c549b3_11e2_4b27_8f73_856e6fd82baa,
-            Layer::StreamV6,
-            consts::FWP_ACTION_CALLOUT_INSPECTION,
-            FilterType::NonResettable,
-            stream_callouts::stream_layer_tcp_v6,
-        ),
-        Callout::new(
-            "DatagramDataLayerV4",
-            "DatagramData layer for ipv4",
-            0xe7eeeaba_168a_45bb_8747_e1a702feb2c5,
-            Layer::DatagramDataV4,
-            consts::FWP_ACTION_CALLOUT_INSPECTION,
-            FilterType::NonResettable,
-            stream_callouts::stream_layer_udp_v4,
-        ),
-        Callout::new(
-            "DatagramDataLayerV6",
-            "DatagramData layer for ipv4",
-            0xb25862cd_f744_4452_b14a_d0c1e5a25b30,
-            Layer::DatagramDataV6,
-            consts::FWP_ACTION_CALLOUT_INSPECTION,
-            FilterType::NonResettable,
-            stream_callouts::stream_layer_udp_v6,
         ),
         // -----------------------------------------
         // Packet layers

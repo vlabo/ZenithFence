@@ -12,7 +12,7 @@ func TestRustInfoFile(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	for {
 		info, err := RecvInfo(file)
 		if err != nil {
@@ -23,6 +23,7 @@ func TestRustInfoFile(t *testing.T) {
 		}
 		switch v := info.(type) {
 		case *LogLine:
+			t.Logf("LogLine: Severity=%d, Line=%s\n", v.Severity, v.Line)
 			if v.Severity != 1 {
 				t.Errorf("unexpected Log severity: %d\n", v.Severity)
 			}
@@ -31,6 +32,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 
 		case *ConnectionV4:
+			t.Logf("ConnectionV4: %+v\n", v)
 			expected := ConnectionV4{
 				connectionV4Internal: connectionV4Internal{
 					Id:           1,
@@ -50,6 +52,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 
 		case *ConnectionV6:
+			t.Logf("ConnectionV6: %+v\n", v)
 			expected := ConnectionV6{
 				connectionV6Internal: connectionV6Internal{
 					Id:           1,
@@ -69,6 +72,7 @@ func TestRustInfoFile(t *testing.T) {
 			}
 
 		case *ConnectionEndV4:
+			t.Logf("ConnectionEndV4: %+v\n", v)
 			expected := ConnectionEndV4{
 				ProcessId:  1,
 				Direction:  2,
@@ -77,11 +81,16 @@ func TestRustInfoFile(t *testing.T) {
 				RemoteIp:   [4]byte{2, 3, 4, 5},
 				LocalPort:  4,
 				RemotePort: 5,
+				RxBytes:    6,
+				RxPackets:  7,
+				TxBytes:    8,
+				TxPackets:  9,
 			}
 			if *v != expected {
 				t.Errorf("unexpected ConnectionEndV4: %+v\n", v)
 			}
 		case *ConnectionEndV6:
+			t.Logf("ConnectionEndV6: %+v\n", v)
 			expected := ConnectionEndV6{
 				ProcessId:  1,
 				Direction:  2,
@@ -90,68 +99,49 @@ func TestRustInfoFile(t *testing.T) {
 				RemoteIp:   [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
 				LocalPort:  4,
 				RemotePort: 5,
+				RxBytes:    6,
+				RxPackets:  7,
+				TxBytes:    8,
+				TxPackets:  9,
 			}
 			if *v != expected {
 				t.Errorf("unexpected ConnectionEndV6: %+v\n", v)
 			}
-		case *BandwidthStatsV4:
-			if v.Protocol != 1 {
-				t.Errorf("unexpected Bandwidth stats protocol: %d\n", v.Protocol)
+		case *ConnectionUpdateV4:
+			t.Logf("ConnectionUpdateV4: %+v\n", v)
+			expected := ConnectionUpdateV4{
+				Protocol:   1,
+				LocalIp:    [4]byte{1, 2, 3, 4},
+				RemoteIp:   [4]byte{2, 3, 4, 5},
+				LocalPort:  2,
+				RemotePort: 3,
+				RxBytes:    4,
+				RxPackets:  5,
+				TxBytes:    6,
+				TxPackets:  7,
 			}
-			if len(v.Values) != 2 {
-				t.Errorf("unexpected Bandwidth stats value length: %d\n", len(v.Values))
+			if *v != expected {
+				t.Errorf("unexpected ConnectionUpdateV4: %+v\n", v)
 			}
-			expected1 := BandwidthValueV4{
-				LocalIP:          [4]byte{1, 2, 3, 4},
-				LocalPort:        1,
-				RemoteIP:         [4]byte{2, 3, 4, 5},
-				RemotePort:       2,
-				TransmittedBytes: 3,
-				ReceivedBytes:    4,
+		case *ConnectionUpdateV6:
+			t.Logf("ConnectionUpdateV6: %+v\n", v)
+			expected := ConnectionUpdateV6{
+				Protocol:   1,
+				LocalIp:    [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+				RemoteIp:   [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
+				LocalPort:  2,
+				RemotePort: 3,
+				RxBytes:    4,
+				RxPackets:  5,
+				TxBytes:    6,
+				TxPackets:  7,
 			}
-			if v.Values[0] != expected1 {
-				t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", v.Values[0], expected1)
+			if *v != expected {
+				t.Errorf("unexpected ConnectionUpdateV6: %+v\n", v)
 			}
-			expected2 := BandwidthValueV4{
-				LocalIP:          [4]byte{1, 2, 3, 4},
-				LocalPort:        5,
-				RemoteIP:         [4]byte{2, 3, 4, 5},
-				RemotePort:       6,
-				TransmittedBytes: 7,
-				ReceivedBytes:    8,
-			}
-			if v.Values[1] != expected2 {
-				t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", v.Values[1], expected2)
-			}
-		case *BandwidthStatsV6:
-			if v.Protocol != 1 {
-				t.Errorf("unexpected Bandwidth stats protocol: %d\n", v.Protocol)
-			}
-			if len(v.Values) != 2 {
-				t.Errorf("unexpected Bandwidth stats value length: %d\n", len(v.Values))
-			}
-			expected1 := BandwidthValueV6{
-				LocalIP:          [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-				LocalPort:        1,
-				RemoteIP:         [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
-				RemotePort:       2,
-				TransmittedBytes: 3,
-				ReceivedBytes:    4,
-			}
-			if v.Values[0] != expected1 {
-				t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", v.Values[0], expected1)
-			}
-			expected2 := BandwidthValueV6{
-				LocalIP:          [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-				LocalPort:        5,
-				RemoteIP:         [16]byte{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
-				RemotePort:       6,
-				TransmittedBytes: 7,
-				ReceivedBytes:    8,
-			}
-			if v.Values[1] != expected2 {
-				t.Errorf("unexpected Bandwidth stats value: %+v expected: %+v\n", v.Values[1], expected2)
-			}
+		case *ConnectionUpdateEnd:
+			t.Logf("ConnectionUpdateEnd: %+v\n", v)
+			// Empty struct
 		default:
 			t.Errorf("unexpected info type: %T\n", v)
 		}
@@ -163,15 +153,15 @@ func TestGenerateCommandFile(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create file: %s", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	enums := []byte{
 		CommandShutdown,
 		CommandVerdict,
 		CommandUpdateV4,
 		CommandUpdateV6,
 		CommandClearCache,
+		CommandGetConnetionsUpdate,
 		CommandGetLogs,
-		CommandBandwidthStats,
 		CommandCleanEndedConnections,
 	}
 
@@ -184,18 +174,18 @@ func TestGenerateCommandFile(t *testing.T) {
 		switch value {
 		case CommandShutdown:
 			{
-				SendShutdownCommand(file)
+				_ = SendShutdownCommand(file)
 			}
 		case CommandVerdict:
 			{
-				SendVerdictCommand(file, Verdict{
+				_ = SendVerdictCommand(file, Verdict{
 					Id:      1,
 					Verdict: 2,
 				})
 			}
 		case CommandUpdateV4:
 			{
-				SendUpdateV4Command(file, UpdateV4{
+				_ = SendUpdateV4Command(file, UpdateV4{
 					Protocol:      1,
 					LocalAddress:  [4]byte{1, 2, 3, 4},
 					LocalPort:     2,
@@ -206,7 +196,7 @@ func TestGenerateCommandFile(t *testing.T) {
 			}
 		case CommandUpdateV6:
 			{
-				SendUpdateV6Command(file, UpdateV6{
+				_ = SendUpdateV6Command(file, UpdateV6{
 					Protocol:      1,
 					LocalAddress:  [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 					LocalPort:     2,
@@ -217,23 +207,23 @@ func TestGenerateCommandFile(t *testing.T) {
 			}
 		case CommandClearCache:
 			{
-				SendClearCacheCommand(file)
+				_ = SendClearCacheCommand(file)
 			}
 		case CommandGetLogs:
 			{
-				SendGetLogsCommand(file)
+				_ = SendGetLogsCommand(file)
 			}
-		case CommandBandwidthStats:
+		case CommandGetConnetionsUpdate:
 			{
-				SendGetBandwidthStatsCommand(file)
+				_ = SendGetConnectionsUpdateCommand(file, 1234567890)
 			}
 		case CommandPrintMemoryStats:
 			{
-				SendPrintMemoryStatsCommand(file)
+				_ = SendPrintMemoryStatsCommand(file)
 			}
 		case CommandCleanEndedConnections:
 			{
-				SendCleanEndedConnectionsCommand(file)
+				_ = SendCleanEndedConnectionsCommand(file)
 			}
 		}
 	}

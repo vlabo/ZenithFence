@@ -11,8 +11,8 @@ const (
 	CommandUpdateV4              = 2
 	CommandUpdateV6              = 3
 	CommandClearCache            = 4
-	CommandGetLogs               = 5
-	CommandBandwidthStats        = 6
+	CommandGetConnetionsUpdate   = 5
+	CommandGetLogs               = 6
 	CommandPrintMemoryStats      = 7
 	CommandCleanEndedConnections = 8
 )
@@ -75,6 +75,11 @@ type UpdateV6 struct {
 	Verdict       uint8
 }
 
+type ConnectionsUpdate struct {
+	command   uint8
+	timestamp uint64
+}
+
 func SendShutdownCommand(writer io.Writer) error {
 	_, err := writer.Write([]byte{CommandShutdown})
 	return err
@@ -100,13 +105,16 @@ func SendClearCacheCommand(writer io.Writer) error {
 	return err
 }
 
-func SendGetLogsCommand(writer io.Writer) error {
-	_, err := writer.Write([]byte{CommandGetLogs})
-	return err
+func SendGetConnectionsUpdateCommand(writer io.Writer, timestamp uint64) error {
+	req := ConnectionsUpdate{
+		command:   CommandGetConnetionsUpdate,
+		timestamp: timestamp,
+	}
+	return binary.Write(writer, binary.LittleEndian, req)
 }
 
-func SendGetBandwidthStatsCommand(writer io.Writer) error {
-	_, err := writer.Write([]byte{CommandBandwidthStats})
+func SendGetLogsCommand(writer io.Writer) error {
+	_, err := writer.Write([]byte{CommandGetLogs})
 	return err
 }
 

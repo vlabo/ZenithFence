@@ -96,6 +96,7 @@ impl Debug for Direction {
 
 #[derive(Clone)]
 pub struct ConnectionExtra {
+    pub(crate) process_id: u64,
     pub(crate) end_timestamp: u64,
     pub(crate) direction: Direction,
 }
@@ -164,6 +165,50 @@ pub trait Connection {
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
     fn set_verdict(&mut self, verdict: Verdict);
+
+    fn get_bandwidth_usage(&self) -> &BandwidthUsage;
+
+    fn update_bandwidth_data(&self, bytes: u64, direction: Direction) {
+        // Update bandwidth usage.
+        match direction {
+            Direction::Inbound => {
+                // Inbound traffic.
+                self.get_bandwidth_usage()
+                    .rx_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                self.get_bandwidth_usage()
+                    .rx_bytes
+                    .fetch_add(bytes, Ordering::Relaxed);
+            }
+            Direction::Outbound => {
+                // Outbound traffic.
+                self.get_bandwidth_usage()
+                    .tx_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                self.get_bandwidth_usage()
+                    .tx_bytes
+                    .fetch_add(bytes, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+pub struct BandwidthUsage {
+    pub rx_bytes: AtomicU64,
+    pub rx_packets: AtomicU64,
+    pub tx_bytes: AtomicU64,
+    pub tx_packets: AtomicU64,
+}
+
+impl Clone for BandwidthUsage {
+    fn clone(&self) -> Self {
+        Self {
+            rx_bytes: AtomicU64::new(self.rx_bytes.load(Ordering::Relaxed)),
+            rx_packets: AtomicU64::new(self.rx_packets.load(Ordering::Relaxed)),
+            tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::Relaxed)),
+            tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 pub struct ConnectionV4 {
@@ -173,8 +218,8 @@ pub struct ConnectionV4 {
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
-    pub(crate) process_id: u64,
     pub(crate) last_accessed_timestamp: AtomicU64,
+    pub(crate) bandwidth_usage: BandwidthUsage,
     pub(crate) extra: Box<ConnectionExtra>,
 }
 
@@ -185,8 +230,8 @@ pub struct ConnectionV6 {
     pub(crate) remote_address: Ipv6Address,
     pub(crate) remote_port: u16,
     pub(crate) verdict: Verdict,
-    pub(crate) process_id: u64,
     pub(crate) last_accessed_timestamp: AtomicU64,
+    pub(crate) bandwidth_usage: BandwidthUsage,
     pub(crate) extra: Box<ConnectionExtra>,
 }
 
@@ -236,9 +281,15 @@ impl ConnectionV4 {
             remote_address,
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
-            process_id,
             last_accessed_timestamp: AtomicU64::new(timestamp),
+            bandwidth_usage: BandwidthUsage {
+                rx_bytes: AtomicU64::new(0),
+                rx_packets: AtomicU64::new(0),
+                tx_bytes: AtomicU64::new(0),
+                tx_packets: AtomicU64::new(0),
+            },
             extra: Box::new(ConnectionExtra {
+                process_id,
                 direction,
                 end_timestamp: 0,
             }),
@@ -308,7 +359,7 @@ impl Connection for ConnectionV4 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.process_id
+        self.extra.process_id
     }
 
     fn get_direction(&self) -> Direction {
@@ -335,6 +386,10 @@ impl Connection for ConnectionV4 {
     fn set_verdict(&mut self, verdict: Verdict) {
         self.verdict = verdict;
     }
+
+    fn get_bandwidth_usage(&self) -> &BandwidthUsage {
+        &self.bandwidth_usage
+    }
 }
 
 impl Clone for ConnectionV4 {
@@ -346,7 +401,7 @@ impl Clone for ConnectionV4 {
             remote_address: self.remote_address,
             remote_port: self.remote_port,
             verdict: self.verdict,
-            process_id: self.process_id,
+            bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
                 self.last_accessed_timestamp.load(Ordering::Relaxed),
             ),
@@ -374,9 +429,15 @@ impl ConnectionV6 {
             remote_address,
             remote_port: key.remote_port,
             verdict: Verdict::Undecided,
-            process_id,
             last_accessed_timestamp: AtomicU64::new(timestamp),
+            bandwidth_usage: BandwidthUsage {
+                rx_bytes: AtomicU64::new(0),
+                rx_packets: AtomicU64::new(0),
+                tx_bytes: AtomicU64::new(0),
+                tx_packets: AtomicU64::new(0),
+            },
             extra: Box::new(ConnectionExtra {
+                process_id,
                 direction,
                 end_timestamp: 0,
             }),
@@ -446,7 +507,7 @@ impl Connection for ConnectionV6 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.process_id
+        self.extra.process_id
     }
 
     fn get_direction(&self) -> Direction {
@@ -473,6 +534,10 @@ impl Connection for ConnectionV6 {
     fn set_verdict(&mut self, verdict: Verdict) {
         self.verdict = verdict;
     }
+
+    fn get_bandwidth_usage(&self) -> &BandwidthUsage {
+        &self.bandwidth_usage
+    }
 }
 
 impl Clone for ConnectionV6 {
@@ -484,7 +549,7 @@ impl Clone for ConnectionV6 {
             remote_address: self.remote_address,
             remote_port: self.remote_port,
             verdict: self.verdict,
-            process_id: self.process_id,
+            bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
                 self.last_accessed_timestamp.load(Ordering::Relaxed),
             ),

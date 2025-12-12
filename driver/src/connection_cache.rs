@@ -1,5 +1,5 @@
 use crate::{
-    connection::{ConnectionInfo, ConnectionV4, ConnectionV6},
+    connection::{Connection, ConnectionInfo, ConnectionV4, ConnectionV6, Direction},
     connection_map::{ConnectionMap, Key},
 };
 use alloc::vec::Vec;
@@ -49,22 +49,41 @@ impl ConnectionCache {
         );
     }
 
-    pub fn get_connection_info(&self, key: &Key) -> Option<ConnectionInfo> {
+    pub fn walk_over_connections_v4<'a, F: FnMut(&ConnectionV4)>(&'a mut self, iter: F) {
+        self.v4.walk_over_connections(iter);
+    }
+
+    pub fn walk_over_connections_v6<'a, F: FnMut(&ConnectionV6)>(&'a mut self, iter: F) {
+        self.v6.walk_over_connections(iter);
+    }
+
+    pub fn get_connection_and_update_bw_usage(
+        &self,
+        key: &Key,
+        packet_size: u64,
+        direction: Direction,
+    ) -> Option<ConnectionInfo> {
         if key.is_ipv6() {
-            let conn_info = self
-                .v6
-                .read(&key, |conn: &ConnectionV6| -> Option<ConnectionInfo> {
+            let conn_info = self.v6.read_update_bd_usage(
+                &key,
+                packet_size,
+                direction,
+                |conn: &ConnectionV6| -> Option<ConnectionInfo> {
                     // Function is behind spin lock. Just copy and return.
                     Some(ConnectionInfo::from_connection(conn))
-                });
+                },
+            );
             return conn_info;
         } else {
-            let conn_info = self
-                .v4
-                .read(&key, |conn: &ConnectionV4| -> Option<ConnectionInfo> {
+            let conn_info = self.v4.read_update_bd_usage(
+                &key,
+                packet_size,
+                direction,
+                |conn: &ConnectionV4| -> Option<ConnectionInfo> {
                     // Function is is behind spin lock. Just copy and return.
                     Some(ConnectionInfo::from_connection(conn))
-                });
+                },
+            );
             return conn_info;
         }
     }
