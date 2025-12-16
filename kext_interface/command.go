@@ -11,7 +11,7 @@ const (
 	CommandUpdateV4              = 2
 	CommandUpdateV6              = 3
 	CommandClearCache            = 4
-	CommandGetConnetionsUpdate   = 5
+	CommandGetConnectionsUpdate  = 5
 	CommandGetLogs               = 6
 	CommandPrintMemoryStats      = 7
 	CommandCleanEndedConnections = 8
@@ -107,7 +107,7 @@ func SendClearCacheCommand(writer io.Writer) error {
 
 func SendGetConnectionsUpdateCommand(writer io.Writer, timestamp uint64) error {
 	req := ConnectionsUpdate{
-		command:   CommandGetConnetionsUpdate,
+		command:   CommandGetConnectionsUpdate,
 		timestamp: timestamp,
 	}
 	return binary.Write(writer, binary.LittleEndian, req)

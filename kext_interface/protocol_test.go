@@ -160,7 +160,7 @@ func TestGenerateCommandFile(t *testing.T) {
 		CommandUpdateV4,
 		CommandUpdateV6,
 		CommandClearCache,
-		CommandGetConnetionsUpdate,
+		CommandGetConnectionsUpdate,
 		CommandGetLogs,
 		CommandCleanEndedConnections,
 	}
@@ -213,7 +213,7 @@ func TestGenerateCommandFile(t *testing.T) {
 			{
 				_ = SendGetLogsCommand(file)
 			}
-		case CommandGetConnetionsUpdate:
+		case CommandGetConnectionsUpdate:
 			{
 				_ = SendGetConnectionsUpdateCommand(file, 1234567890)
 			}

@@ -1,5 +1,5 @@
 use crate::{
-    connection::{Connection, ConnectionInfo, ConnectionV4, ConnectionV6, Direction},
+    connection::{ConnectionInfo, ConnectionV4, ConnectionV6, Direction},
     connection_map::{ConnectionMap, Key},
 };
 use alloc::vec::Vec;
@@ -64,7 +64,7 @@ impl ConnectionCache {
         direction: Direction,
     ) -> Option<ConnectionInfo> {
         if key.is_ipv6() {
-            let conn_info = self.v6.read_update_bd_usage(
+            let conn_info = self.v6.read_update_bw_usage(
                 &key,
                 packet_size,
                 direction,
@@ -75,7 +75,7 @@ impl ConnectionCache {
             );
             return conn_info;
         } else {
-            let conn_info = self.v4.read_update_bd_usage(
+            let conn_info = self.v4.read_update_bw_usage(
                 &key,
                 packet_size,
                 direction,

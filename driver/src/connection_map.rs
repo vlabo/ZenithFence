@@ -113,7 +113,7 @@ impl<T: Connection + Clone> ConnectionMap<T> {
         return None;
     }
 
-    pub fn read_update_bd_usage<C>(
+    pub fn read_update_bw_usage<C>(
         &self,
         key: &Key,
         byte_size: u64,
