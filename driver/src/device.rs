@@ -199,12 +199,12 @@ impl Device {
                     dbg!("Verdict update received {:?}: {}", update, verdict);
                     let key = Key {
                         protocol: IpProtocol::from(update.protocol),
-                        local_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                            &update.local_address,
+                        local_address: IpAddress::Ipv4(Ipv4Address::from_octets(
+                            update.local_address,
                         )),
                         local_port: update.local_port,
-                        remote_address: IpAddress::Ipv4(Ipv4Address::from_bytes(
-                            &update.remote_address,
+                        remote_address: IpAddress::Ipv4(Ipv4Address::from_octets(
+                            update.remote_address,
                         )),
                         remote_port: update.remote_port,
                     };
@@ -221,12 +221,12 @@ impl Device {
                     dbg!("Verdict update received {:?}: {}", update, verdict);
                     let key = Key {
                         protocol: IpProtocol::from(update.protocol),
-                        local_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                            &update.local_address,
+                        local_address: IpAddress::Ipv6(Ipv6Address::from_octets(
+                            update.local_address,
                         )),
                         local_port: update.local_port,
-                        remote_address: IpAddress::Ipv6(Ipv6Address::from_bytes(
-                            &update.remote_address,
+                        remote_address: IpAddress::Ipv6(Ipv6Address::from_octets(
+                            update.remote_address,
                         )),
                         remote_port: update.remote_port,
                     };
@@ -255,8 +255,8 @@ impl Device {
 
                     let info = protocol::info::connection_update_event_v4_info(
                         conn.protocol.into(),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
                         conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
@@ -275,8 +275,8 @@ impl Device {
 
                     let info = protocol::info::connection_update_event_v6_info(
                         conn.protocol.into(),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
                         conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
@@ -330,8 +330,8 @@ impl Device {
                         conn.get_process_id(),
                         conn.get_direction() as u8,
                         conn.protocol.into(),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
                         conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
@@ -350,8 +350,8 @@ impl Device {
                         conn.get_process_id(),
                         conn.get_direction() as u8,
                         conn.protocol.into(),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
                         conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),

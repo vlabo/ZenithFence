@@ -104,9 +104,9 @@ pub struct ConnectionExtra {
 pub trait Connection {
     fn redirect_info(&self) -> Option<RedirectInfo> {
         let redirect_address = if self.is_ipv6() {
-            IpAddress::Ipv6(Ipv6Address::LOOPBACK)
+            IpAddress::Ipv6(Ipv6Address::LOCALHOST)
         } else {
-            IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1))
+            IpAddress::Ipv4(Ipv4Address::LOCALHOST)
         };
 
         match self.get_verdict() {
