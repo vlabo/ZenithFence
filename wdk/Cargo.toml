@@ -9,8 +9,8 @@ edition = "2021"
 ntstatus = { version = "0.1.2", default-features = false }
 
 [dependencies.widestring]
-version = "1.0.2"
-default-features = false 
+version = "1.2.1"
+default-features = false
 features = ["alloc"]
 
 # WARNING: Do not update. The version was choosen for a reason. See wdk/README.md for more detiels.
