@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Verdict};
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
@@ -59,13 +61,15 @@ fn get_protocol(data: &CalloutData, index: usize) -> IpProtocol {
 }
 
 fn get_ipv4_address(data: &CalloutData, index: usize) -> IpAddress {
-    IpAddress::Ipv4(Ipv4Address::from_bytes(
-        &data.get_value_u32(index).to_be_bytes(),
+    IpAddress::Ipv4(Ipv4Address::from_octets(
+        data.get_value_u32(index).to_be_bytes(),
     ))
 }
 
 fn get_ipv6_address(data: &CalloutData, index: usize) -> IpAddress {
-    IpAddress::Ipv6(Ipv6Address::from_bytes(data.get_value_byte_array16(index)))
+    IpAddress::Ipv6(Ipv6Address::from_octets(
+        *data.get_value_byte_array16(index),
+    ))
 }
 
 pub fn ale_layer_connect_v4(data: CalloutData) {
@@ -331,8 +335,8 @@ fn create_packet_list(
     }
 
     let address: &[u8] = match &ale_data.remote_ip {
-        IpAddress::Ipv4(address) => &address.0,
-        IpAddress::Ipv6(address) => &address.0,
+        IpAddress::Ipv4(address) => &address.octets(),
+        IpAddress::Ipv6(address) => &address.octets(),
     };
     if let Ok(clone) = nbl.clone(&device.network_allocator) {
         return Some(Injector::from_ale_callout(
@@ -369,10 +373,14 @@ pub fn endpoint_closure_v4(data: CalloutData) {
                 data.get_process_id().unwrap_or(0),
                 conn.get_direction() as u8,
                 u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                conn.local_address.0,
-                conn.remote_address.0,
+                conn.local_address.octets(),
+                conn.remote_address.octets(),
                 conn.local_port,
                 conn.remote_port,
+                conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
             );
             let _ = device.event_queue.push(info);
         }
@@ -410,10 +418,14 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                     data.get_process_id().unwrap_or(0),
                     conn.get_direction() as u8,
                     u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                    conn.local_address.0,
-                    conn.remote_address.0,
+                    conn.local_address.octets(),
+                    conn.remote_address.octets(),
                     conn.local_port,
                     conn.remote_port,
+                    conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                 );
                 let _ = device.event_queue.push(info);
             }
@@ -444,10 +456,14 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -471,10 +487,14 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -498,10 +518,14 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -525,10 +549,14 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.0,
-                        conn.remote_address.0,
+                        conn.local_address.octets(),
+                        conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
                     );
                     let _ = device.event_queue.push(info);
                 }

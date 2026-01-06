@@ -8,16 +8,31 @@ import (
 )
 
 const (
-	infoLogLine              byte = 0
-	infoConnectionIpv4       byte = 1
-	infoConnectionIpv6       byte = 2
-	infoConnectionEndEventV4 byte = 3
-	infoConnectionEndEventV6 byte = 4
-	infoBandwidthStatsV4     byte = 5
-	infoBandwidthStatsV6     byte = 6
+	infoLogLine                 byte = 0
+	infoConnectionIpv4          byte = 1
+	infoConnectionIpv6          byte = 2
+	infoConnectionEndEventV4    byte = 3
+	infoConnectionEndEventV6    byte = 4
+	infoConnectionUpdateEventV4 byte = 5
+	infoConnectionUpdateEventV6 byte = 6
+	infoConnectionUpdateEnd     byte = 7
+)
+
+const (
+	SeverityTrace byte = 1
+	SeverityDebug byte = 2
+	SeverityInfo  byte = 3
+	SeverityWarn  byte = 4
+	SeverityError byte = 5
+	SeverityFatal byte = 6
 )
 
 var ErrorUnknownInfoType = errors.New("unknown info type")
+
+type LogLine struct {
+	Severity byte
+	Line     string
+}
 
 type connectionV4Internal struct {
 	Id           uint64
@@ -83,6 +98,10 @@ type ConnectionEndV4 struct {
 	RemoteIp   [4]byte
 	LocalPort  uint16
 	RemotePort uint16
+	RxBytes    uint64
+	RxPackets  uint64
+	TxBytes    uint64
+	TxPackets  uint64
 }
 
 type ConnectionEndV6 struct {
@@ -93,39 +112,52 @@ type ConnectionEndV6 struct {
 	RemoteIp   [16]byte
 	LocalPort  uint16
 	RemotePort uint16
+	RxBytes    uint64
+	RxPackets  uint64
+	TxBytes    uint64
+	TxPackets  uint64
 }
 
-type LogLine struct {
-	Severity byte
-	Line     string
+type ConnectionUpdateV4 struct {
+	Protocol   byte
+	LocalIp    [4]byte
+	RemoteIp   [4]byte
+	LocalPort  uint16
+	RemotePort uint16
+	RxBytes    uint64
+	RxPackets  uint64
+	TxBytes    uint64
+	TxPackets  uint64
 }
 
-type BandwidthValueV4 struct {
-	LocalIP          [4]byte
-	LocalPort        uint16
-	RemoteIP         [4]byte
-	RemotePort       uint16
-	TransmittedBytes uint64
-	ReceivedBytes    uint64
+type ConnectionUpdateV6 struct {
+	Protocol   byte
+	LocalIp    [16]byte
+	RemoteIp   [16]byte
+	LocalPort  uint16
+	RemotePort uint16
+	RxBytes    uint64
+	RxPackets  uint64
+	TxBytes    uint64
+	TxPackets  uint64
 }
 
-type BandwidthValueV6 struct {
-	LocalIP          [16]byte
-	LocalPort        uint16
-	RemoteIP         [16]byte
-	RemotePort       uint16
-	TransmittedBytes uint64
-	ReceivedBytes    uint64
+type ConnectionUpdateEnd struct{}
+
+func parseGenericInfo[T any](data []byte) (Info, error) {
+	var new T
+	reader := bytes.NewReader(data)
+
+	err := binary.Read(reader, binary.LittleEndian, &new)
+	if err != nil {
+		return nil, err
+	}
+	return &new, nil
 }
 
-type BandwidthStatsV4 struct {
-	Protocol uint8
-	Values   []BandwidthValueV4
-}
-
-type BandwidthStatsV6 struct {
-	Protocol uint8
-	Values   []BandwidthValueV6
+func parseEmptyInfo[T any](data []byte) (Info, error) {
+	var new T
+	return &new, nil
 }
 
 func parseConnectionV4(data []byte) (Info, error) {
@@ -180,28 +212,6 @@ func parseConnectionV6(data []byte) (Info, error) {
 	return conn, nil
 }
 
-func parseConnectionEndV6(data []byte) (Info, error) {
-	var new ConnectionEndV6
-	reader := bytes.NewReader(data)
-
-	err := binary.Read(reader, binary.LittleEndian, &new)
-	if err != nil {
-		return nil, err
-	}
-	return &new, nil
-}
-
-func parseConnectionEndV4(data []byte) (Info, error) {
-	var new ConnectionEndV4
-	reader := bytes.NewReader(data)
-
-	err := binary.Read(reader, binary.LittleEndian, &new)
-	if err != nil {
-		return nil, err
-	}
-	return &new, nil
-}
-
 func parseLogLine(data []byte) (Info, error) {
 	var logLine LogLine
 	reader := bytes.NewReader(data)
@@ -213,57 +223,14 @@ func parseLogLine(data []byte) (Info, error) {
 	// Read string
 	line := make([]byte, len(data)-1) // -1 for the severity enum.
 	err = binary.Read(reader, binary.LittleEndian, &line)
+	if err != nil {
+		return nil, err
+	}
 	logLine.Line = string(line)
 	return &logLine, nil
 }
 
-func parseBandwidthStatsV4(data []byte) (Info, error) {
-	var bandwidth BandwidthStatsV4
-	reader := bytes.NewReader(data)
-
-	// Read Protocol
-	err := binary.Read(reader, binary.LittleEndian, &bandwidth.Protocol)
-	if err != nil {
-		return nil, err
-	}
-	// Read size of array
-	var size uint32
-	err = binary.Read(reader, binary.LittleEndian, &size)
-	if err != nil {
-		return nil, err
-	}
-	// Read array
-	bandwidth.Values = make([]BandwidthValueV4, size)
-	for i := 0; i < int(size); i++ {
-		binary.Read(reader, binary.LittleEndian, &bandwidth.Values[i])
-	}
-	return &bandwidth, nil
-}
-
-func parseBandwidthStatsV6(data []byte) (Info, error) {
-	var bandwidth BandwidthStatsV6
-	reader := bytes.NewReader(data)
-
-	// Read Protocol
-	err := binary.Read(reader, binary.LittleEndian, &bandwidth.Protocol)
-	if err != nil {
-		return nil, err
-	}
-	// Read size of array
-	var size uint32
-	err = binary.Read(reader, binary.LittleEndian, &size)
-	if err != nil {
-		return nil, err
-	}
-	// Read array
-	bandwidth.Values = make([]BandwidthValueV6, size)
-	for i := 0; i < int(size); i++ {
-		binary.Read(reader, binary.LittleEndian, &bandwidth.Values[i])
-	}
-	return &bandwidth, nil
-}
-
-type Info interface{}
+type Info any
 
 func RecvInfo(reader io.Reader) (Info, error) {
 	var infoType byte
@@ -275,6 +242,9 @@ func RecvInfo(reader io.Reader) (Info, error) {
 	// Read size of data
 	var size uint32
 	err = binary.Read(reader, binary.LittleEndian, &size)
+	if err != nil {
+		return nil, err
+	}
 
 	data := make([]byte, size)
 	n, err := reader.Read(data)
@@ -288,13 +258,14 @@ func RecvInfo(reader io.Reader) (Info, error) {
 
 	// Map of infoType to parser functions
 	parsers := map[byte]func([]byte) (Info, error){
-		infoConnectionIpv4:       parseConnectionV4,
-		infoConnectionIpv6:       parseConnectionV6,
-		infoConnectionEndEventV4: parseConnectionEndV4,
-		infoConnectionEndEventV6: parseConnectionEndV6,
-		infoLogLine:              parseLogLine,
-		infoBandwidthStatsV4:     parseBandwidthStatsV4,
-		infoBandwidthStatsV6:     parseBandwidthStatsV6,
+		infoLogLine:                 parseLogLine,
+		infoConnectionIpv4:          parseConnectionV4,
+		infoConnectionIpv6:          parseConnectionV6,
+		infoConnectionEndEventV4:    parseGenericInfo[ConnectionEndV4],
+		infoConnectionEndEventV6:    parseGenericInfo[ConnectionEndV6],
+		infoConnectionUpdateEventV4: parseGenericInfo[ConnectionUpdateV4],
+		infoConnectionUpdateEventV6: parseGenericInfo[ConnectionUpdateV6],
+		infoConnectionUpdateEnd:     parseEmptyInfo[ConnectionUpdateEnd],
 	}
 
 	parser, ok := parsers[infoType]
