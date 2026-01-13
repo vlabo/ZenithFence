@@ -130,15 +130,15 @@ impl NetBufferList {
         return None;
     }
 
-    pub fn get_data_length(&self) -> u32 {
+    pub fn get_data_length(&self) -> u64 {
         unsafe {
             if let Some(nbl) = self.nbl.as_ref() {
                 let mut nb = nbl.Header.first_net_buffer;
-                let mut data_length = 0;
+                let mut data_length: u64 = 0;
                 while !nb.is_null() {
                     let mut next = core::ptr::null_mut();
                     if let Some(nb) = nb.as_ref() {
-                        data_length += nb.nbSize.DataLength;
+                        data_length += nb.nbSize.DataLength as u64;
                         next = nb.Next;
                     }
                     nb = next;

@@ -115,7 +115,7 @@ fn redirect_outbound_packet(
                 } else {
                     ip_packet.set_dst_addr(remote_address);
                     if remote_address.is_loopback() {
-                        ip_packet.set_src_addr(Ipv6Address::LOOPBACK);
+                        ip_packet.set_src_addr(Ipv6Address::LOCALHOST);
                     }
                 }
                 let src_addr = ip_packet.src_addr();

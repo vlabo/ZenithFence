@@ -1,7 +1,7 @@
 // Commands from user space
 
+use num::FromPrimitive;
 use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 
 #[repr(u8)]
 #[derive(Clone, Copy, FromPrimitive)]
@@ -12,8 +12,8 @@ pub enum CommandType {
     UpdateV4              = 2,
     UpdateV6              = 3,
     ClearCache            = 4,
-    GetLogs               = 5,
-    GetBandwidthStats     = 6,
+    GetConnectionsUpdate  = 5,
+    GetLogs               = 6,
     PrintMemoryStats      = 7,
     CleanEndedConnections = 8,
 }
@@ -53,6 +53,12 @@ pub struct UpdateV6 {
     pub verdict: u8,
 }
 
+#[repr(C, packed)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConnectionsUpdate {
+    pub timestamp: u64,
+}
+
 pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
     FromPrimitive::from_u8(bytes[0])
 }
@@ -66,6 +72,10 @@ pub fn parse_update_v4(bytes: &[u8]) -> &UpdateV4 {
 }
 
 pub fn parse_update_v6(bytes: &[u8]) -> &UpdateV6 {
+    as_type(bytes)
+}
+
+pub fn parse_update_info(bytes: &[u8]) -> &ConnectionsUpdate {
     as_type(bytes)
 }
 
@@ -147,9 +157,22 @@ fn test_go_command_file() {
                 }
                 CommandType::ClearCache => {}
                 CommandType::GetLogs => {}
-                CommandType::GetBandwidthStats => {}
                 CommandType::PrintMemoryStats => {}
                 CommandType::CleanEndedConnections => {}
+                CommandType::GetConnectionsUpdate => {
+                    let mut buf = [0; size_of::<ConnectionsUpdate>()];
+                    let bytes_count = file.read(&mut buf).unwrap();
+                    if bytes_count != size_of::<ConnectionsUpdate>() {
+                        panic!("unexpected bytes count")
+                    }
+
+                    assert_eq!(
+                        parse_update_info(&buf),
+                        &ConnectionsUpdate {
+                            timestamp: 1234567890
+                        }
+                    )
+                }
             }
         } else {
             panic!("Unknown command: {}", command[0]);

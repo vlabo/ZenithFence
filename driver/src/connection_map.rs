@@ -1,6 +1,6 @@
 use core::{fmt::Display, time::Duration};
 
-use crate::connection::{Connection, RedirectInfo, Verdict};
+use crate::connection::{Connection, Direction, RedirectInfo, Verdict};
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
@@ -111,6 +111,35 @@ impl<T: Connection + Clone> ConnectionMap<T> {
             }
         }
         return None;
+    }
+
+    pub fn read_update_bw_usage<C>(
+        &self,
+        key: &Key,
+        byte_size: u64,
+        direction: Direction,
+        read_connection: fn(&T) -> Option<C>,
+    ) -> Option<C> {
+        let port = match self.find_port(key.protocol, key.local_port) {
+            Some(ptr) => ptr,
+            None => return None,
+        };
+        let mut port = port.write_lock();
+
+        for conn in &mut port.conns {
+            if conn.remote_equals(key) {
+                conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+                conn.update_bandwidth_data(byte_size, direction);
+                return read_connection(conn);
+            }
+            if conn.redirect_equals(key) {
+                conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+                conn.update_bandwidth_data(byte_size, direction);
+                return read_connection(conn);
+            }
+        }
+
+        None
     }
 
     pub fn read<C>(&self, key: &Key, read_connection: fn(&T) -> Option<C>) -> Option<C> {
@@ -233,6 +262,30 @@ impl<T: Connection + Clone> ConnectionMap<T> {
             before_one_minute,
             before_two_minutes,
         );
+    }
+
+    pub fn walk_over_connections<F: FnMut(&T)>(&mut self, mut iter: F) {
+        // Iterate over TCP ports.
+        for p in &mut self.tcp {
+            if let Some(port_arc) = p {
+                // Lock port
+                let port = port_arc.read_lock();
+                for c in &port.conns {
+                    iter(c);
+                }
+            }
+        }
+
+        // Iterate over UDP ports.
+        for p in &mut self.udp {
+            if let Some(port_arc) = p {
+                // Lock port
+                let port = port_arc.read_lock();
+                for c in &port.conns {
+                    iter(c);
+                }
+            }
+        }
     }
 
     fn find_port(&self, protocol: IpProtocol, port: u16) -> Option<Arc<Mutex<Port<T>>>> {

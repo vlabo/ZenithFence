@@ -17,6 +17,7 @@ use crate::filter_engine::{
     classify::ClassifyOut, layer::IncomingValues, metadata::FwpsIncomingMetadataValues,
 };
 
+#[allow(non_camel_case_types, non_snake_case)]
 pub(crate) type FwpsCalloutClassifyFn = unsafe extern "C" fn(
     inFixedValues: *const IncomingValues,
     inMetaValues: *const FwpsIncomingMetadataValues,
@@ -27,12 +28,14 @@ pub(crate) type FwpsCalloutClassifyFn = unsafe extern "C" fn(
     classifyOut: *mut ClassifyOut,
 );
 
+#[allow(non_camel_case_types, non_snake_case)]
 pub(crate) type FwpsCalloutNotifyFn = unsafe extern "C" fn(
     notifyType: u32,
     filterKey: *const GUID,
     filter: *mut FWPS_FILTER2,
 ) -> NTSTATUS;
 
+#[allow(non_camel_case_types, non_snake_case)]
 pub(crate) type FwpsCalloutFlowDeleteNotifyFn =
     unsafe extern "C" fn(layerId: u16, calloutId: u32, flowContext: u64);
 
