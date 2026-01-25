@@ -1,0 +1,5 @@
+github.com/google/flatbuffers v23.5.26+incompatible/go.mod h1:1AeVuKshWv4vARoZatz6mlQ0JxURH0Kv5+zNeJKJCa8=
+github.com/vlabo/zenithfence/kext_interface v0.0.0-20260113121527-250f13f39b4c h1:1Yz/8z/QMYhOLpk8Ax+0Tl7lsuJb1vDs3fZ6DrVv7sw=
+github.com/vlabo/zenithfence/kext_interface v0.0.0-20260113121527-250f13f39b4c/go.mod h1:WO2092uKJt2BSUzLtKdH9B9Ub0XNIHzGStfhjItYgnc=
+golang.org/x/sys v0.12.0 h1:CM0HF96J0hcLAwsHPJZjfdNzs0gftsLfgKt57wWHJ0o=
+golang.org/x/sys v0.12.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=

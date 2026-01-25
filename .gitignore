@@ -398,3 +398,4 @@ pm_kext/RCa06452
 target
 kext.sys
 release/build
+DriverCertificate.cer

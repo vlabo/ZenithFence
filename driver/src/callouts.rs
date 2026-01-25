@@ -14,7 +14,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleLayerOutboundV4",
             "ALE layer for outbound connection for ipv4",
-            0x58545073_f893_454c_bbea_a57bc964f46d,
+            0x3a090083_27e3_497f_ae5c_8172504f421e,
             Layer::AleAuthConnectV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::Resettable,
@@ -23,7 +23,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleLayerInboundV4",
             "ALE layer for inbound connections for ipv4",
-            0xc6021395_0724_4e2c_ae20_3dde51fc3c68,
+            0xf27704a5_172f_4306_9a49_dcfefe6aa236,
             Layer::AleAuthRecvAcceptV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::Resettable,
@@ -32,7 +32,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleLayerOutboundV6",
             "ALE layer for outbound connections for ipv6",
-            0x4bd2a080_2585_478d_977c_7f340c6bc3d4,
+            0x897a8324_f7e8_4713_b2d8_4084773ab47f,
             Layer::AleAuthConnectV6,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::Resettable,
@@ -41,7 +41,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleLayerInboundV6",
             "ALE layer for inbound connections for ipv6",
-            0xd24480da_38fa_4099_9383_b5c83b69e4f2,
+            0x56874651_3785_4dc9_b134_4849a54de6d0,
             Layer::AleAuthRecvAcceptV6,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::Resettable,
@@ -52,7 +52,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleEndpointClosureV4",
             "ALE layer for indicating closing of connection for ipv4",
-            0x58f02845_ace9_4455_ac80_8a84b86fe566,
+            0x7aa9954a_253e_416e_949d_829ce0c215d7,
             Layer::AleEndpointClosureV4,
             consts::FWP_ACTION_CALLOUT_INSPECTION,
             FilterType::NonResettable,
@@ -61,7 +61,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleEndpointClosureV6",
             "ALE layer for indicating closing of connection for ipv6",
-            0x2bc82359_9dc5_4315_9c93_c89467e283ce,
+            0x021a53c4_e149_4ba9_aa5f_7159a1466100,
             Layer::AleEndpointClosureV6,
             consts::FWP_ACTION_CALLOUT_INSPECTION,
             FilterType::NonResettable,
@@ -72,7 +72,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         // Callout::new(
         //     "AleResourceAssignmentV4",
         //     "Ipv4 Port assignment monitoring",
-        //     0x6b9d1985_6f75_4d05_b9b5_1607e187906f,
+        //     0x9d2d7ed8_42d4_4d73_ae9a_c888e0decbf1,
         //     Layer::AleResourceAssignmentV4Discard,
         //     consts::FWP_ACTION_CALLOUT_INSPECTION,
         //     FilterType::NonResettable,
@@ -81,7 +81,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleResourceReleaseV4",
             "Ipv4 Port release monitor",
-            0x7b513bb3_a0be_4f77_a4bc_03c052abe8d7,
+            0x23b3f70f_f6a4_4330_b7d0_43426a59237b,
             Layer::AleResourceReleaseV4,
             consts::FWP_ACTION_CALLOUT_INSPECTION,
             FilterType::NonResettable,
@@ -90,7 +90,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         // Callout::new(
         //     "AleResourceAssignmentV6",
         //     "Ipv4 Port assignment monitor",
-        //     0xb0d02299_3d3e_437d_916a_f0e96a60cc18,
+        //     0x7f0246f8_dddf_4b60_b693_76943b5e5fe4,
         //     Layer::AleResourceAssignmentV6Discard,
         //     consts::FWP_ACTION_CALLOUT_INSPECTION,
         //     FilterType::NonResettable,
@@ -99,7 +99,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "AleResourceReleaseV6",
             "Ipv6 Port release monitor",
-            0x6cf36e04_e656_42c3_8cac_a1ce05328bd1,
+            0xff60e5b5_f00b_46fd_be35_04aa316b8ff8,
             Layer::AleResourceReleaseV6,
             consts::FWP_ACTION_CALLOUT_INSPECTION,
             FilterType::NonResettable,
@@ -110,7 +110,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "IPPacketOutboundV4",
             "IP packet outbound network layer callout for Ipv4",
-            0xf3183afe_dc35_49f1_8ea2_b16b5666dd36,
+            0x6081493f_9032_49a7_9cca_5e61c28d428d,
             Layer::OutboundIppacketV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::NonResettable,
@@ -119,7 +119,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "IPPacketInboundV4",
             "IP packet inbound network layer callout for Ipv4",
-            0xf0369374_203d_4bf0_83d2_b2ad3cc17a50,
+            0x92a81d84_7942_4281_a29e_f9de59e8d844,
             Layer::InboundIppacketV4,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::NonResettable,
@@ -128,7 +128,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "IPPacketOutboundV6",
             "IP packet outbound network layer callout for Ipv6",
-            0x91daf8bc_0908_4bf8_9f81_2c538ab8f25a,
+            0xfad4e2a7_0ed0_4332_a5e5_634ee2fb1329,
             Layer::OutboundIppacketV6,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::NonResettable,
@@ -137,7 +137,7 @@ pub fn get_callout_vec() -> Vec<Callout> {
         Callout::new(
             "IPPacketInboundV6",
             "IP packet inbound network layer callout for Ipv6",
-            0xfe9faf5f_ceb2_4cd9_9995_f2f2b4f5fcc0,
+            0xf2605e9c_c72d_4375_9ebd_2aabbbaec54c,
             Layer::InboundIppacketV6,
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::NonResettable,

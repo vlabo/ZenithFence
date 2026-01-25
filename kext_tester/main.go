@@ -1,5 +1,4 @@
 //go:build windows
-// +build windows
 
 package main
 
@@ -7,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"time"
 
@@ -22,18 +22,6 @@ var protocols = map[int]string{
 	17: "udp",
 	58: "ipv6-icmp",
 }
-
-const (
-	// VerdictUndecided is the default status of new connections.
-	VerdictUndecided           Verdict = 0
-	VerdictUndeterminable      Verdict = 1
-	VerdictAccept              Verdict = 2
-	VerdictBlock               Verdict = 3
-	VerdictDrop                Verdict = 4
-	VerdictRerouteToNameserver Verdict = 5
-	VerdictRerouteToTunnel     Verdict = 6
-	VerdictFailed              Verdict = 7
-)
 
 func main() {
 	driverName := "ZenithFence"
@@ -66,13 +54,10 @@ func main() {
 
 	ticker := time.NewTicker(1 * time.Second)
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				err := kext_interface.SendGetLogsCommand(file)
-				if err != nil {
-					return
-				}
+		for range ticker.C {
+			err := kext_interface.SendGetLogsCommand(file)
+			if err != nil {
+				return
 			}
 		}
 	}()
@@ -84,35 +69,38 @@ func main() {
 				log.Printf("error reading from file %s", err)
 				return
 			}
-			switch {
-			case info.ConnectionV4 != nil:
+			switch info := info.(type) {
+			case *kext_interface.ConnectionV4:
 				{
-					conn := info.ConnectionV4
 					// direction := "->"
-					if conn.Direction == 1 {
+					if info.Direction == 1 {
 						// direction = "<-"
 						// kext_interface.WriteVerdictCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
 					} else {
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+						if info.RemoteIp == [4]byte{1, 1, 1, 1} {
+							kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentBlock)})
+							log.Printf("blocked packet: %d pid=%d %+v:%d %s %+v:%d %s\n", info.Id, info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
+						} else {
+							time.Sleep(200 * time.Millisecond)
+							kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
+						}
 					}
-					// log.Printf("infov4: %d pid=%d %+v:%d %s %+v:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 
+					// log.Printf("infov4: %d pid=%d %+v:%d %s %+v:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 				}
-			case info.ConnectionV6 != nil:
+			case *kext_interface.ConnectionV6:
 				{
-					conn := info.ConnectionV6
 					// direction := "->"
-					if conn.Direction == 1 {
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+					if info.Direction == 1 {
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
 						// direction = "<-"
 					} else {
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: conn.Id, Verdict: uint8(VerdictAccept)})
+						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
 					}
 					// log.Printf("infov6: %d pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
-
 				}
-			case info.ConnectionEndV4 != nil:
+			case *kext_interface.ConnectionEndV4:
 				{
 					// conn := info.ConnectionEndV4
 					// direction := "->"
@@ -121,7 +109,7 @@ func main() {
 					// }
 					// log.Printf("conn end v4: pid=%d %+v:%d %s %+v:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 				}
-			case info.ConnectionEndV6 != nil:
+			case *kext_interface.ConnectionEndV6:
 				{
 					// conn := info.ConnectionEndV6
 					// direction := "->"
@@ -130,9 +118,9 @@ func main() {
 					// }
 					// log.Printf("conn end v6: pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
 				}
-			case info.LogLine != nil:
+			case *kext_interface.LogLine:
 				{
-					log.Println(info.LogLine.Line)
+					log.Println(info.Line)
 				}
 			}
 		}

@@ -49,7 +49,7 @@ impl Device {
     /// Make sure everything is initialized here.
     pub fn new(driver: &Driver) -> Result<Self, String> {
         let mut filter_engine =
-            match FilterEngine::new(driver, 0x7dab1057_8e2b_40c4_9b85_693e381d7896) {
+            match FilterEngine::new(driver, 0xf19f6eef_9031_4339_b90a_613da727ee29) {
                 Ok(fe) => fe,
                 Err(err) => return Err(alloc::format!("filter engine error: {}", err)),
             };
