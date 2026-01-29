@@ -45,15 +45,6 @@ impl ClassifyDefer {
             }
         }
     }
-
-    // pub fn add_net_buffer(&mut self, nbl: NetBufferList) {
-    //     if let Some(packet_list) = match self {
-    //         ClassifyDefer::Initial(_, packet_list) => packet_list,
-    //         ClassifyDefer::Reauthorization(_, packet_list) => packet_list,
-    //     } {
-    //         packet_list.net_buffer_list_queue.push(nbl);
-    //     }
-    // }
 }
 
 pub struct CalloutData<'a> {
@@ -170,6 +161,8 @@ impl<'a> CalloutData<'a> {
 
     pub fn action_block(&mut self) {
         unsafe {
+            // Make sure no one can override the block action.
+            (*self.classify_out).clear_write_flag();
             (*self.classify_out).action_block();
         }
     }
@@ -182,6 +175,8 @@ impl<'a> CalloutData<'a> {
 
     pub fn block_and_absorb(&mut self) {
         unsafe {
+            // Make sure no one can override the block action.
+            (*self.classify_out).clear_write_flag();
             (*self.classify_out).action_block();
             (*self.classify_out).set_absorb();
         }

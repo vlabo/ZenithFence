@@ -3,7 +3,7 @@
 macro_rules! log {
     ($level:expr, $($arg:tt)*) => ({
         let message = alloc::format!($($arg)*);
-        $crate::interface::dbg_print(alloc::format!("{} {}: {}", $level, core::module_path!(), message));
+        $crate::interface::dbg_print(alloc::format!("{} {}: {}\n", $level, core::module_path!(), message));
     });
 }
 

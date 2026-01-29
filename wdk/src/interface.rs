@@ -14,7 +14,7 @@ use widestring::U16CString;
 use windows_sys::{
     Wdk::{
         Foundation::{DEVICE_OBJECT, DRIVER_OBJECT},
-        System::SystemServices::DbgPrint,
+        System::SystemServices::DbgPrintEx,
     },
     Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING},
 };
@@ -22,8 +22,9 @@ use windows_sys::{
 // Debug
 pub fn dbg_print(str: String) {
     if let Ok(c_str) = CString::new(str) {
+        const DPFLTR_IHVDRIVER_ID: u32 = 77;
         unsafe {
-            DbgPrint(c_str.as_ptr() as _);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, 0, c_str.as_ptr() as _);
         }
     }
 }
