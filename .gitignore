@@ -399,3 +399,4 @@ target
 kext.sys
 release/build
 DriverCertificate.cer
+release/config.json
