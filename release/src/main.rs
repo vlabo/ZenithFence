@@ -8,11 +8,22 @@ use std::{
 
 use chrono::Local;
 use handlebars::Handlebars;
+use serde_derive::Deserialize;
 use serde_json::json;
+use std::sync::OnceLock;
 use zip::{write::FileOptions, ZipWriter};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 static LIB_PATH: &'static str = "./build/x86_64-pc-windows-msvc/release/driver.lib";
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    sys_basename: String,
+    driver_name: String,
+    company_name: String,
+}
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
 
 fn main() {
     build_driver();
@@ -69,6 +80,23 @@ fn main() {
     } else {
         create_release_dir(&out_path, with_bat);
         println!("Created release directory: {}", out_path.display());
+
+        let config = load_config();
+        let version_file = format!(
+            "{}_v{}-{}-{}",
+            config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+        );
+        println!("Sign the .cab file before uploading it to microsoft portal!");
+        println!(
+            "cab-file: {}",
+            out_path.join(format!("{}.cab", version_file)).display()
+        );
+
+        println!("sign command example:");
+        println!(
+            "signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /n \"<company-name>\" {}",
+            out_path.join(format!("{}.cab", version_file)).display()
+        );
     }
 }
 
@@ -77,6 +105,19 @@ fn version_str() -> String {
         "{}.{}.{}.{}",
         VERSION[0], VERSION[1], VERSION[2], VERSION[3]
     );
+}
+
+fn load_config() -> &'static Config {
+    CONFIG.get_or_init(|| {
+        // Try to read release/config.json relative to this executable
+        let cfg_path = Path::new("config.json");
+        if cfg_path.exists() {
+            let s = fs::read_to_string(cfg_path).unwrap();
+            serde_json::from_str(&s).unwrap()
+        } else {
+            panic!("config.json not found at {}", cfg_path.display());
+        }
+    })
 }
 
 fn build_driver() {
@@ -94,39 +135,46 @@ fn build_driver() {
 fn get_inf_content() -> String {
     let reg = Handlebars::new();
     let today = Local::now();
-    reg.render_template(
-        include_str!("../templates/ZenithFence64.inf"),
-        &json!({"date": today.format("%m/%d/%Y").to_string(), "version": version_str()}),
-    )
-    .unwrap()
+    let config = load_config();
+    // Merge config values into template data
+    let data = json!({"date": today.format("%m/%d/%Y").to_string(),"version": version_str(), "driver_name": config.driver_name, "company_name": config.company_name, "sys_basename": config.sys_basename});
+
+    reg.render_template(include_str!("../templates/ZenithFence64.inf"), &data)
+        .unwrap()
 }
 
 fn get_ddf_content() -> String {
+    let config = load_config();
+
     let reg = Handlebars::new();
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
-    reg.render_template(
-        include_str!("../templates/ZenithFence.ddf"),
-        &json!({"version_file": version_file}),
-    )
-    .unwrap()
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+    );
+    let data = json!({"version_file": version_file, "basename": config.sys_basename, "driver_name": config.driver_name, "company_name": config.company_name});
+
+    reg.render_template(include_str!("../templates/ZenithFence.ddf"), &data)
+        .unwrap()
 }
 
 fn get_build_cab_script_content() -> String {
-    let reg = Handlebars::new();
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
+    let config = load_config();
 
-    reg
-        .render_template(
-            include_str!("../templates/build_cab.bat"),
-            &json!({"sys_file": format!("{}.sys", version_file), "pdb_file": format!("{}.pdb", version_file), "lib_file": "driver.lib", "version_file": &version_file }),
-        )
+    let reg = Handlebars::new();
+    let data = json!({"sys_file": format!("{}.sys", config.sys_basename), "pdb_file": format!("{}.pdb", config.sys_basename), "lib_file": "driver.lib", "version_file": &config.sys_basename });
+
+    reg.render_template(include_str!("../templates/build_cab.bat"), &data)
         .unwrap()
 }
 
 fn create_release_zip(zip_path: &Path) {
+    let config = load_config();
     let file = File::create(zip_path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+    );
 
     zip.add_directory("cab", FileOptions::default()).unwrap();
     // Write driver.lib
@@ -160,7 +208,11 @@ fn create_release_dir(dir_path: &Path, with_bat: bool) {
     let dest_lib = dir_path.join("driver.lib");
     fs::copy(LIB_PATH, &dest_lib).unwrap();
 
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
+    let config = load_config();
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+    );
 
     // write ddf
     let ddf_path = dir_path.join(format!("{}.ddf", version_file));
@@ -173,13 +225,13 @@ fn create_release_dir(dir_path: &Path, with_bat: bool) {
     }
 
     // write inf into cab/
-    let inf_path = cab_dir.join(format!("{}.inf", version_file));
+    let inf_path = cab_dir.join(format!("{}.inf", config.sys_basename));
     fs::write(inf_path, get_inf_content()).unwrap();
 
     // Link driver.lib into a .sys and produce .pdb, then move them into cab/
     // This mirrors the steps in build_cab.bat but runs them automatically.
-    let sys_file = format!("{}.sys", version_file);
-    let pdb_file = format!("{}.pdb", version_file);
+    let sys_file = format!("{}.sys", config.sys_basename);
+    let pdb_file = format!("{}.pdb", config.sys_basename);
 
     // Run link.exe in the output directory
     let link_status = Command::new("link.exe")
