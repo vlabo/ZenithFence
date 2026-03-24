@@ -32,7 +32,12 @@ impl ClassifyDefer {
         unsafe {
             match self {
                 ClassifyDefer::Initial(context, packet_list) => {
-                    FwpsCompleteOperation0(context, core::ptr::null_mut());
+                    let nbl_ptr = if let Some(ref tpl) = packet_list {
+                        tpl.net_buffer_list_queue.nbl
+                    } else {
+                        core::ptr::null_mut()
+                    };
+                    FwpsCompleteOperation0(context, nbl_ptr);
                     return Ok(packet_list);
                 }
                 ClassifyDefer::Reauthorization(_callout_id, packet_list) => {
@@ -99,6 +104,14 @@ impl<'a> CalloutData<'a> {
         unsafe {
             return (*self.metadata).get_transport_endpoint_handle();
         }
+    }
+
+    pub fn get_ip_header_size(&self) -> u32 {
+        unsafe { (*self.metadata).get_ip_header_size() }
+    }
+
+    pub fn get_transport_header_size(&self) -> u32 {
+        unsafe { (*self.metadata).get_transport_header_size() }
     }
 
     pub fn get_remote_scope_id(&self) -> Option<SCOPE_ID> {

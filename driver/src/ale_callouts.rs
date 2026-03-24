@@ -5,9 +5,7 @@ use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 
 use crate::info;
-use smoltcp::wire::{
-    IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
-};
+use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{
     self, FieldsAleAuthConnectV4, FieldsAleAuthConnectV6, FieldsAleAuthRecvAcceptV4,
@@ -326,11 +324,9 @@ fn create_packet_list(
     let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
     let mut inbound = false;
     if let Direction::Inbound = ale_data.direction {
-        if ale_data.is_ipv6 {
-            nbl.retreat(IPV6_HEADER_LEN as u32, true);
-        } else {
-            nbl.retreat(IPV4_HEADER_LEN as u32, true);
-        }
+        let retreat_size =
+            callout_data.get_ip_header_size() + callout_data.get_transport_header_size();
+        nbl.retreat(retreat_size, true);
         inbound = true;
     }
 

@@ -325,7 +325,10 @@ extern "C" {
     ) -> NTSTATUS;
 
     /// The FwpsCompleteOperation0 function is called by a callout to resume packet processing that was suspended pending completion of another operation.
-    pub(crate) fn FwpsCompleteOperation0(completionContext: HANDLE, netBufferList: *mut c_void);
+    pub(crate) fn FwpsCompleteOperation0(
+        completionContext: HANDLE,
+        netBufferList: *mut NET_BUFFER_LIST,
+    );
 
     /// The FwpsAcquireClassifyHandle0 function generates a classification handle that is used to identify asynchronous classification operations and requests for writable layer data.
     pub(crate) fn FwpsAcquireClassifyHandle0(

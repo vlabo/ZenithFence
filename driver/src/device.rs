@@ -1,6 +1,6 @@
 use core::sync::atomic::Ordering;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use num_traits::FromPrimitive;
 use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
@@ -162,7 +162,7 @@ impl Device {
                             crate::connection::Verdict::Accept
                             | crate::connection::Verdict::PermanentAccept => {
                                 if let Err(err) = self.inject_packet(packet, false) {
-                                    err!("failed to inject packet: {}", err);
+                                    err!("failed to inject packet: {} key={}", err, key);
                                 } else {
                                     dbg!("packet injected: {}", key);
                                 }
@@ -171,16 +171,16 @@ impl Device {
                             | crate::connection::Verdict::RedirectTunnel => {
                                 if let Some(redirect_info) = redirect_info {
                                     if let Err(err) = packet.redirect(redirect_info) {
-                                        err!("failed to redirect packet: {}", err);
+                                        err!("failed to redirect packet: {} key={}", err, key);
                                     }
                                     if let Err(err) = self.inject_packet(packet, false) {
-                                        err!("failed to inject packet: {}", err);
+                                        err!("failed to inject packet: {} key={}", err, key);
                                     }
                                 }
                             }
                             _ => {
                                 if let Err(err) = self.inject_packet(packet, true) {
-                                    err!("failed to inject packet: {}", err);
+                                    err!("failed to inject packet: {} key={}", err, key);
                                 }
                             }
                         }
@@ -396,6 +396,8 @@ impl Device {
                 let packet_list = defer.complete(&mut self.filter_engine)?;
                 if let Some(packet_list) = packet_list {
                     self.injector.inject_packet_list_transport(packet_list)?;
+                } else {
+                    return Err("no packet list to inject".to_string());
                 }
 
                 Ok(())
