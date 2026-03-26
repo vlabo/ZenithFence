@@ -7,6 +7,8 @@ use wdk::rw_spin_lock::Mutex;
 
 use crate::{connection::Direction, connection_map::Key, device::Packet};
 
+pub const PACKET_MISSING_ID: u64 = u64::MAX;
+
 pub struct Entry<T> {
     pub value: T,
     id: u64,
@@ -38,10 +40,17 @@ impl IdCache {
         values.push_back(Entry { value, id });
         self.next_id = self.next_id.wrapping_add(1); // Assuming this will not overflow.
 
+        // PACKET_MISSING_ID is not checked since there needs to be 18446744073709551614 connection created until it reaches that id.
+        // Practically impossible and the impact is just one dropped packet.
+
         return info;
     }
 
     pub fn pop_id(&mut self, id: u64) -> Option<(Key, Packet)> {
+        if id == PACKET_MISSING_ID {
+            return None;
+        }
+
         let mut values = self.values.write_lock();
         if let Ok(index) = values.binary_search_by_key(&id, |val| val.id) {
             return Some(values.remove(index).unwrap().value);
@@ -81,7 +90,46 @@ fn get_payload<'a>(packet: &'a Packet) -> Option<&'a [u8]> {
     }
 }
 
-fn build_info(
+pub fn build_loopback_info(key: &Key, process_id: u64, direction: Direction) -> Option<Info> {
+    let (local_port, remote_port) = match key.protocol {
+        IpProtocol::Tcp | IpProtocol::Udp => (key.local_port, key.remote_port),
+        _ => (0, 0),
+    };
+
+    match (key.local_address, key.remote_address) {
+        (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
+            Some(protocol::info::connection_info_v6(
+                PACKET_MISSING_ID,
+                process_id,
+                direction as u8,
+                u8::from(key.protocol),
+                local_ip.octets(),
+                remote_ip.octets(),
+                local_port,
+                remote_port,
+                4, // Transport layer
+                &[],
+            ))
+        }
+        (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
+            Some(protocol::info::connection_info_v4(
+                PACKET_MISSING_ID,
+                process_id,
+                direction as u8,
+                u8::from(key.protocol),
+                local_ip.octets(),
+                remote_ip.octets(),
+                local_port,
+                remote_port,
+                4, // Transport layer
+                &[],
+            ))
+        }
+        _ => None,
+    }
+}
+
+pub fn build_info(
     key: &Key,
     packet_id: u64,
     process_id: u64,

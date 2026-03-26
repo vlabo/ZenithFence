@@ -4,6 +4,7 @@ use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Verdi
 use crate::connection_map::Key;
 use crate::device::{Device, Packet};
 
+use crate::id_cache;
 use crate::info;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::filter_engine::callout_data::CalloutData;
@@ -50,6 +51,18 @@ impl AleLayerData {
             local_port,
             remote_address: self.remote_ip,
             remote_port,
+        }
+    }
+
+    fn is_loopback(&self) -> bool {
+        match (self.local_ip, self.remote_ip) {
+            (IpAddress::Ipv4(local), IpAddress::Ipv4(remote)) => {
+                local.is_loopback() || remote.is_loopback()
+            }
+            (IpAddress::Ipv6(local), IpAddress::Ipv6(remote)) => {
+                local.is_loopback() || remote.is_loopback()
+            }
+            _ => false,
         }
     }
 }
@@ -248,6 +261,37 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             }
         }
     } else {
+        // Special case for incoming loopback connection
+        if ale_data.is_loopback() && matches!(ale_data.direction, Direction::Inbound) {
+            // Pending connection for inbound loopback does not work.
+            // Set the verdict to accept and send info only event to userspace.
+            crate::dbg!(
+                "loopback inbound connection: {} PID: {}",
+                key,
+                ale_data.process_id
+            );
+            if ale_data.is_ipv6 {
+                let mut conn =
+                    ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+                conn.set_verdict(Verdict::Accept);
+                device.connection_cache.v6.add(conn);
+            } else {
+                let mut conn =
+                    ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+                conn.set_verdict(Verdict::Accept);
+                device.connection_cache.v4.add(conn);
+            }
+
+            if let Some(info) =
+                id_cache::build_loopback_info(&key, ale_data.process_id, ale_data.direction)
+            {
+                let _ = device.event_queue.push(info);
+            }
+
+            data.action_permit();
+            return;
+        }
+
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
         // Only first packet of a connection can be pended: reauthorize == false
         let can_pend_connection = !ale_data.reauthorize;
@@ -259,6 +303,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                     ale_data.direction,
                     true,
                 );
+
                 if let Some(info) = info {
                     let _ = device.event_queue.push(info);
                 }

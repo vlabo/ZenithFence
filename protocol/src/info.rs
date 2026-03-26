@@ -51,7 +51,7 @@ impl PushBytes for u64 {
 
 impl PushBytes for usize {
     fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&usize::to_le_bytes(self));
+        vec.extend_from_slice(&u64::to_le_bytes(self as u64));
     }
 }
 
@@ -107,12 +107,8 @@ impl Info {
     }
 
     fn update_size(&mut self) {
-        let size = self.0.len() - 5;
-        let bytes = &mut self.0;
-        bytes[1] = size as u8;
-        bytes[2] = (size >> 8) as u8;
-        bytes[3] = (size >> 16) as u8;
-        bytes[4] = (size >> 24) as u8;
+        let size = (self.0.len() - 5) as u32;
+        self.0[1..5].copy_from_slice(&size.to_le_bytes());
     }
 
     pub fn as_bytes(&self) -> &[u8] {

@@ -7,14 +7,13 @@ use windows_sys::Win32::{
     NetworkManagement::{
         IpHelper::IP_ADDRESS_PREFIX,
         WindowsFilteringPlatform::{
-            FWPS_METADATA_FIELD_COMPARTMENT_ID, FWPS_METADATA_FIELD_COMPLETION_HANDLE,
-            FWPS_METADATA_FIELD_PROCESS_ID, FWPS_METADATA_FIELD_PROCESS_PATH,
-            FWPS_METADATA_FIELD_REMOTE_SCOPE_ID, FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA,
+            FWPS_METADATA_FIELD_COMPLETION_HANDLE, FWPS_METADATA_FIELD_PROCESS_ID,
+            FWPS_METADATA_FIELD_PROCESS_PATH, FWPS_METADATA_FIELD_REMOTE_SCOPE_ID,
+            FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA,
             FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE, FWP_BYTE_BLOB, FWP_DIRECTION,
         },
     },
     Networking::WinSock::SCOPE_ID,
-    System::Kernel::COMPARTMENT_ID,
 };
 
 #[repr(C)]
@@ -156,13 +155,6 @@ impl FwpsIncomingMetadataValues {
             return Some(slice);
         }
 
-        None
-    }
-
-    pub(crate) fn get_compartment_id(&self) -> Option<COMPARTMENT_ID> {
-        if self.has_field(FWPS_METADATA_FIELD_COMPARTMENT_ID) {
-            return Some(self.compartment_id as COMPARTMENT_ID);
-        }
         None
     }
 }
