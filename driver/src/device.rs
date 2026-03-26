@@ -396,10 +396,7 @@ impl Device {
                 let packet_list = defer.complete(&mut self.filter_engine)?;
                 if let Some(packet_list) = packet_list {
                     self.injector.inject_packet_list_transport(packet_list)?;
-                } else {
-                    return Err("no packet list to inject".to_string());
                 }
-
                 Ok(())
             }
         }
