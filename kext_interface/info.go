@@ -66,7 +66,7 @@ func (c *ConnectionV4) Compare(other *ConnectionV4) bool {
 }
 
 func (c *ConnectionV4) IsInfoOnly() bool {
-	return c.ProcessId == INFO_ONLY_PACKET_ID
+	return c.Id == INFO_ONLY_PACKET_ID
 }
 
 type connectionV6Internal struct {
@@ -98,7 +98,7 @@ func (c ConnectionV6) Compare(other *ConnectionV6) bool {
 }
 
 func (c *ConnectionV6) IsInfoOnly() bool {
-	return c.ProcessId == INFO_ONLY_PACKET_ID
+	return c.Id == INFO_ONLY_PACKET_ID
 }
 
 type ConnectionEndV4 struct {

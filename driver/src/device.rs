@@ -1,6 +1,6 @@
 use core::sync::atomic::Ordering;
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use num_traits::FromPrimitive;
 use protocol::{command::CommandType, info::Info};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
