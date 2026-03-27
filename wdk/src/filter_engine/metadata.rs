@@ -90,6 +90,14 @@ impl FwpsIncomingMetadataValues {
         self.current_metadata_values & field > 0
     }
 
+    pub(crate) fn get_ip_header_size(&self) -> u32 {
+        self.ip_header_size
+    }
+
+    pub(crate) fn get_transport_header_size(&self) -> u32 {
+        self.transport_header_size
+    }
+
     pub(crate) fn get_process_id(&self) -> Option<u64> {
         if self.has_field(FWPS_METADATA_FIELD_PROCESS_ID) {
             return Some(self.process_id);
