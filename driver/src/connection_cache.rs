@@ -1,15 +1,17 @@
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
 use crate::{
     connection::{ConnectionInfo, ConnectionV4, ConnectionV6, Direction},
     connection_map::{ConnectionMap, Key},
 };
-use alloc::vec::Vec;
 
 pub struct ConnectionCache {
     pub v4: ConnectionMap<ConnectionV4>,
     pub v6: ConnectionMap<ConnectionV6>,
 
-    tmp_ended_connections_buffer_v4: Vec<ConnectionV4>,
-    tmp_ended_connections_buffer_v6: Vec<ConnectionV6>,
+    tmp_ended_connections_buffer_v4: Vec<Arc<ConnectionV4>>,
+    tmp_ended_connections_buffer_v6: Vec<Arc<ConnectionV6>>,
 }
 
 impl ConnectionCache {
@@ -23,7 +25,7 @@ impl ConnectionCache {
     }
 
     pub fn update_connection(
-        &mut self,
+        &self,
         key: Key,
         verdict: crate::connection::Verdict,
     ) -> Option<crate::connection::RedirectInfo> {
@@ -37,7 +39,9 @@ impl ConnectionCache {
     // clean_ended_connections is not thread safe and should be called from one place only.
     pub fn clean_ended_connections<'a>(
         &'a mut self,
-    ) -> (&'a mut Vec<ConnectionV4>, &'a mut Vec<ConnectionV6>) {
+    ) -> (&'a mut Vec<Arc<ConnectionV4>>, &'a mut Vec<Arc<ConnectionV6>>) {
+        self.tmp_ended_connections_buffer_v4.clear();
+        self.tmp_ended_connections_buffer_v6.clear();
         self.v4
             .clean_ended_connections(&mut self.tmp_ended_connections_buffer_v4);
         self.v6
@@ -49,12 +53,12 @@ impl ConnectionCache {
         );
     }
 
-    pub fn walk_over_connections_v4<'a, F: FnMut(&ConnectionV4)>(&'a mut self, iter: F) {
-        self.v4.walk_over_connections(iter);
+    pub fn walk_over_connections_v4<F: FnMut(&ConnectionV4)>(&self, iter: F) {
+        self.v4.walk_over_connections(iter)
     }
 
-    pub fn walk_over_connections_v6<'a, F: FnMut(&ConnectionV6)>(&'a mut self, iter: F) {
-        self.v6.walk_over_connections(iter);
+    pub fn walk_over_connections_v6<F: FnMut(&ConnectionV6)>(&self, iter: F) {
+        self.v6.walk_over_connections(iter)
     }
 
     pub fn get_connection_and_update_bw_usage(
@@ -64,31 +68,23 @@ impl ConnectionCache {
         direction: Direction,
     ) -> Option<ConnectionInfo> {
         if key.is_ipv6() {
-            let conn_info = self.v6.read_update_bw_usage(
-                &key,
+            self.v6.read_update_bw_usage(
+                key,
                 packet_size,
                 direction,
-                |conn: &ConnectionV6| -> Option<ConnectionInfo> {
-                    // Function is behind spin lock. Just copy and return.
-                    Some(ConnectionInfo::from_connection(conn))
-                },
-            );
-            return conn_info;
+                |conn: &ConnectionV6| Some(ConnectionInfo::from_connection(conn)),
+            )
         } else {
-            let conn_info = self.v4.read_update_bw_usage(
-                &key,
+            self.v4.read_update_bw_usage(
+                key,
                 packet_size,
                 direction,
-                |conn: &ConnectionV4| -> Option<ConnectionInfo> {
-                    // Function is is behind spin lock. Just copy and return.
-                    Some(ConnectionInfo::from_connection(conn))
-                },
-            );
-            return conn_info;
+                |conn: &ConnectionV4| Some(ConnectionInfo::from_connection(conn)),
+            )
         }
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         self.v4.clear();
         self.v6.clear();
     }

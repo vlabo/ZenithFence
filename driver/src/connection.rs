@@ -4,7 +4,7 @@ use alloc::{
 };
 use core::{
     fmt::{Debug, Display},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
@@ -94,11 +94,20 @@ impl Debug for Direction {
     }
 }
 
-#[derive(Clone)]
 pub struct ConnectionExtra {
     pub(crate) process_id: u64,
-    pub(crate) end_timestamp: u64,
+    pub(crate) end_timestamp: AtomicU64,
     pub(crate) direction: Direction,
+}
+
+impl Clone for ConnectionExtra {
+    fn clone(&self) -> Self {
+        Self {
+            process_id: self.process_id,
+            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::Relaxed)),
+            direction: self.direction,
+        }
+    }
 }
 
 pub trait Connection {
@@ -153,7 +162,7 @@ pub trait Connection {
     // Returns the process id of the connection.
     fn get_process_id(&self) -> u64;
     /// Ends the connection.
-    fn end(&mut self, timestamp: u64);
+    fn end(&self, timestamp: u64);
     /// Returns true if the connection has ended.
     fn has_ended(&self) -> bool {
         self.get_end_time() > 0
@@ -164,7 +173,7 @@ pub trait Connection {
     fn get_last_accessed_time(&self) -> u64;
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
-    fn set_verdict(&mut self, verdict: Verdict);
+    fn set_verdict(&self, verdict: Verdict);
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
 
@@ -217,7 +226,7 @@ pub struct ConnectionV4 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
-    pub(crate) verdict: Verdict,
+    pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
     pub(crate) extra: Box<ConnectionExtra>,
@@ -229,7 +238,7 @@ pub struct ConnectionV6 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv6Address,
     pub(crate) remote_port: u16,
-    pub(crate) verdict: Verdict,
+    pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
     pub(crate) extra: Box<ConnectionExtra>,
@@ -280,7 +289,7 @@ impl ConnectionV4 {
             local_port: key.local_port,
             remote_address,
             remote_port: key.remote_port,
-            verdict: Verdict::Undecided,
+            verdict: AtomicU8::new(Verdict::Undecided as u8),
             last_accessed_timestamp: AtomicU64::new(timestamp),
             bandwidth_usage: BandwidthUsage {
                 rx_bytes: AtomicU64::new(0),
@@ -291,7 +300,7 @@ impl ConnectionV4 {
             extra: Box::new(ConnectionExtra {
                 process_id,
                 direction,
-                end_timestamp: 0,
+                end_timestamp: AtomicU64::new(0),
             }),
         })
     }
@@ -335,7 +344,8 @@ impl Connection for ConnectionV4 {
     }
 
     fn get_verdict(&self) -> Verdict {
-        self.verdict
+        use num_traits::FromPrimitive;
+        Verdict::from_u8(self.verdict.load(Ordering::Acquire)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -366,12 +376,12 @@ impl Connection for ConnectionV4 {
         self.extra.direction
     }
 
-    fn end(&mut self, timestamp: u64) {
-        self.extra.end_timestamp = timestamp;
+    fn end(&self, timestamp: u64) {
+        self.extra.end_timestamp.store(timestamp, Ordering::Release);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp
+        self.extra.end_timestamp.load(Ordering::Acquire)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
@@ -383,8 +393,8 @@ impl Connection for ConnectionV4 {
             .store(timestamp, Ordering::Relaxed);
     }
 
-    fn set_verdict(&mut self, verdict: Verdict) {
-        self.verdict = verdict;
+    fn set_verdict(&self, verdict: Verdict) {
+        self.verdict.store(verdict as u8, Ordering::Release);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -400,7 +410,7 @@ impl Clone for ConnectionV4 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: self.verdict,
+            verdict: AtomicU8::new(self.verdict.load(Ordering::Relaxed)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
                 self.last_accessed_timestamp.load(Ordering::Relaxed),
@@ -428,7 +438,7 @@ impl ConnectionV6 {
             local_port: key.local_port,
             remote_address,
             remote_port: key.remote_port,
-            verdict: Verdict::Undecided,
+            verdict: AtomicU8::new(Verdict::Undecided as u8),
             last_accessed_timestamp: AtomicU64::new(timestamp),
             bandwidth_usage: BandwidthUsage {
                 rx_bytes: AtomicU64::new(0),
@@ -439,7 +449,7 @@ impl ConnectionV6 {
             extra: Box::new(ConnectionExtra {
                 process_id,
                 direction,
-                end_timestamp: 0,
+                end_timestamp: AtomicU64::new(0),
             }),
         })
     }
@@ -483,7 +493,8 @@ impl Connection for ConnectionV6 {
     }
 
     fn get_verdict(&self) -> Verdict {
-        self.verdict
+        use num_traits::FromPrimitive;
+        Verdict::from_u8(self.verdict.load(Ordering::Acquire)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -514,12 +525,12 @@ impl Connection for ConnectionV6 {
         self.extra.direction
     }
 
-    fn end(&mut self, timestamp: u64) {
-        self.extra.end_timestamp = timestamp;
+    fn end(&self, timestamp: u64) {
+        self.extra.end_timestamp.store(timestamp, Ordering::Release);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp
+        self.extra.end_timestamp.load(Ordering::Acquire)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
@@ -531,8 +542,8 @@ impl Connection for ConnectionV6 {
             .store(timestamp, Ordering::Relaxed);
     }
 
-    fn set_verdict(&mut self, verdict: Verdict) {
-        self.verdict = verdict;
+    fn set_verdict(&self, verdict: Verdict) {
+        self.verdict.store(verdict as u8, Ordering::Release);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -548,7 +559,7 @@ impl Clone for ConnectionV6 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: self.verdict,
+            verdict: AtomicU8::new(self.verdict.load(Ordering::Relaxed)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
                 self.last_accessed_timestamp.load(Ordering::Relaxed),
