@@ -19,9 +19,8 @@ use wdk::{
 use crate::{
     array_holder::ArrayHolder,
     callouts,
-    connection::{Connection, ConnectionV4, ConnectionV6},
+    connection::{Connection, ConnectionV4, ConnectionV6, Key},
     connection_cache::ConnectionCache,
-    connection_map::Key,
     dbg, err,
     id_cache::IdCache,
     logger,

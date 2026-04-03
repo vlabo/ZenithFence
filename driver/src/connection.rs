@@ -6,10 +6,10 @@ use core::{
     fmt::{Debug, Display},
     sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
+use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
-use crate::connection_map::Key;
 
 pub static PM_DNS_PORT: u16 = 53;
 pub static PM_SPN_PORT: u16 = 717;
@@ -318,8 +318,8 @@ impl Connection for ConnectionV4 {
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
-        match self.verdict {
-            Verdict::RedirectNameServer => {
+        match FromPrimitive::from_u8(self.verdict.load(Ordering::SeqCst)) {
+            Some(Verdict::RedirectNameServer) => {
                 if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
@@ -329,7 +329,7 @@ impl Connection for ConnectionV4 {
                     IpAddress::Ipv6(_) => false,
                 }
             }
-            Verdict::RedirectTunnel => {
+            Some(Verdict::RedirectTunnel) => {
                 if key.remote_port != PM_SPN_PORT {
                     return false;
                 }
@@ -467,8 +467,8 @@ impl Connection for ConnectionV6 {
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
-        match self.verdict {
-            Verdict::RedirectNameServer => {
+        match Verdict::from_u8(self.verdict.load(Ordering::SeqCst)) {
+            Some(Verdict::RedirectNameServer) => {
                 if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
@@ -478,7 +478,7 @@ impl Connection for ConnectionV6 {
                     IpAddress::Ipv6(a) => a.is_loopback(),
                 }
             }
-            Verdict::RedirectTunnel => {
+            Some(Verdict::RedirectTunnel) => {
                 if key.remote_port != PM_SPN_PORT {
                     return false;
                 }
@@ -565,6 +565,56 @@ impl Clone for ConnectionV6 {
                 self.last_accessed_timestamp.load(Ordering::Relaxed),
             ),
             extra: self.extra.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+pub struct Key {
+    pub(crate) protocol: IpProtocol,
+    pub(crate) local_address: IpAddress,
+    pub(crate) local_port: u16,
+    pub(crate) remote_address: IpAddress,
+    pub(crate) remote_port: u16,
+}
+
+impl core::fmt::Display for Key {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "p: {} l: {}:{} r: {}:{}",
+            self.protocol,
+            self.local_address,
+            self.local_port,
+            self.remote_address,
+            self.remote_port
+        )
+    }
+}
+
+impl Key {
+    pub fn is_ipv6(&self) -> bool {
+        match self.local_address {
+            IpAddress::Ipv4(_) => false,
+            IpAddress::Ipv6(_) => true,
+        }
+    }
+
+    pub fn is_loopback(&self) -> bool {
+        match self.local_address {
+            IpAddress::Ipv4(ip) => ip.is_loopback(),
+            IpAddress::Ipv6(ip) => ip.is_loopback(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn reverse(&self) -> Key {
+        Key {
+            protocol: self.protocol,
+            local_address: self.remote_address,
+            local_port: self.remote_port,
+            remote_address: self.local_address,
+            remote_port: self.local_port,
         }
     }
 }

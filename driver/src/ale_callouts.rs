@@ -1,8 +1,7 @@
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
-use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Verdict};
-use crate::connection_map::Key;
+use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key, Verdict};
 use crate::device::{Device, Packet};
 
 use crate::id_cache;
@@ -180,21 +179,7 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     let key = ale_data.as_key();
 
     // Check if connection is already in cache.
-    let verdict = if ale_data.is_ipv6 {
-        device
-            .connection_cache
-            .v6
-            .read(&key, |conn| -> Option<Verdict> {
-                Some(conn.get_verdict())
-            })
-    } else {
-        device
-            .connection_cache
-            .v4
-            .read(&ale_data.as_key(), |conn| -> Option<Verdict> {
-                Some(conn.get_verdict())
-            })
-    };
+    let verdict = device.connection_cache.get_verdict(&key);
 
     // Connection already in cache.
     if let Some(verdict) = verdict {
@@ -270,15 +255,15 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 ale_data.process_id
             );
             if ale_data.is_ipv6 {
-                let mut conn =
+                let conn =
                     ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
                 conn.set_verdict(Verdict::Accept);
-                device.connection_cache.v6.add(conn);
+                device.connection_cache.add_v6(conn);
             } else {
-                let mut conn =
+                let conn =
                     ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
                 conn.set_verdict(Verdict::Accept);
-                device.connection_cache.v4.add(conn);
+                device.connection_cache.add_v4(conn);
             }
 
             if let Some(info) =
@@ -317,11 +302,11 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         if ale_data.is_ipv6 {
             let conn =
                 ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.v6.add(conn);
+            device.connection_cache.add_v6(conn);
         } else {
             let conn =
                 ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.v4.add(conn);
+            device.connection_cache.add_v4(conn);
         }
 
         // Drop packet. It will be re-injected after user space returns a verdict.
@@ -407,7 +392,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
             remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
         };
 
-        let conn: Option<Arc<ConnectionV4>> = device.connection_cache.v4.end(key);
+        let conn: Option<Arc<ConnectionV4>> = device.connection_cache.end_v4(key);
         if let Some(conn) = conn {
             let info = protocol::info::connection_end_event_v4_info(
                 data.get_process_id().unwrap_or(0),
@@ -452,7 +437,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                 remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
             };
 
-            let conn: Option<Arc<ConnectionV6>> = device.connection_cache.v6.end(key);
+            let conn: Option<Arc<ConnectionV6>> = device.connection_cache.end_v6(key);
             if let Some(conn) = conn {
                 let info = protocol::info::connection_end_event_v6_info(
                     data.get_process_id().unwrap_or(0),
@@ -480,7 +465,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
     match data.layer {
         layer::Layer::AleResourceAssignmentV4Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV4;
-            if let Some(conns) = device.connection_cache.v4.end_all_on_port((
+            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -511,7 +496,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceAssignmentV6Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV6;
-            if let Some(conns) = device.connection_cache.v6.end_all_on_port((
+            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -542,7 +527,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceReleaseV4 => {
             type Fields = layer::FieldsAleResourceReleaseV4;
-            if let Some(conns) = device.connection_cache.v4.end_all_on_port((
+            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
@@ -573,7 +558,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
         }
         layer::Layer::AleResourceReleaseV6 => {
             type Fields = layer::FieldsAleResourceReleaseV6;
-            if let Some(conns) = device.connection_cache.v6.end_all_on_port((
+            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
                 get_protocol(&data, Fields::IpProtocol as usize),
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {

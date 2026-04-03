@@ -4,10 +4,9 @@ use smoltcp::wire::{
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 
-use crate::connection_map::Key;
 use crate::device::Packet;
 use crate::{
-    connection::{Direction, RedirectInfo},
+    connection::{Direction, Key, RedirectInfo},
     dbg, err,
 };
 
