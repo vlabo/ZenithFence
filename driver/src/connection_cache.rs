@@ -27,8 +27,7 @@ fn alloc_port_array<T: Connection>() -> Box<[RCUPort<T>; u16::MAX as usize]> {
     // SAFETY: RCUPort<T> is valid when zeroed:
     //   - AtomicPtr is valid as null
     //   - Mutex<()> / RwSpinLock uses i32 which is valid at 0
-    // alloc_zeroed is used to allocate directly on the heap, avoiding a ~1 MB
-    // stack allocation that would overflow the kernel stack (12-24 KB limit).
+    // alloc_zeroed is used to allocate directly on the heap.
     let layout = core::alloc::Layout::new::<[RCUPort<T>; u16::MAX as usize]>();
     unsafe {
         let ptr = alloc::alloc::alloc_zeroed(layout) as *mut [RCUPort<T>; u16::MAX as usize];
@@ -40,8 +39,11 @@ fn ports_clear<T: Connection>(
     tcp: &[RCUPort<T>; u16::MAX as usize],
     udp: &[RCUPort<T>; u16::MAX as usize],
 ) {
-    for port in tcp.iter().chain(udp.iter()) {
-        port.publish(None);
+    for port in tcp.iter() {
+        port.lock().publish(None);
+    }
+    for port in udp.iter() {
+        port.lock().publish(None);
     }
 }
 
@@ -50,7 +52,15 @@ fn ports_walk<T: Connection, F: FnMut(&T)>(
     udp: &[RCUPort<T>; u16::MAX as usize],
     mut iter: F,
 ) {
-    for port in tcp.iter().chain(udp.iter()) {
+    for port in tcp.iter() {
+        if let Some(snap) = port.snapshot() {
+            for conn in snap.iter() {
+                iter(conn);
+            }
+        }
+    }
+
+    for port in udp.iter() {
         if let Some(snap) = port.snapshot() {
             for conn in snap.iter() {
                 iter(conn);
@@ -71,14 +81,17 @@ fn ports_clean_ended<T: Connection>(
     let before_one_minute = now - ONE_MINUTE;
 
     for port in tcp.iter().chain(udp.iter()) {
+        let mut any_removed = false;
+        let mut survivors: Vec<Arc<T>> = Vec::new();
+
+        // Port is still readable while the lock is acquired it just stops concurrent writes.
+        let port_guard = port.lock();
         let snap = match port.snapshot() {
             Some(s) => s,
             None => continue,
         };
 
-        let mut any_removed = false;
-        let mut survivors: Vec<Arc<T>> = Vec::new();
-
+        // Check for and connections and build a new list.
         for conn in snap.iter() {
             if conn.has_ended() && conn.get_end_time() < before_one_minute {
                 any_removed = true;
@@ -94,8 +107,9 @@ fn ports_clean_ended<T: Connection>(
             survivors.push(Arc::clone(conn));
         }
 
+        // publish if there are any changes.
         if any_removed {
-            port.publish(if survivors.is_empty() {
+            port_guard.publish(if survivors.is_empty() {
                 None
             } else {
                 Some(survivors)
@@ -136,6 +150,11 @@ impl ConnectionCache {
             return;
         };
         let new_conn = Arc::new(new);
+
+        // Lock for writing.
+        let port_lock = port.lock();
+
+        // Copy current port connection array.
         let mut new_vec = match port.snapshot() {
             Some(snap) => {
                 let mut v = Vec::with_capacity(snap.len() + 1);
@@ -144,8 +163,11 @@ impl ConnectionCache {
             }
             None => Vec::with_capacity(1),
         };
+        // Add the new connection.
         new_vec.push(new_conn);
-        port.publish(Some(new_vec));
+
+        // Publish the change.
+        port_lock.publish(Some(new_vec));
     }
 
     pub fn add_v6(&self, new: ConnectionV6) {
@@ -158,6 +180,11 @@ impl ConnectionCache {
             return;
         };
         let new_conn = Arc::new(new);
+
+        // Lock for writing.
+        let port_lock = port.lock();
+
+        // Copy current port connection array.
         let mut new_vec = match port.snapshot() {
             Some(snap) => {
                 let mut v = Vec::with_capacity(snap.len() + 1);
@@ -166,8 +193,12 @@ impl ConnectionCache {
             }
             None => Vec::with_capacity(1),
         };
+
+        // Add the new connection.
         new_vec.push(new_conn);
-        port.publish(Some(new_vec));
+
+        // Publish the change.
+        port_lock.publish(Some(new_vec));
     }
 
     pub fn end_v4(&self, key: Key) -> Option<Arc<ConnectionV4>> {

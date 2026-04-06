@@ -6,7 +6,7 @@ use core::{
 };
 
 use crate::connection::Connection;
-use wdk::rw_spin_lock::Mutex;
+use wdk::rw_spin_lock::{Mutex, MutexWriteGuard};
 
 // -------------------------------------------------------------------------------------------------
 // RCU-style per-port slot.
@@ -25,6 +25,13 @@ pub(crate) struct RCUPort<T: Connection> {
     write_mutex: Mutex<()>,
 }
 
+// Guard returned by RCUPort::lock(). publish() is only accessible through this type,
+// so the compiler statically enforces that no publish can happen without holding the lock.
+pub(crate) struct RCUPortWriteGuard<'a, T: Connection> {
+    port: &'a RCUPort<T>,
+    _guard: MutexWriteGuard<'a, ()>,
+}
+
 impl<T: Connection> RCUPort<T> {
     // Lock-free. Returns a clone of the current snapshot.
     // The returned Arc keeps the snapshot alive for as long as the caller holds it,
@@ -35,7 +42,7 @@ impl<T: Connection> RCUPort<T> {
         if ptr.is_null() {
             return None;
         }
-        // SAFETY: see the note above. ptr is alive (refcount ≥ 1) when we reach here.
+        // ptr is alive (refcount ≥ 1) when we reach here.
         // After increment_strong_count the caller owns a reference and the snapshot
         // cannot be freed until the caller drops its Arc.
         unsafe {
@@ -44,22 +51,32 @@ impl<T: Connection> RCUPort<T> {
         }
     }
 
-    // Publishes a new snapshot. Only writers call this; serialized by write_mutex.
-    // The new Vec must be fully built before calling — do the allocation outside any lock.
+    // Acquires the write mutex. Locks the port for writing. All concurrent writes will pause.
+    // Reading and updating the state must happen after the lock has been acquired.
+    // SAFETY: NEVER update to a value that was read before the lock was acquired.
+    pub(crate) fn lock(&self) -> RCUPortWriteGuard<'_, T> {
+        RCUPortWriteGuard {
+            port: self,
+            _guard: self.write_mutex.write_lock(),
+        }
+    }
+}
+
+impl<T: Connection> RCUPortWriteGuard<'_, T> {
+    // Publishes a new snapshot. Callable only through the write guard, which guarantees
+    // the write mutex is held for the duration of the pointer swap.
+    // The new Vec must be fully built before calling — do the allocation outside the lock.
     pub(crate) fn publish(&self, new: Option<Vec<Arc<T>>>) {
         let new_raw: *mut Vec<Arc<T>> = match new {
             Some(v) => Arc::into_raw(Arc::new(v)) as *mut _,
             None => ptr::null_mut(),
         };
 
-        // Hold the exclusive lock only for the pointer swap (~2 ns).
-        let _guard = self.write_mutex.write_lock();
-        let old_raw = self.connections.swap(new_raw, Ordering::AcqRel);
-        drop(_guard);
+        let old_raw = self.port.connections.swap(new_raw, Ordering::AcqRel);
 
         if !old_raw.is_null() {
             // Release our reference to the old snapshot.
-            // If any callout still holds an Arc from snapshot(), refcount > 0 and the
+            // If any reader still holds an Arc from snapshot(), refcount > 0 and the
             // snapshot stays alive. It is freed automatically when the last Arc is dropped.
             unsafe { drop(Arc::from_raw(old_raw as *const Vec<Arc<T>>)) };
         }
