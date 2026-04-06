@@ -303,21 +303,84 @@ impl Device {
                 }
             }
             CommandType::PrintMemoryStats => {
-                // Getting the information takes a long time and interferes with the callouts causing the device to crash.
-                // TODO(vladimir): Make more optimized version
-                // info!(
-                //     "Packet cache: {} entries",
-                //     self.packet_cache.get_entries_count()
-                // );
-                // info!(
-                //     "BandwidthStats cache: {} entries",
-                //     self.bandwidth_stats.get_entries_count()
-                // );
-                // info!(
-                //     "Connection cache: {} entries\n {}",
-                //     self.connection_cache.get_entries_count(),
-                //     self.connection_cache.get_full_cache_info()
-                // );
+                wdk::dbg!("PrintMemoryStats command");
+                use core::fmt::Write;
+
+                let (active, ended) = self.connection_cache.get_entries_count();
+                let packet_cache_count = self.packet_cache.get_entries_count();
+
+                {
+                    let mut log_line = protocol::info::log_line(
+                        protocol::info::Severity::Info,
+                        logger::MAX_LOG_LINE_SIZE,
+                    );
+                    _ = write!(
+                        log_line,
+                        "MemStats: connections active={} ended={} | packet_cache={}",
+                        active, ended, packet_cache_count
+                    );
+                    logger::add_line(log_line);
+                }
+
+                self.connection_cache
+                    .walk_over_connections_v4(|conn: &ConnectionV4| {
+                        let proto = match conn.protocol {
+                            IpProtocol::Tcp => "TCP",
+                            IpProtocol::Udp => "UDP",
+                            _ => "???",
+                        };
+                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
+                        let mut log_line = protocol::info::log_line(
+                            protocol::info::Severity::Info,
+                            logger::MAX_LOG_LINE_SIZE,
+                        );
+                        _ = write!(
+                            log_line,
+                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+                            proto,
+                            conn.extra.direction,
+                            conn.local_address,
+                            conn.local_port,
+                            conn.remote_address,
+                            conn.remote_port,
+                            conn.extra.process_id,
+                            conn.get_verdict(),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                            status,
+                        );
+                        logger::add_line(log_line);
+                    });
+
+                self.connection_cache
+                    .walk_over_connections_v6(|conn: &ConnectionV6| {
+                        let proto = match conn.protocol {
+                            IpProtocol::Tcp => "TCP",
+                            IpProtocol::Udp => "UDP",
+                            _ => "???",
+                        };
+                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
+                        let mut log_line = protocol::info::log_line(
+                            protocol::info::Severity::Info,
+                            logger::MAX_LOG_LINE_SIZE,
+                        );
+                        _ = write!(
+                            log_line,
+                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+                            proto,
+                            conn.extra.direction,
+                            conn.local_address,
+                            conn.local_port,
+                            conn.remote_address,
+                            conn.remote_port,
+                            conn.extra.process_id,
+                            conn.get_verdict(),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                            status,
+                        );
+                        logger::add_line(log_line);
+                    });
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");

@@ -299,6 +299,27 @@ impl ConnectionCache {
         ports_walk(&self.tcp_v6, &self.udp_v6, iter);
     }
 
+    /// Returns the count of (active, ended) connections across all protocols and IP versions.
+    pub fn get_entries_count(&self) -> (usize, usize) {
+        let mut active = 0usize;
+        let mut ended = 0usize;
+        ports_walk(&self.tcp_v4, &self.udp_v4, |conn: &ConnectionV4| {
+            if conn.has_ended() {
+                ended += 1;
+            } else {
+                active += 1;
+            }
+        });
+        ports_walk(&self.tcp_v6, &self.udp_v6, |conn: &ConnectionV6| {
+            if conn.has_ended() {
+                ended += 1;
+            } else {
+                active += 1;
+            }
+        });
+        (active, ended)
+    }
+
     pub fn get_connection_and_update_bw_usage(
         &self,
         key: &Key,
