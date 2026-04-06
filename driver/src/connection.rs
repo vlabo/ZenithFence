@@ -10,7 +10,6 @@ use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
-
 pub static PM_DNS_PORT: u16 = 53;
 pub static PM_SPN_PORT: u16 = 717;
 
@@ -139,8 +138,8 @@ pub trait Connection {
         }
     }
 
-    /// Returns true if the connection is equal to the given key. The key is considered equal if the remote port and address are equal.
-    fn remote_equals(&self, key: &Key) -> bool;
+    /// Returns true if the connection is equal to the given key.
+    fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
     /// Returns the protocol of the connection.
@@ -307,9 +306,17 @@ impl ConnectionV4 {
 }
 
 impl Connection for ConnectionV4 {
-    fn remote_equals(&self, key: &Key) -> bool {
+    fn equals(&self, key: &Key) -> bool {
         if self.remote_port != key.remote_port {
             return false;
+        }
+        if self.local_port != key.local_port {
+            return false;
+        }
+        if let IpAddress::Ipv4(local_address) = &key.local_address {
+            if !self.local_address.eq(local_address) {
+                return false;
+            }
         }
         if let IpAddress::Ipv4(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);
@@ -456,9 +463,17 @@ impl ConnectionV6 {
 }
 
 impl Connection for ConnectionV6 {
-    fn remote_equals(&self, key: &Key) -> bool {
+    fn equals(&self, key: &Key) -> bool {
         if self.remote_port != key.remote_port {
             return false;
+        }
+        if self.local_port != key.local_port {
+            return false;
+        }
+        if let IpAddress::Ipv6(local_address) = &key.local_address {
+            if !self.local_address.eq(local_address) {
+                return false;
+            }
         }
         if let IpAddress::Ipv6(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);

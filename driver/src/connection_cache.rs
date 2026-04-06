@@ -174,7 +174,7 @@ impl ConnectionCache {
         let snap =
             get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.snapshot()?;
         for conn in snap.iter() {
-            if conn.remote_equals(&key) {
+            if conn.equals(&key) {
                 conn.end(wdk::utils::get_system_timestamp_ms());
                 return Some(Arc::clone(conn));
             }
@@ -186,7 +186,7 @@ impl ConnectionCache {
         let snap =
             get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.snapshot()?;
         for conn in snap.iter() {
-            if conn.remote_equals(&key) {
+            if conn.equals(&key) {
                 conn.end(wdk::utils::get_system_timestamp_ms());
                 return Some(Arc::clone(conn));
             }
@@ -225,7 +225,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(&key) {
+                if conn.equals(&key) {
                     conn.set_verdict(verdict);
                     return conn.redirect_info();
                 }
@@ -234,7 +234,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(&key) {
+                if conn.equals(&key) {
                     conn.set_verdict(verdict);
                     return conn.redirect_info();
                 }
@@ -273,7 +273,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(key) || conn.redirect_equals(key) {
+                if conn.equals(key) || conn.redirect_equals(key) {
                     conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     return Some(conn.get_verdict());
                 }
@@ -282,7 +282,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(key) || conn.redirect_equals(key) {
+                if conn.equals(key) || conn.redirect_equals(key) {
                     conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     return Some(conn.get_verdict());
                 }
@@ -309,7 +309,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(key) || conn.redirect_equals(key) {
+                if conn.equals(key) || conn.redirect_equals(key) {
                     conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     conn.update_bandwidth_data(packet_size, direction);
                     return Some(ConnectionInfo::from_connection(conn.as_ref()));
@@ -319,7 +319,7 @@ impl ConnectionCache {
             let snap =
                 get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.snapshot()?;
             for conn in snap.iter() {
-                if conn.remote_equals(key) || conn.redirect_equals(key) {
+                if conn.equals(key) || conn.redirect_equals(key) {
                     conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
                     conn.update_bandwidth_data(packet_size, direction);
                     return Some(ConnectionInfo::from_connection(conn.as_ref()));
