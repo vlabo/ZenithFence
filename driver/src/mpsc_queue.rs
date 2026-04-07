@@ -100,31 +100,31 @@ impl<T> MpscQueue<T> {
         }));
 
         // Atomically claim our slot. `prev` is exclusively ours from this point.
-        let prev = self.tail.swap(node, Ordering::AcqRel);
+        let prev = self.tail.swap(node, Ordering::SeqCst);
 
         // Stitch the chain: link prev → node.
         // `prev` is always a valid heap node — at minimum the sentinel —
         // and its `next` field is exclusively ours to write at this point.
-        unsafe { (*prev).next.store(node, Ordering::AcqRel) };
+        unsafe { (*prev).next.store(node, Ordering::SeqCst) };
     }
 
     /// Returns the `*mut T` at the front of the queue without removing it.
     ///
     /// Returns `null` if the queue is empty or if a push is mid-flight (see
     /// module-level note on transient emptiness).
-    pub fn peek(&self) -> *mut T {
+    pub fn peek(&self) -> Option<&T> {
         // `head` is the sentinel; the first real element is `head.next`.
-        let head = self.head.load(Ordering::AcqRel);
+        let head = self.head.load(Ordering::SeqCst);
         // head is always a valid sentinel node.
-        let next = unsafe { (*head).next.load(Ordering::AcqRel) };
+        let next = unsafe { (*head).next.load(Ordering::SeqCst) };
 
         if next.is_null() {
             // queue is empty
-            return ptr::null_mut();
+            return None;
         }
 
         // return the data
-        unsafe { (*next).data }
+        unsafe { (*next).data.as_ref() }
     }
 
     /// Removes and returns the `*mut T` at the front of the queue.
@@ -133,9 +133,9 @@ impl<T> MpscQueue<T> {
         // Load (not swap) the current sentinel — `head` must remain stable
         // while we inspect it so that producers writing to `prev.next` never
         // race against a freed node.
-        let head = self.head.load(Ordering::AcqRel);
+        let head = self.head.load(Ordering::SeqCst);
         // head is always a valid sentinel node.
-        let next = unsafe { (*head).next.load(Ordering::AcqRel) };
+        let next = unsafe { (*head).next.load(Ordering::SeqCst) };
 
         if next.is_null() {
             return ptr::null_mut();
@@ -154,7 +154,7 @@ impl<T> MpscQueue<T> {
         // Advance head: `next` becomes the new sentinel.
         // Store (not swap) — only the consumer ever writes `head`.
         // Release pairs with any future Acquire load of `head` by the consumer.
-        self.head.store(new_sentinel, Ordering::AcqRel);
+        self.head.store(new_sentinel, Ordering::SeqCst);
 
         // Reclaim the old sentinel. Its data was null.
         unsafe { drop(Box::from_raw(head)) };
@@ -165,9 +165,9 @@ impl<T> MpscQueue<T> {
     /// Returns `true` if no elements are currently visible to the consumer.
     /// May return `true` spuriously during a push (see module-level note).
     pub fn is_empty(&self) -> bool {
-        let head = self.head.load(Ordering::AcqRel);
+        let head = self.head.load(Ordering::SeqCst);
         // head is always a valid sentinel node.
-        unsafe { (*head).next.load(Ordering::AcqRel).is_null() }
+        unsafe { (*head).next.load(Ordering::SeqCst).is_null() }
     }
 }
 

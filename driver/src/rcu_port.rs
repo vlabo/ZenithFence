@@ -1,59 +1,56 @@
+use alloc::boxed::Box;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::{
     ptr,
-    sync::atomic::{AtomicPtr, Ordering},
+    sync::atomic::{AtomicPtr, AtomicU16, AtomicU64, Ordering},
 };
 
 use crate::connection::Connection;
+use crate::mpsc_queue::MpscQueue;
 use wdk::rw_spin_lock::{Mutex, MutexWriteGuard};
 
 // -------------------------------------------------------------------------------------------------
 // RCU-style per-port slot.
-// This is not a standard RCU because there can be multiple writers.
-// Readers can read the latest state directly from connections field.
-// Writers must take the mutex lock and publish the changes with single atomic operation.
-// The Arc pointers must stay the same during the whole lifetime of the connection, only the vector must be changed
+// Readers acquire a RCUPortReadGuard (lock-free, loads raw pointer) and access the snapshot
+// through it. The guard increments the ConnectionArray's reader counter on creation and
+// decrements it on drop, enabling deferred reclamation by the consumer of unlinked_ports.
+// Writers acquire the write mutex and publish changes atomically. The old snapshot is stamped
+// with an unlinked timestamp and pushed onto a caller-supplied MPSC queue for safe reclamation.
 // -------------------------------------------------------------------------------------------------
+
+// Heap-allocated, fixed-length array of connections. Length is set on publish and never changes.
+// Wrapped in a newtype so AtomicPtr holds a thin (non-fat) pointer.
+pub(crate) struct ConnectionArray<T: Connection> {
+    array: Box<[Arc<T>]>,
+
+    pub(crate) readers: AtomicU16,
+    pub(crate) unlinked_timestamp: AtomicU64,
+}
+
 pub(crate) struct RCUPort<T: Connection> {
     // Null = no connections on this port.
-    // Non-null = Arc::into_raw(Arc::new(Vec<Arc<T>>)), i.e. AtomicPtr owns one Arc reference.
-    // AtomicPtr (instead of Arc) is used for immutable replaces of the pointer.
-    connections: AtomicPtr<Vec<Arc<T>>>,
+    // Non-null = Box::into_raw(Box::new(ConnectionArray<T>)), i.e. AtomicPtr owns one allocation.
+    // The outer AtomicPtr is swapped atomically on every write (RCU snapshot).
+    // The inner Arc<T> elements are stable heap pointers; they are never swapped in place.
+    connections: AtomicPtr<ConnectionArray<T>>,
 
-    // writer mutex for concurrent writers. Readers never take this.
+    // Writer mutex for concurrent writers. Readers never take this.
     write_mutex: Mutex<()>,
 }
 
-// Guard returned by RCUPort::lock(). publish() is only accessible through this type,
-// so the compiler statically enforces that no publish can happen without holding the lock.
-pub(crate) struct RCUPortWriteGuard<'a, T: Connection> {
-    port: &'a RCUPort<T>,
-    _guard: MutexWriteGuard<'a, ()>,
-}
-
 impl<T: Connection> RCUPort<T> {
-    // Lock-free. Returns a clone of the current snapshot.
-    // The returned Arc keeps the snapshot alive for as long as the caller holds it,
-    // regardless of subsequent writes.
-    #[inline(always)]
-    pub(crate) fn snapshot(&self) -> Option<Arc<Vec<Arc<T>>>> {
-        let ptr = self.connections.load(Ordering::Acquire);
-        if ptr.is_null() {
-            return None;
-        }
-        // ptr is alive (refcount ≥ 1) when we reach here.
-        // After increment_strong_count the caller owns a reference and the snapshot
-        // cannot be freed until the caller drops its Arc.
-        unsafe {
-            Arc::increment_strong_count(ptr);
-            Some(Arc::from_raw(ptr))
+    // Lock-free. Loads the current snapshot pointer and returns a guard.
+    pub(crate) fn read(&self) -> RCUPortReadGuard<'_, T> {
+        let ptr = self.connections.load(Ordering::SeqCst);
+        // Increment reader count
+        unsafe { (*ptr).readers.fetch_add(1, Ordering::SeqCst) };
+        RCUPortReadGuard {
+            _port: self,
+            snapshot: ptr as *const _,
         }
     }
 
-    // Acquires the write mutex. Locks the port for writing. All concurrent writes will pause.
-    // Reading and updating the state must happen after the lock has been acquired.
-    // SAFETY: NEVER update to a value that was read before the lock was acquired.
+    // Acquires the write mutex. All concurrent writes will pause.
     pub(crate) fn lock(&self) -> RCUPortWriteGuard<'_, T> {
         RCUPortWriteGuard {
             port: self,
@@ -62,23 +59,75 @@ impl<T: Connection> RCUPort<T> {
     }
 }
 
+// Guard returned by RCUPort::read(). Holds a raw snapshot pointer for the caller.
+pub(crate) struct RCUPortReadGuard<'a, T: Connection> {
+    _port: &'a RCUPort<T>,
+    snapshot: *const ConnectionArray<T>,
+}
+
+impl<T: Connection> RCUPortReadGuard<'_, T> {
+    pub(crate) fn get(&self) -> Option<&[Arc<T>]> {
+        if self.snapshot.is_null() {
+            None
+        } else {
+            unsafe { Some(&(*self.snapshot).array) }
+        }
+    }
+}
+
+impl<T: Connection> Drop for RCUPortReadGuard<'_, T> {
+    fn drop(&mut self) {
+        if !self.snapshot.is_null() {
+            unsafe { (*self.snapshot).readers.fetch_sub(1, Ordering::SeqCst) };
+        }
+    }
+}
+
+// Guard returned by RCUPort::lock(). publish() and snapshot() are only accessible through this
+// type, so the compiler statically enforces that no write can happen without holding the lock.
+pub(crate) struct RCUPortWriteGuard<'a, T: Connection> {
+    port: &'a RCUPort<T>,
+    _guard: MutexWriteGuard<'a, ()>,
+}
+
 impl<T: Connection> RCUPortWriteGuard<'_, T> {
-    // Publishes a new snapshot. Callable only through the write guard, which guarantees
-    // the write mutex is held for the duration of the pointer swap.
-    // The new Vec must be fully built before calling — do the allocation outside the lock.
-    pub(crate) fn publish(&self, new: Option<Vec<Arc<T>>>) {
-        let new_raw: *mut Vec<Arc<T>> = match new {
-            Some(v) => Arc::into_raw(Arc::new(v)) as *mut _,
+    // Returns a reference to the current snapshot. Safe because the write mutex is held —
+    // no concurrent publish() can run and swap the pointer while this guard is alive.
+    pub(crate) fn snapshot(&self) -> Option<&[Arc<T>]> {
+        let ptr = self.port.connections.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe { Some(&(*ptr).array) }
+    }
+
+    // Publishes a new snapshot. The slice must be fully built before calling.
+    // The old snapshot pointer is stamped with the current time and pushed onto
+    // the provided queue for deferred reclamation.
+    pub(crate) fn publish(
+        &self,
+        new: Option<Box<[Arc<T>]>>,
+        queue: &MpscQueue<ConnectionArray<T>>,
+    ) {
+        let new_raw: *mut ConnectionArray<T> = match new {
+            Some(v) => Box::into_raw(Box::new(ConnectionArray {
+                array: v,
+                readers: AtomicU16::new(0),
+                unlinked_timestamp: AtomicU64::new(0),
+            })),
             None => ptr::null_mut(),
         };
 
-        let old_raw = self.port.connections.swap(new_raw, Ordering::AcqRel);
-
-        if !old_raw.is_null() {
-            // Release our reference to the old snapshot.
-            // If any reader still holds an Arc from snapshot(), refcount > 0 and the
-            // snapshot stays alive. It is freed automatically when the last Arc is dropped.
-            unsafe { drop(Arc::from_raw(old_raw as *const Vec<Arc<T>>)) };
+        let old = self.port.connections.swap(new_raw, Ordering::SeqCst);
+        if old.is_null() {
+            return;
         }
+        unsafe {
+            (*old)
+                .unlinked_timestamp
+                .store(wdk::utils::get_system_timestamp_ms(), Ordering::SeqCst);
+        }
+
+        queue.push(old);
     }
 }

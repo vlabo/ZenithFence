@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key, Verdict};
@@ -392,8 +391,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
             remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
         };
 
-        let conn: Option<Arc<ConnectionV4>> = device.connection_cache.end_v4(key);
-        if let Some(conn) = conn {
+        if let Some(conn) = device.connection_cache.end_v4(key) {
             let info = protocol::info::connection_end_event_v4_info(
                 data.get_process_id().unwrap_or(0),
                 conn.get_direction() as u8,
@@ -437,8 +435,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                 remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
             };
 
-            let conn: Option<Arc<ConnectionV6>> = device.connection_cache.end_v6(key);
-            if let Some(conn) = conn {
+            if let Some(conn) = device.connection_cache.end_v6(key) {
                 let info = protocol::info::connection_end_event_v6_info(
                     data.get_process_id().unwrap_or(0),
                     conn.get_direction() as u8,
