@@ -42,12 +42,16 @@ fn ports_clear<T: Connection>(
 ) {
     // Free all tcp connections
     for port in tcp.iter() {
-        port.lock().publish(None, queue);
+        if !port.is_empty() {
+            port.lock().publish(None, queue);
+        }
     }
 
     // Free all udp connections
     for port in udp.iter() {
-        port.lock().publish(None, queue);
+        if !port.is_empty() {
+            port.lock().publish(None, queue);
+        }
     }
 
     // Free all port arrays
@@ -148,6 +152,7 @@ fn ports_clean_ended<T: Connection>(
         }
     }
 
+    let now = wdk::utils::get_system_timestamp_ms();
     loop {
         let mut continue_loop = false;
         match queue.peek() {
@@ -158,8 +163,13 @@ fn ports_clean_ended<T: Connection>(
                     break 'conn_match;
                 }
 
-                // Check if enough time has passed since the un-linking.
                 let time = conn_array.unlinked_timestamp.load(Ordering::SeqCst);
+                // Prevent overflow
+                if time > now {
+                    break 'conn_match;
+                }
+
+                // Check if enough time has passed since the un-linking.
                 if now - time < SECOND {
                     break 'conn_match;
                 }

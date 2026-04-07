@@ -48,6 +48,12 @@ impl<T: Connection> Drop for RCUPort<T> {
 }
 
 impl<T: Connection> RCUPort<T> {
+    // Lock-free check: returns true if no ConnectionArray is currently published.
+    // Used as a fast path to skip empty ports without acquiring the write mutex.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.connections.load(Ordering::SeqCst).is_null()
+    }
+
     // Lock-free. Loads the current snapshot pointer and returns a guard.
     pub(crate) fn read(&self) -> RCUPortReadGuard<'_, T> {
         let ptr = self.connections.load(Ordering::SeqCst);
