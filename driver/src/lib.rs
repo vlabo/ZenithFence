@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod ale_callouts;
 mod array_holder;
+pub mod mpsc_queue;
 mod callouts;
 mod common;
 mod connection;
