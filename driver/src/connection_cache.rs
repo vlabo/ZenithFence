@@ -176,7 +176,7 @@ fn ports_clean_ended<T: Connection>(
             None => (),
         }
 
-        if continue_loop {
+        if !continue_loop {
             break;
         }
     }
@@ -410,6 +410,17 @@ impl ConnectionCache {
     }
 
     /// Returns the count of (active, ended) connections across all protocols and IP versions.
+    /// Returns the approximate number of pending entries in the unlinked-port
+    /// reclamation queues (v4, v6). Non-zero values indicate arrays that have
+    /// been unlinked from the port table but not yet freed; under normal
+    /// operation these drain quickly and should be near zero.
+    pub fn get_unlinked_queue_counts(&self) -> (usize, usize) {
+        (
+            self.unlinked_ports_v4.count(),
+            self.unlinked_ports_v6.count(),
+        )
+    }
+
     pub fn get_entries_count(&self) -> (usize, usize) {
         let mut active = 0usize;
         let mut ended = 0usize;

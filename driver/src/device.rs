@@ -308,6 +308,8 @@ impl Device {
 
                 let (active, ended) = self.connection_cache.get_entries_count();
                 let packet_cache_count = self.packet_cache.get_entries_count();
+                let (unlinked_v4, unlinked_v6) =
+                    self.connection_cache.get_unlinked_queue_counts();
 
                 {
                     let mut log_line = protocol::info::log_line(
@@ -316,8 +318,8 @@ impl Device {
                     );
                     _ = write!(
                         log_line,
-                        "MemStats: connections active={} ended={} | packet_cache={}",
-                        active, ended, packet_cache_count
+                        "MemStats: connections active={} ended={} | packet_cache={} | unlinked_ports v4={} v6={}",
+                        active, ended, packet_cache_count, unlinked_v4, unlinked_v6
                     );
                     logger::add_line(log_line);
                 }

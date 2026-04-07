@@ -169,6 +169,21 @@ impl<T> MpscQueue<T> {
         // head is always a valid sentinel node.
         unsafe { (*head).next.load(Ordering::SeqCst).is_null() }
     }
+
+    /// Returns the approximate number of elements visible to the consumer.
+    /// May under-count by items that are mid-push (see module-level note on
+    /// transient emptiness). Must only be called from the single consumer thread.
+    pub fn count(&self) -> usize {
+        let mut n = 0usize;
+        let head = self.head.load(Ordering::SeqCst);
+        // head is the sentinel; walk from head.next.
+        let mut cur = unsafe { (*head).next.load(Ordering::SeqCst) };
+        while !cur.is_null() {
+            n += 1;
+            cur = unsafe { (*cur).next.load(Ordering::SeqCst) };
+        }
+        n
+    }
 }
 
 impl<T> Drop for MpscQueue<T> {

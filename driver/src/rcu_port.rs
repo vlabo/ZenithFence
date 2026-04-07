@@ -38,6 +38,15 @@ pub(crate) struct RCUPort<T: Connection> {
     write_mutex: Mutex<()>,
 }
 
+impl<T: Connection> Drop for RCUPort<T> {
+    fn drop(&mut self) {
+        let ptr = *self.connections.get_mut();
+        if !ptr.is_null() {
+            unsafe { drop(Box::from_raw(ptr)) };
+        }
+    }
+}
+
 impl<T: Connection> RCUPort<T> {
     // Lock-free. Loads the current snapshot pointer and returns a guard.
     pub(crate) fn read(&self) -> RCUPortReadGuard<'_, T> {
