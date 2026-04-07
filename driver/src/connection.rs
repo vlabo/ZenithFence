@@ -1,7 +1,4 @@
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-};
+use alloc::string::{String, ToString};
 use core::{
     fmt::{Debug, Display},
     sync::atomic::{AtomicU64, AtomicU8, Ordering},
@@ -93,22 +90,6 @@ impl Debug for Direction {
     }
 }
 
-pub struct ConnectionExtra {
-    pub(crate) process_id: u64,
-    pub(crate) end_timestamp: AtomicU64,
-    pub(crate) direction: Direction,
-}
-
-impl Clone for ConnectionExtra {
-    fn clone(&self) -> Self {
-        Self {
-            process_id: self.process_id,
-            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::Relaxed)),
-            direction: self.direction,
-        }
-    }
-}
-
 pub trait Connection {
     fn redirect_info(&self) -> Option<RedirectInfo> {
         let redirect_address = if self.is_ipv6() {
@@ -183,19 +164,19 @@ pub trait Connection {
                 // Inbound traffic.
                 self.get_bandwidth_usage()
                     .rx_packets
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::SeqCst);
                 self.get_bandwidth_usage()
                     .rx_bytes
-                    .fetch_add(bytes, Ordering::Relaxed);
+                    .fetch_add(bytes, Ordering::SeqCst);
             }
             Direction::Outbound => {
                 // Outbound traffic.
                 self.get_bandwidth_usage()
                     .tx_packets
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::SeqCst);
                 self.get_bandwidth_usage()
                     .tx_bytes
-                    .fetch_add(bytes, Ordering::Relaxed);
+                    .fetch_add(bytes, Ordering::SeqCst);
             }
         }
     }
@@ -211,10 +192,10 @@ pub struct BandwidthUsage {
 impl Clone for BandwidthUsage {
     fn clone(&self) -> Self {
         Self {
-            rx_bytes: AtomicU64::new(self.rx_bytes.load(Ordering::Relaxed)),
-            rx_packets: AtomicU64::new(self.rx_packets.load(Ordering::Relaxed)),
-            tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::Relaxed)),
-            tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::Relaxed)),
+            rx_bytes: AtomicU64::new(self.rx_bytes.load(Ordering::SeqCst)),
+            rx_packets: AtomicU64::new(self.rx_packets.load(Ordering::SeqCst)),
+            tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::SeqCst)),
+            tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::SeqCst)),
         }
     }
 }
@@ -228,7 +209,9 @@ pub struct ConnectionV4 {
     pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
-    pub(crate) extra: Box<ConnectionExtra>,
+    pub(crate) process_id: u64,
+    pub(crate) end_timestamp: AtomicU64,
+    pub(crate) direction: Direction,
 }
 
 pub struct ConnectionV6 {
@@ -240,7 +223,9 @@ pub struct ConnectionV6 {
     pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
-    pub(crate) extra: Box<ConnectionExtra>,
+    pub(crate) process_id: u64,
+    pub(crate) end_timestamp: AtomicU64,
+    pub(crate) direction: Direction,
 }
 
 #[derive(Debug)]
@@ -251,22 +236,6 @@ pub struct RedirectInfo {
     pub(crate) redirect_port: u16,
     pub(crate) unify: bool,
     pub(crate) redirect_address: IpAddress,
-}
-
-pub struct ConnectionInfo {
-    pub verdict: Verdict,
-    pub process_id: u64,
-    pub redirect_info: Option<RedirectInfo>,
-}
-
-impl ConnectionInfo {
-    pub fn from_connection<T: Connection>(conn: &T) -> Self {
-        ConnectionInfo {
-            verdict: conn.get_verdict(),
-            process_id: conn.get_process_id(),
-            redirect_info: conn.redirect_info(),
-        }
-    }
 }
 
 impl ConnectionV4 {
@@ -296,11 +265,9 @@ impl ConnectionV4 {
                 tx_bytes: AtomicU64::new(0),
                 tx_packets: AtomicU64::new(0),
             },
-            extra: Box::new(ConnectionExtra {
-                process_id,
-                direction,
-                end_timestamp: AtomicU64::new(0),
-            }),
+            process_id,
+            direction,
+            end_timestamp: AtomicU64::new(0),
         })
     }
 }
@@ -352,7 +319,7 @@ impl Connection for ConnectionV4 {
 
     fn get_verdict(&self) -> Verdict {
         use num_traits::FromPrimitive;
-        Verdict::from_u8(self.verdict.load(Ordering::Acquire)).unwrap_or(Verdict::Undecided)
+        Verdict::from_u8(self.verdict.load(Ordering::SeqCst)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -376,32 +343,32 @@ impl Connection for ConnectionV4 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.extra.process_id
+        self.process_id
     }
 
     fn get_direction(&self) -> Direction {
-        self.extra.direction
+        self.direction
     }
 
     fn end(&self, timestamp: u64) {
-        self.extra.end_timestamp.store(timestamp, Ordering::Release);
+        self.end_timestamp.store(timestamp, Ordering::SeqCst);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp.load(Ordering::Acquire)
+        self.end_timestamp.load(Ordering::SeqCst)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
-        self.last_accessed_timestamp.load(Ordering::Relaxed)
+        self.last_accessed_timestamp.load(Ordering::SeqCst)
     }
 
     fn set_last_accessed_time(&self, timestamp: u64) {
         self.last_accessed_timestamp
-            .store(timestamp, Ordering::Relaxed);
+            .store(timestamp, Ordering::SeqCst);
     }
 
     fn set_verdict(&self, verdict: Verdict) {
-        self.verdict.store(verdict as u8, Ordering::Release);
+        self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -417,12 +384,14 @@ impl Clone for ConnectionV4 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: AtomicU8::new(self.verdict.load(Ordering::Relaxed)),
+            verdict: AtomicU8::new(self.verdict.load(Ordering::SeqCst)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
-                self.last_accessed_timestamp.load(Ordering::Relaxed),
+                self.last_accessed_timestamp.load(Ordering::SeqCst),
             ),
-            extra: self.extra.clone(),
+            process_id: self.process_id,
+            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::SeqCst)),
+            direction: self.direction,
         }
     }
 }
@@ -453,11 +422,9 @@ impl ConnectionV6 {
                 tx_bytes: AtomicU64::new(0),
                 tx_packets: AtomicU64::new(0),
             },
-            extra: Box::new(ConnectionExtra {
-                process_id,
-                direction,
-                end_timestamp: AtomicU64::new(0),
-            }),
+            process_id,
+            direction,
+            end_timestamp: AtomicU64::new(0),
         })
     }
 }
@@ -509,7 +476,7 @@ impl Connection for ConnectionV6 {
 
     fn get_verdict(&self) -> Verdict {
         use num_traits::FromPrimitive;
-        Verdict::from_u8(self.verdict.load(Ordering::Acquire)).unwrap_or(Verdict::Undecided)
+        Verdict::from_u8(self.verdict.load(Ordering::SeqCst)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -533,32 +500,32 @@ impl Connection for ConnectionV6 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.extra.process_id
+        self.process_id
     }
 
     fn get_direction(&self) -> Direction {
-        self.extra.direction
+        self.direction
     }
 
     fn end(&self, timestamp: u64) {
-        self.extra.end_timestamp.store(timestamp, Ordering::Release);
+        self.end_timestamp.store(timestamp, Ordering::SeqCst);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp.load(Ordering::Acquire)
+        self.end_timestamp.load(Ordering::SeqCst)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
-        self.last_accessed_timestamp.load(Ordering::Relaxed)
+        self.last_accessed_timestamp.load(Ordering::SeqCst)
     }
 
     fn set_last_accessed_time(&self, timestamp: u64) {
         self.last_accessed_timestamp
-            .store(timestamp, Ordering::Relaxed);
+            .store(timestamp, Ordering::SeqCst);
     }
 
     fn set_verdict(&self, verdict: Verdict) {
-        self.verdict.store(verdict as u8, Ordering::Release);
+        self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -574,12 +541,14 @@ impl Clone for ConnectionV6 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: AtomicU8::new(self.verdict.load(Ordering::Relaxed)),
+            verdict: AtomicU8::new(self.verdict.load(Ordering::SeqCst)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
-                self.last_accessed_timestamp.load(Ordering::Relaxed),
+                self.last_accessed_timestamp.load(Ordering::SeqCst),
             ),
-            extra: self.extra.clone(),
+            process_id: self.process_id,
+            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::SeqCst)),
+            direction: self.direction,
         }
     }
 }

@@ -42,8 +42,10 @@ impl<T: Connection> RCUPort<T> {
     // Lock-free. Loads the current snapshot pointer and returns a guard.
     pub(crate) fn read(&self) -> RCUPortReadGuard<'_, T> {
         let ptr = self.connections.load(Ordering::SeqCst);
-        // Increment reader count
-        unsafe { (*ptr).readers.fetch_add(1, Ordering::SeqCst) };
+        // Increment reader count only if non-null (null = no connections on this port).
+        if !ptr.is_null() {
+            unsafe { (*ptr).readers.fetch_add(1, Ordering::SeqCst) };
+        }
         RCUPortReadGuard {
             _port: self,
             snapshot: ptr as *const _,

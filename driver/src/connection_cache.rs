@@ -4,9 +4,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
 
-use crate::connection::{
-    Connection, ConnectionInfo, ConnectionV4, ConnectionV6, Direction, Key, RedirectInfo, Verdict,
-};
+use crate::connection::{Connection, ConnectionV4, ConnectionV6, Key, RedirectInfo, Verdict};
 use crate::mpsc_queue::MpscQueue;
 use crate::rcu_port::{ConnectionArray, RCUPort};
 use smoltcp::wire::IpProtocol;
@@ -63,6 +61,23 @@ fn ports_clear<T: Connection>(
             drop(Box::from_raw(array));
         }
     }
+}
+
+fn get_connection_impl<T: Connection>(
+    tcp: &[RCUPort<T>; u16::MAX as usize],
+    udp: &[RCUPort<T>; u16::MAX as usize],
+    key: &Key,
+) -> Option<Arc<T>> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?;
+    let guard = port.read();
+    let snap = guard.get()?;
+    for conn in snap.iter() {
+        if conn.equals(key) || conn.redirect_equals(key) {
+            conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+            return Some(conn.clone());
+        }
+    }
+    None
 }
 
 fn ports_walk<T: Connection, F: FnMut(&T)>(
@@ -415,36 +430,12 @@ impl ConnectionCache {
         (active, ended)
     }
 
-    pub fn get_connection_and_update_bw_usage(
-        &self,
-        key: &Key,
-        packet_size: u64,
-        direction: Direction,
-    ) -> Option<ConnectionInfo> {
-        if key.is_ipv6() {
-            let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
-            for conn in snap.iter() {
-                if conn.equals(key) || conn.redirect_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    conn.update_bandwidth_data(packet_size, direction);
-                    return Some(ConnectionInfo::from_connection(conn.as_ref()));
-                }
-            }
-        } else {
-            let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
-            for conn in snap.iter() {
-                if conn.equals(key) || conn.redirect_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    conn.update_bandwidth_data(packet_size, direction);
-                    return Some(ConnectionInfo::from_connection(conn.as_ref()));
-                }
-            }
-        }
-        None
+    pub fn get_connection_v4(&self, key: &Key) -> Option<Arc<ConnectionV4>> {
+        get_connection_impl(&self.tcp_v4, &self.udp_v4, key)
+    }
+
+    pub fn get_connection_v6(&self, key: &Key) -> Option<Arc<ConnectionV6>> {
+        get_connection_impl(&self.tcp_v6, &self.udp_v6, key)
     }
 
     pub fn clear(&self) {
