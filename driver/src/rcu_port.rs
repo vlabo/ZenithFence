@@ -42,6 +42,7 @@ impl<T: Connection> Drop for RCUPort<T> {
     fn drop(&mut self) {
         let ptr = *self.connections.get_mut();
         if !ptr.is_null() {
+            // Free array.
             unsafe { drop(Box::from_raw(ptr)) };
         }
     }

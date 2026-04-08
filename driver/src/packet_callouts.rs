@@ -47,7 +47,9 @@ impl IpVersion for ConnectionV6 {
     }
 }
 
-// IP packet layers
+// -------- IP packet layers
+
+// Out packet v4
 pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
@@ -63,6 +65,7 @@ pub fn ip_packet_layer_outbound_v4(data: CalloutData) {
     );
 }
 
+// In packet v4
 pub fn ip_packet_layer_inbound_v4(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV4;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
@@ -78,6 +81,7 @@ pub fn ip_packet_layer_inbound_v4(data: CalloutData) {
     );
 }
 
+// Out packet v6
 pub fn ip_packet_layer_outbound_v6(data: CalloutData) {
     type Fields = layer::FieldsOutboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
@@ -93,6 +97,7 @@ pub fn ip_packet_layer_outbound_v6(data: CalloutData) {
     );
 }
 
+// In packet v6
 pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
     type Fields = layer::FieldsInboundIppacketV6;
     let interface_index = data.get_value_u32(Fields::InterfaceIndex as usize);
@@ -108,6 +113,7 @@ pub fn ip_packet_layer_inbound_v6(data: CalloutData) {
     );
 }
 
+// ip_packet_layer generic function handling all packet callouts
 fn ip_packet_layer<T: IpVersion>(
     mut data: CalloutData,
     direction: Direction,
@@ -115,9 +121,13 @@ fn ip_packet_layer<T: IpVersion>(
     sub_interface_index: u32,
     compartment_id: i32,
 ) {
+    // Get the current device object.
     let Some(device) = crate::entry::get_device() else {
+        // Should never happen.
         return;
     };
+
+    // Allow previously injected packets.
     if device
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _, T::IS_IPV6)
@@ -126,7 +136,9 @@ fn ip_packet_layer<T: IpVersion>(
         return;
     }
 
+    // Walk over all net buffers.
     for mut nbl in NetBufferListIter::new(data.get_layer_data() as _) {
+        // Special condition for inbound packets.
         if let Direction::Inbound = direction {
             // The first index to the packet is set to the transport header. Retreat to the IP header.
             // The NBL will auto advance after it loses scope.
@@ -152,12 +164,18 @@ fn ip_packet_layer<T: IpVersion>(
             smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
         ) {
             // TCP and UDP always need to go through ALE layer first.
+
+            // Check if there is already connection object.
             if let Some(conn) = T::get_connection(&device.connection_cache, &key) {
+                // Connection object found.
+
                 conn.update_bandwidth_data(packet_size, direction);
                 process_id = conn.get_process_id();
+
                 // Check if there is action for this connection.
                 match conn.get_verdict() {
                     Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
+                        // Temporary verdicts have special paths.
                         is_tmp_verdict = true
                     }
                     Verdict::PermanentAccept => data.action_permit(),
@@ -195,7 +213,7 @@ fn ip_packet_layer<T: IpVersion>(
             } else {
                 // TCP and UDP always need to go through ALE layer first.
                 if matches!(direction, Direction::Inbound) {
-                    // If it's an inbound packet and the connection is not found, we need to continue to ALE layer
+                    // If it's an inbound packet and the connection is not found, continue to ALE layer
                     warn!("connection not found for inbound packet: {}", key);
                     data.action_permit();
                     return;

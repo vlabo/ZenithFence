@@ -10,6 +10,12 @@ name = "driver"
 path = "src/lib.rs"
 crate-type = ["staticlib"]
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
 [dependencies]
 wdk = { path = "../wdk" }
 protocol = { path = "../protocol" }

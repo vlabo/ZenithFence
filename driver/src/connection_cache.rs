@@ -24,7 +24,7 @@ fn get_port<'a, T: Connection>(
 }
 
 fn alloc_port_array<T: Connection>() -> Box<[RCUPort<T>; u16::MAX as usize]> {
-    // SAFETY: RCUPort<T> is valid when zeroed:
+    // RCUPort<T> is valid when zeroed:
     //   - AtomicPtr is valid as null
     //   - Mutex<()> / RwSpinLock uses i32 which is valid at 0
     // alloc_zeroed is used to allocate directly on the heap.
@@ -55,16 +55,19 @@ fn ports_clear<T: Connection>(
     }
 }
 
-fn get_connection_impl<T: Connection>(
+// get_connection generic function for getting a connection.
+fn get_connection<T: Connection>(
     tcp: &[RCUPort<T>; u16::MAX as usize],
     udp: &[RCUPort<T>; u16::MAX as usize],
     key: &Key,
 ) -> Option<Arc<T>> {
-    let port = get_port(tcp, udp, key.protocol, key.local_port)?;
-    let guard = port.read();
-    let snap = guard.get()?;
+    // Get the connection array port.
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
+    let snap = port.get()?;
+    // Iterate over all connection and find the connection.
     for conn in snap.iter() {
         if conn.equals(key) || conn.redirect_equals(key) {
+            // Update last accessed.
             conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
             return Some(conn.clone());
         }
@@ -72,6 +75,7 @@ fn get_connection_impl<T: Connection>(
     None
 }
 
+// ports_walk generic function for waling over all connections.
 fn ports_walk<T: Connection, F: FnMut(&T)>(
     tcp: &[RCUPort<T>; u16::MAX as usize],
     udp: &[RCUPort<T>; u16::MAX as usize],
@@ -93,13 +97,16 @@ fn ports_clean_ended<T: Connection>(
     removed_connections: &mut Vec<Arc<T>>,
     queue: &MpscQueue<ConnectionArray<T>>,
 ) {
-    let now = wdk::utils::get_system_timestamp_ms();
+    // Durations
     const TWO_MINUTES: u64 = Duration::from_secs(120).as_millis() as u64;
     const ONE_MINUTE: u64 = Duration::from_secs(60).as_millis() as u64;
     const SECOND: u64 = Duration::from_secs(1).as_millis() as u64;
+
+    let now = wdk::utils::get_system_timestamp_ms();
     let before_two_minutes = now - TWO_MINUTES;
     let before_one_minute = now - ONE_MINUTE;
 
+    // Remove all ended or stale connections.
     for port in tcp.iter().chain(udp.iter()) {
         let mut any_removed = false;
         let mut survivors: Vec<Arc<T>> = Vec::new();
@@ -140,6 +147,7 @@ fn ports_clean_ended<T: Connection>(
         }
     }
 
+    // Clean unused and unlinked connection arrays.
     let now = wdk::utils::get_system_timestamp_ms();
     loop {
         let mut continue_loop = false;
@@ -175,26 +183,32 @@ fn ports_clean_ended<T: Connection>(
         }
 
         if !continue_loop {
+            // No more arrays to free.
             break;
         }
     }
 }
 
+// ConnectionCache holds the state of all active connections.
 pub struct ConnectionCache {
+    // Connection states
     tcp_v4: Box<[RCUPort<ConnectionV4>; u16::MAX as usize]>,
     udp_v4: Box<[RCUPort<ConnectionV4>; u16::MAX as usize]>,
     tcp_v6: Box<[RCUPort<ConnectionV6>; u16::MAX as usize]>,
     udp_v6: Box<[RCUPort<ConnectionV6>; u16::MAX as usize]>,
 
+    // Holds ended connection that need to be send as an event to user space.
     tmp_ended_connections_buffer_v4: Vec<Arc<ConnectionV4>>,
     tmp_ended_connections_buffer_v6: Vec<Arc<ConnectionV6>>,
 
+    // Holds unlinked connections arrays.
     unlinked_ports_v4: MpscQueue<ConnectionArray<ConnectionV4>>,
     unlinked_ports_v6: MpscQueue<ConnectionArray<ConnectionV6>>,
 }
 
 impl ConnectionCache {
     pub fn new() -> Self {
+        // Initialize all the arrays.
         Self {
             tcp_v4: alloc_port_array(),
             udp_v4: alloc_port_array(),
@@ -208,6 +222,7 @@ impl ConnectionCache {
     }
 
     pub fn add_v4(&self, new: ConnectionV4) {
+        // Get the specific port connection array for the connection.
         let Some(port) = get_port(
             &self.tcp_v4,
             &self.udp_v4,
@@ -216,6 +231,7 @@ impl ConnectionCache {
         ) else {
             return;
         };
+        // Make it into a pointer.
         let new_arc = Arc::new(new);
 
         // Lock for writing.
@@ -238,6 +254,7 @@ impl ConnectionCache {
     }
 
     pub fn add_v6(&self, new: ConnectionV6) {
+        // Get the specific port connection array for the connection.
         let Some(port) = get_port(
             &self.tcp_v6,
             &self.udp_v6,
@@ -246,6 +263,7 @@ impl ConnectionCache {
         ) else {
             return;
         };
+        // Make it into a pointer.
         let new_arc = Arc::new(new);
 
         // Lock for writing.
@@ -269,9 +287,11 @@ impl ConnectionCache {
     }
 
     pub fn end_v4(&self, key: Key) -> Option<Arc<ConnectionV4>> {
-        let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?;
-        let guard = port.read();
-        let snap = guard.get()?;
+        // Get the specific port connection array for the connection.
+        // Read only guard.
+        let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.read();
+        let snap = port.get()?;
+        // Iterate over all connection on the port.
         for conn in snap.iter() {
             if conn.equals(&key) {
                 conn.end(wdk::utils::get_system_timestamp_ms());
@@ -282,11 +302,14 @@ impl ConnectionCache {
     }
 
     pub fn end_v6(&self, key: Key) -> Option<Arc<ConnectionV6>> {
-        let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?;
-        let guard = port.read();
-        let snap = guard.get()?;
+        // Get the specific port connection array for the connection.
+        // Read only guard.
+        let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.read();
+        let snap = port.get()?;
+        // Iterate over all connection on the port.
         for conn in snap.iter() {
             if conn.equals(&key) {
+                // Mark it as ended.
                 conn.end(wdk::utils::get_system_timestamp_ms());
                 return Some(conn.clone());
             }
@@ -295,10 +318,12 @@ impl ConnectionCache {
     }
 
     pub fn end_all_on_port_v4(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV4>>> {
+        // Get the port, read only
         let port = get_port(&self.tcp_v4, &self.udp_v4, key.0, key.1)?.read();
         let snap = port.get()?;
         let now = wdk::utils::get_system_timestamp_ms();
         let mut ended = Vec::new();
+        // Mark all as ended
         for conn in snap.iter() {
             if !conn.has_ended() {
                 conn.end(now);
@@ -309,10 +334,12 @@ impl ConnectionCache {
     }
 
     pub fn end_all_on_port_v6(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV6>>> {
+        // Get the port, read only
         let port = get_port(&self.tcp_v6, &self.udp_v6, key.0, key.1)?.read();
         let snap = port.get()?;
         let now = wdk::utils::get_system_timestamp_ms();
         let mut ended = Vec::new();
+        // Mark all as ended
         for conn in snap.iter() {
             if !conn.has_ended() {
                 conn.end(now);
@@ -324,19 +351,22 @@ impl ConnectionCache {
 
     pub fn update_connection(&self, key: Key, verdict: Verdict) -> Option<RedirectInfo> {
         if key.is_ipv6() {
-            let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
+            // Get read only port.
+            let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.read();
+            let snap = port.get()?;
+            // Iterate over all connections.
             for conn in snap.iter() {
                 if conn.equals(&key) {
+                    // Update verdict.
                     conn.set_verdict(verdict);
                     return conn.redirect_info();
                 }
             }
         } else {
-            let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
+            // Get read only port.
+            let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.read();
+            let snap = port.get()?;
+            // Iterate over all connections.
             for conn in snap.iter() {
                 if conn.equals(&key) {
                     conn.set_verdict(verdict);
@@ -398,20 +428,17 @@ impl ConnectionCache {
         }
         None
     }
-
+    // walk_over_connections_v4 walks over all IPv4 connections. Lock free.
     pub fn walk_over_connections_v4<F: FnMut(&ConnectionV4)>(&self, iter: F) {
         ports_walk(&self.tcp_v4, &self.udp_v4, iter);
     }
 
+    // walk_over_connections_v6 walks over all IPv6 connections. Lock free.
     pub fn walk_over_connections_v6<F: FnMut(&ConnectionV6)>(&self, iter: F) {
         ports_walk(&self.tcp_v6, &self.udp_v6, iter);
     }
 
-    /// Returns the count of (active, ended) connections across all protocols and IP versions.
-    /// Returns the approximate number of pending entries in the unlinked-port
-    /// reclamation queues (v4, v6). Non-zero values indicate arrays that have
-    /// been unlinked from the port table but not yet freed; under normal
-    /// operation these drain quickly and should be near zero.
+    // get_unlinked_queue_counts returns stats of all the unlinked connection arrays. Lock free.
     pub fn get_unlinked_queue_counts(&self) -> (usize, usize) {
         (
             self.unlinked_ports_v4.count(),
@@ -419,6 +446,7 @@ impl ConnectionCache {
         )
     }
 
+    // get_entries_count returns stats for all the connections count. Lock free.
     pub fn get_entries_count(&self) -> (usize, usize) {
         let mut active = 0usize;
         let mut ended = 0usize;
@@ -439,24 +467,28 @@ impl ConnectionCache {
         (active, ended)
     }
 
+    // get_connection_v4 returns a connection by key. Lock free.
     pub fn get_connection_v4(&self, key: &Key) -> Option<Arc<ConnectionV4>> {
-        get_connection_impl(&self.tcp_v4, &self.udp_v4, key)
+        get_connection(&self.tcp_v4, &self.udp_v4, key)
     }
 
+    // get_connection_v6 returns a connection by key. Lock free.
     pub fn get_connection_v6(&self, key: &Key) -> Option<Arc<ConnectionV6>> {
-        get_connection_impl(&self.tcp_v6, &self.udp_v6, key)
+        get_connection(&self.tcp_v6, &self.udp_v6, key)
     }
 
+    // Clears the connection cache.
     pub fn clear(&self) {
         ports_clear(&self.tcp_v4, &self.udp_v4, &self.unlinked_ports_v4);
         ports_clear(&self.tcp_v6, &self.udp_v6, &self.unlinked_ports_v6);
     }
-
 }
 
 impl Drop for ConnectionCache {
     fn drop(&mut self) {
+        // Clear the cache
         self.clear();
+        // Free all unlinked connection arrays
         loop {
             let array = self.unlinked_ports_v4.pop();
             if array.is_null() {

@@ -1,5 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 #![allow(clippy::needless_return)]
 
 extern crate alloc;
@@ -19,15 +19,18 @@ pub mod logger;
 mod packet_callouts;
 mod packet_util;
 
+#[cfg(not(test))]
 use wdk::allocator::WindowsAllocator;
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 // Declaration of the global memory allocator
+#[cfg(not(test))]
 #[global_allocator]
 static HEAP: WindowsAllocator = WindowsAllocator {};
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "system" fn _DllMainCRTStartup() {}
 

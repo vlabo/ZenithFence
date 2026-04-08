@@ -94,6 +94,7 @@ impl<T> MpscQueue<T> {
     ///
     /// Safe to call from any number of concurrent threads.
     pub fn push(&self, ptr: *mut T) {
+        // Create a node.
         let node = Box::into_raw(Box::new(Node {
             data: ptr,
             next: AtomicPtr::new(ptr::null_mut()),
@@ -212,7 +213,7 @@ mod tests {
     fn empty_queue_returns_null() {
         let q: MpscQueue<u32> = MpscQueue::new();
         assert!(q.is_empty());
-        assert!(q.peek().is_null());
+        assert!(q.peek().is_none());
         assert!(q.pop().is_null());
     }
 
@@ -222,7 +223,7 @@ mod tests {
         let q: MpscQueue<u32> = MpscQueue::new();
         q.push(&mut val);
         assert!(!q.is_empty());
-        assert_eq!(q.peek(), &mut val as *mut u32);
+        assert_eq!(q.peek(), Some(&val));
         assert_eq!(q.pop(), &mut val as *mut u32);
         assert!(q.is_empty());
     }
@@ -245,10 +246,10 @@ mod tests {
         let mut val: u32 = 99;
         let q: MpscQueue<u32> = MpscQueue::new();
         q.push(&mut val);
-        assert_eq!(q.peek(), &mut val as *mut u32);
-        assert_eq!(q.peek(), &mut val as *mut u32);
+        assert_eq!(q.peek(), Some(&val));
+        assert_eq!(q.peek(), Some(&val));
         assert_eq!(q.pop(), &mut val as *mut u32);
-        assert!(q.peek().is_null());
+        assert!(q.peek().is_none());
     }
 
     #[test]
@@ -272,7 +273,7 @@ mod tests {
         assert_eq!(q.pop(), &mut a as *mut u32);
         q.push(&mut b);
         q.push(&mut c);
-        assert_eq!(q.peek(), &mut b as *mut u32);
+        assert_eq!(q.peek(), Some(&b));
         assert_eq!(q.pop(), &mut b as *mut u32);
         assert_eq!(q.pop(), &mut c as *mut u32);
         assert!(q.is_empty());
