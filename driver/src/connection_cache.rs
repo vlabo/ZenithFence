@@ -53,18 +53,6 @@ fn ports_clear<T: Connection>(
             port.lock().publish(None, queue);
         }
     }
-
-    // Free all port arrays
-    loop {
-        let array = queue.pop();
-        if array.is_null() {
-            break;
-        }
-
-        unsafe {
-            drop(Box::from_raw(array));
-        }
-    }
 }
 
 fn get_connection_impl<T: Connection>(
@@ -462,5 +450,30 @@ impl ConnectionCache {
     pub fn clear(&self) {
         ports_clear(&self.tcp_v4, &self.udp_v4, &self.unlinked_ports_v4);
         ports_clear(&self.tcp_v6, &self.udp_v6, &self.unlinked_ports_v6);
+    }
+
+}
+
+impl Drop for ConnectionCache {
+    fn drop(&mut self) {
+        self.clear();
+        loop {
+            let array = self.unlinked_ports_v4.pop();
+            if array.is_null() {
+                break;
+            }
+            unsafe {
+                drop(Box::from_raw(array));
+            }
+        }
+        loop {
+            let array = self.unlinked_ports_v6.pop();
+            if array.is_null() {
+                break;
+            }
+            unsafe {
+                drop(Box::from_raw(array));
+            }
+        }
     }
 }

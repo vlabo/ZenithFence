@@ -308,8 +308,7 @@ impl Device {
 
                 let (active, ended) = self.connection_cache.get_entries_count();
                 let packet_cache_count = self.packet_cache.get_entries_count();
-                let (unlinked_v4, unlinked_v6) =
-                    self.connection_cache.get_unlinked_queue_counts();
+                let (unlinked_v4, unlinked_v6) = self.connection_cache.get_unlinked_queue_counts();
 
                 {
                     let mut log_line = protocol::info::log_line(
