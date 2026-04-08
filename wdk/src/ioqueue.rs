@@ -114,7 +114,7 @@ impl<T> IOQueue<T> {
         let raw_ptr = Box::into_raw(list_entry);
 
         // Check if initialized.
-        let result = if self.initialized.load(Ordering::Acquire) {
+        let result = if self.initialized.load(Ordering::SeqCst) {
             unsafe { KeInsertQueue(kqueue, raw_ptr as *mut c_void) }
         } else {
             -1
@@ -134,7 +134,7 @@ impl<T> IOQueue<T> {
         unsafe {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
-            if self.initialized.load(Ordering::Acquire) {
+            if self.initialized.load(Ordering::SeqCst) {
                 // Pop and check the return value.
                 let list_entry =
                     KeRemoveQueue(kqueue, KprocessorMode::KernelMode, timeout) as *mut Entry<T>;
@@ -183,7 +183,7 @@ impl<T> IOQueue<T> {
             }
 
             // Check if initialized.
-            if self.initialized.swap(false, Ordering::Acquire) {
+            if self.initialized.swap(false, Ordering::SeqCst) {
                 // Remove and free all elements from the queue.
                 let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
                 if !list_entries.is_null() {

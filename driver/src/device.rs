@@ -248,7 +248,7 @@ impl Device {
 
                 let send_event_v4 = |conn: &ConnectionV4| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::Acquire) > timestamp {
+                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
                         return;
                     }
 
@@ -258,17 +258,17 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 };
 
                 let send_event_v6 = |conn: &ConnectionV6| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::Acquire) > timestamp {
+                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
                         return;
                     }
 
@@ -278,10 +278,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 };
@@ -346,8 +346,8 @@ impl Device {
                             conn.remote_port,
                             conn.process_id,
                             conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                             status,
                         );
                         logger::add_line(log_line);
@@ -376,8 +376,8 @@ impl Device {
                             conn.remote_port,
                             conn.process_id,
                             conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                             status,
                         );
                         logger::add_line(log_line);
@@ -397,10 +397,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 }
@@ -417,10 +417,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 }

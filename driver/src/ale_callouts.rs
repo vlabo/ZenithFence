@@ -400,10 +400,10 @@ pub fn endpoint_closure_v4(data: CalloutData) {
                 conn.remote_address.octets(),
                 conn.local_port,
                 conn.remote_port,
-                conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
             );
             let _ = device.event_queue.push(info);
         }
@@ -444,10 +444,10 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                     conn.remote_address.octets(),
                     conn.local_port,
                     conn.remote_port,
-                    conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                    conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                    conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                    conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                    conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                    conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                    conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                    conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                 );
                 let _ = device.event_queue.push(info);
             }
@@ -482,10 +482,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -513,10 +513,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -544,10 +544,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     let _ = device.event_queue.push(info);
                 }
@@ -575,10 +575,10 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     let _ = device.event_queue.push(info);
                 }
