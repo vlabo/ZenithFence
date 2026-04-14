@@ -19,6 +19,6 @@
 .Set DestinationDir=ZenithFence
 
 ;Specify files to be included in cab file
-.\cab\\{{version_file}}.inf
-.\cab\\{{version_file}}.sys
-.\cab\\{{version_file}}.pdb
+.\cab\\{{basename}}.inf
+.\cab\\{{basename}}.sys
+.\cab\\{{basename}}.pdb

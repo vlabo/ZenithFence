@@ -1,12 +1,29 @@
-use std::{fs::File, io::Write, process::Command};
+use std::{
+    env, fs,
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use chrono::Local;
 use handlebars::Handlebars;
+use serde_derive::Deserialize;
 use serde_json::json;
+use std::sync::OnceLock;
 use zip::{write::FileOptions, ZipWriter};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 static LIB_PATH: &'static str = "./build/x86_64-pc-windows-msvc/release/driver.lib";
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    sys_basename: String,
+    driver_name: String,
+    company_name: String,
+}
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
 
 fn main() {
     build_driver();
@@ -15,17 +32,150 @@ fn main() {
         VERSION[0], VERSION[1], VERSION[2], VERSION[3]
     );
 
-    // Create Zip that will hold all the release files and scripts.
-    let file = File::create(format!(
-        "kext_release_v{}-{}-{}.zip",
-        VERSION[0], VERSION[1], VERSION[2]
-    ))
-    .unwrap();
+    // Small CLI: default -> create folder; --zip -> create zip file
+    let mut args = env::args().skip(1);
+    let mut make_zip = false;
+    let mut out: Option<PathBuf> = None;
+    let mut with_bat = false; // when creating folder, optionally also write the bat script
+
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--zip" | "-z" => make_zip = true,
+            "--out" | "-o" => {
+                if let Some(p) = args.next() {
+                    out = Some(PathBuf::from(p));
+                }
+            }
+            "--with-bat" | "-b" => {
+                with_bat = true;
+            }
+            _ => {
+                // ignore unknown
+            }
+        }
+    }
+
+    let default_base = format!("kext_release_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
+
+    let out_path = match out {
+        Some(p) => p,
+        None => {
+            if make_zip {
+                PathBuf::from(format!("{}.zip", default_base))
+            } else {
+                PathBuf::from(default_base)
+            }
+        }
+    };
+
+    if make_zip {
+        // ensure file has .zip extension
+        let zip_path = if out_path.extension().is_none() {
+            out_path.with_extension("zip")
+        } else {
+            out_path
+        };
+        create_release_zip(&zip_path);
+        println!("Created zip: {}", zip_path.display());
+    } else {
+        create_release_dir(&out_path, with_bat);
+        println!("Created release directory: {}", out_path.display());
+
+        let config = load_config();
+        let version_file = format!(
+            "{}_v{}-{}-{}",
+            config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+        );
+        println!("Sign the .cab file before uploading it to microsoft portal!");
+        println!(
+            "cab-file: {}",
+            out_path.join(format!("{}.cab", version_file)).display()
+        );
+
+        println!("sign command example:");
+        println!(
+            "signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /n \"<company-name>\" {}",
+            out_path.join(format!("{}.cab", version_file)).display()
+        );
+    }
+}
+
+fn version_str() -> String {
+    return format!(
+        "{}.{}.{}.{}",
+        VERSION[0], VERSION[1], VERSION[2], VERSION[3]
+    );
+}
+
+fn load_config() -> &'static Config {
+    CONFIG.get_or_init(|| {
+        // Try to read release/config.json relative to this executable
+        let cfg_path = Path::new("config.json");
+        if cfg_path.exists() {
+            let s = fs::read_to_string(cfg_path).unwrap();
+            serde_json::from_str(&s).unwrap()
+        } else {
+            panic!("config.json not found at {}", cfg_path.display());
+        }
+    })
+}
+
+fn build_driver() {
+    let output = Command::new("cargo")
+        .current_dir("../driver")
+        .arg("build")
+        .arg("--release")
+        .args(["--target", "x86_64-pc-windows-msvc"])
+        .args(["--target-dir", "../release/build"])
+        .output()
+        .unwrap();
+    println!("{}", String::from_utf8(output.stderr).unwrap());
+}
+
+fn get_inf_content() -> String {
+    let reg = Handlebars::new();
+    let today = Local::now();
+    let config = load_config();
+    // Merge config values into template data
+    let data = json!({"date": today.format("%m/%d/%Y").to_string(),"version": version_str(), "driver_name": config.driver_name, "company_name": config.company_name, "sys_basename": config.sys_basename});
+
+    reg.render_template(include_str!("../templates/ZenithFence64.inf"), &data)
+        .unwrap()
+}
+
+fn get_ddf_content() -> String {
+    let config = load_config();
+
+    let reg = Handlebars::new();
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+    );
+    let data = json!({"version_file": version_file, "basename": config.sys_basename, "driver_name": config.driver_name, "company_name": config.company_name});
+
+    reg.render_template(include_str!("../templates/ZenithFence.ddf"), &data)
+        .unwrap()
+}
+
+fn get_build_cab_script_content() -> String {
+    let config = load_config();
+
+    let reg = Handlebars::new();
+    let data = json!({"sys_file": format!("{}.sys", config.sys_basename), "pdb_file": format!("{}.pdb", config.sys_basename), "lib_file": "driver.lib", "version_file": &config.sys_basename });
+
+    reg.render_template(include_str!("../templates/build_cab.bat"), &data)
+        .unwrap()
+}
+
+fn create_release_zip(zip_path: &Path) {
+    let config = load_config();
+    let file = File::create(zip_path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
+    );
 
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
-
-    // Write files to zip
     zip.add_directory("cab", FileOptions::default()).unwrap();
     // Write driver.lib
     write_lib_file_zip(&mut zip);
@@ -48,55 +198,129 @@ fn main() {
     zip.finish().unwrap();
 }
 
-fn version_str() -> String {
-    return format!(
-        "{}.{}.{}.{}",
-        VERSION[0], VERSION[1], VERSION[2], VERSION[3]
+fn create_release_dir(dir_path: &Path, with_bat: bool) {
+    // create base dir and cab subdir
+    fs::create_dir_all(dir_path).unwrap();
+    let cab_dir = dir_path.join("cab");
+    fs::create_dir_all(&cab_dir).unwrap();
+
+    // copy driver.lib
+    let dest_lib = dir_path.join("driver.lib");
+    fs::copy(LIB_PATH, &dest_lib).unwrap();
+
+    let config = load_config();
+    let version_file = format!(
+        "{}_v{}-{}-{}",
+        config.sys_basename, VERSION[0], VERSION[1], VERSION[2]
     );
-}
 
-fn build_driver() {
-    let output = Command::new("cargo")
-        .current_dir("../driver")
-        .arg("build")
-        .arg("--release")
-        .args(["--target", "x86_64-pc-windows-msvc"])
-        .args(["--target-dir", "../release/build"])
+    // write ddf
+    let ddf_path = dir_path.join(format!("{}.ddf", version_file));
+    fs::write(ddf_path, get_ddf_content()).unwrap();
+
+    // write build_cab.bat (optional)
+    if with_bat {
+        let build_bat = dir_path.join("build_cab.bat");
+        fs::write(build_bat, get_build_cab_script_content()).unwrap();
+    }
+
+    // write inf into cab/
+    let inf_path = cab_dir.join(format!("{}.inf", config.sys_basename));
+    fs::write(inf_path, get_inf_content()).unwrap();
+
+    // Link driver.lib into a .sys and produce .pdb, then move them into cab/
+    // This mirrors the steps in build_cab.bat but runs them automatically.
+    let sys_file = format!("{}.sys", config.sys_basename);
+    let pdb_file = format!("{}.pdb", config.sys_basename);
+
+    // Run link.exe in the output directory
+    let link_status = Command::new("link.exe")
+        .current_dir(dir_path)
+        .arg(format!("/OUT:{}", sys_file))
+        .arg("/RELEASE")
+        .arg("/DEBUG")
+        .arg("/NOLOGO")
+        .arg("/NXCOMPAT")
+        .arg("/NODEFAULTLIB")
+        .arg("/SUBSYSTEM:NATIVE")
+        .arg("/DRIVER")
+        .arg("/DYNAMICBASE")
+        .arg("/MANIFEST:NO")
+        .arg("/PDBALTPATH:none")
+        .arg("/MACHINE:X64")
+        .arg("/OPT:REF,ICF")
+        .arg("/SUBSYSTEM:NATIVE,6.01")
+        .arg("/ENTRY:FxDriverEntry")
+        .arg("/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE")
+        .arg("/MERGE:.rustc=.data")
+        .arg("/INTEGRITYCHECK")
+        .arg("driver.lib")
         .output()
-        .unwrap();
-    println!("{}", String::from_utf8(output.stderr).unwrap());
-}
+        .expect(
+            "failed to run link.exe; ensure Visual Studio build tools are installed and in PATH",
+        );
 
-fn get_inf_content() -> String {
-    let reg = Handlebars::new();
-    let today = Local::now();
-    reg.render_template(
-        include_str!("../templates/ZenithFence64.inf"),
-        &json!({"date": today.format("%m/%d/%Y").to_string(), "version": version_str()}),
-    )
-    .unwrap()
-}
+    println!(
+        "link stdout: {}",
+        String::from_utf8_lossy(&link_status.stdout)
+    );
+    println!(
+        "link stderr: {}",
+        String::from_utf8_lossy(&link_status.stderr)
+    );
 
-fn get_ddf_content() -> String {
-    let reg = Handlebars::new();
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
-    reg.render_template(
-        include_str!("../templates/ZenithFence.ddf"),
-        &json!({"version_file": version_file}),
-    )
-    .unwrap()
-}
+    // Move produced files into cab directory (link outputs to dir_path)
+    let produced_sys = dir_path.join(&sys_file);
+    let produced_pdb = dir_path.join(&pdb_file);
+    if produced_sys.exists() {
+        fs::rename(&produced_sys, cab_dir.join(&sys_file)).unwrap();
+    }
+    if produced_pdb.exists() {
+        fs::rename(&produced_pdb, cab_dir.join(&pdb_file)).unwrap();
+    }
 
-fn get_build_cab_script_content() -> String {
-    let reg = Handlebars::new();
-    let version_file = format!("ZenithFence_v{}-{}-{}", VERSION[0], VERSION[1], VERSION[2]);
+    // Run MakeCab to create the .cab based on the .ddf we wrote
+    let ddf_name = format!("{}.ddf", version_file);
+    let makecab_status = Command::new("MakeCab")
+        .current_dir(dir_path)
+        .arg("/f")
+        .arg(&ddf_name)
+        .output()
+        .expect("failed to run MakeCab; ensure MakeCab.exe is available in PATH");
 
-    reg
-        .render_template(
-            include_str!("../templates/build_cab.bat"),
-            &json!({"sys_file": format!("{}.sys", version_file), "pdb_file": format!("{}.pdb", version_file), "lib_file": "driver.lib", "version_file": &version_file }),
+    println!(
+        "makecab stdout: {}",
+        String::from_utf8_lossy(&makecab_status.stdout)
+    );
+    println!(
+        "makecab stderr: {}",
+        String::from_utf8_lossy(&makecab_status.stderr)
+    );
+
+    // Move produced .cab from disk1\ to root and cleanup
+    let disk1_dir = dir_path.join("disk1");
+    let produced_cab = disk1_dir.join(format!("{}.cab", version_file));
+    if produced_cab.exists() {
+        fs::rename(
+            &produced_cab,
+            dir_path.join(format!("{}.cab", version_file)),
         )
-        .unwrap()
+        .unwrap();
+    }
+    // remove disk1 dir if exists
+    if disk1_dir.exists() {
+        fs::remove_dir_all(disk1_dir).ok();
+    }
+
+    // remove setup.inf and setup.rpt if created
+    let setup_inf = dir_path.join("setup.inf");
+    let setup_rpt = dir_path.join("setup.rpt");
+    if setup_inf.exists() {
+        fs::remove_file(setup_inf).ok();
+    }
+    if setup_rpt.exists() {
+        fs::remove_file(setup_rpt).ok();
+    }
 }
 
 fn write_to_zip(zip: &mut ZipWriter<File>, filename: &str, content: String) {

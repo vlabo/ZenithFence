@@ -2,35 +2,30 @@
 Signature = "$Windows NT$"
 Class = WFPCALLOUTS
 ClassGuid = {57465043-616C-6C6F-7574-5F636C617373}
-Provider = %Provider%
-CatalogFile = ZenithFence64.Cat
+Provider = "{{company_name}}"
+CatalogFile = {{sys_basename}}.Cat
 DriverVer = {{date}},{{version}}
+PnpLockdown=1
 
 [SourceDisksNames]
 1 = %DiskName%
 
 [SourceDisksFiles]
-ZenithFence64.sys = 1
+{{sys_basename}}.sys = 1
 
 [DestinationDirs]
 DefaultDestDir = 12 ; %windir%\system32\drivers
 ZenithFence.DriverFiles = 12 ; %windir%\system32\drivers
 
-[DefaultInstall]
+[DefaultInstall.NTamd64]
 OptionDesc = %Description%
 CopyFiles = ZenithFence.DriverFiles
 
-[DefaultInstall.Services]
+[DefaultInstall.NTamd64.Services]
 AddService = %ServiceName%,,ZenithFence.Service
 
-[DefaultUninstall]
-DelFiles = ZenithFence.DriverFiles
-
-[DefaultUninstall.Services]
-DelService = ZenithFence,0x200 ; SPSVCINST_STOPSERVICE
-
 [ZenithFence.DriverFiles]
-ZenithFence64.sys,,,0x00000040 ; COPYFLG_OVERWRITE_OLDER_ONLY
+{{sys_basename}}.sys,,,0x00000040 ; COPYFLG_OVERWRITE_OLDER_ONLY
 
 [ZenithFence.Service]
 DisplayName = %ServiceName%
@@ -38,10 +33,9 @@ Description = %ServiceDesc%
 ServiceType = 1  ; SERVICE_KERNEL_DRIVER
 StartType = 0    ; SERVICE_BOOT_START
 ErrorControl = 1 ; SERVICE_ERROR_NORMAL
-ServiceBinary = %12%\ZenithFence64.sys
+ServiceBinary = %12%\\{{sys_basename}}.sys
 
 [Strings]
-Provider = "Copany name"
 DiskName = "ZenithFence Installation Disk"
 Description = "ZenithFence Driver"
 ServiceName = "ZenithFence"
