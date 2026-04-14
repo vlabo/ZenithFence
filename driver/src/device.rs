@@ -19,9 +19,8 @@ use wdk::{
 use crate::{
     array_holder::ArrayHolder,
     callouts,
-    connection::{Connection, ConnectionV4, ConnectionV6},
+    connection::{Connection, ConnectionV4, ConnectionV6, Key},
     connection_cache::ConnectionCache,
-    connection_map::Key,
     dbg, err,
     id_cache::IdCache,
     logger,
@@ -249,7 +248,7 @@ impl Device {
 
                 let send_event_v4 = |conn: &ConnectionV4| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::Acquire) > timestamp {
+                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
                         return;
                     }
 
@@ -259,17 +258,17 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 };
 
                 let send_event_v6 = |conn: &ConnectionV6| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::Acquire) > timestamp {
+                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
                         return;
                     }
 
@@ -279,10 +278,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 };
@@ -304,21 +303,85 @@ impl Device {
                 }
             }
             CommandType::PrintMemoryStats => {
-                // Getting the information takes a long time and interferes with the callouts causing the device to crash.
-                // TODO(vladimir): Make more optimized version
-                // info!(
-                //     "Packet cache: {} entries",
-                //     self.packet_cache.get_entries_count()
-                // );
-                // info!(
-                //     "BandwidthStats cache: {} entries",
-                //     self.bandwidth_stats.get_entries_count()
-                // );
-                // info!(
-                //     "Connection cache: {} entries\n {}",
-                //     self.connection_cache.get_entries_count(),
-                //     self.connection_cache.get_full_cache_info()
-                // );
+                wdk::dbg!("PrintMemoryStats command");
+                use core::fmt::Write;
+
+                let (active, ended) = self.connection_cache.get_entries_count();
+                let packet_cache_count = self.packet_cache.get_entries_count();
+                let (unlinked_v4, unlinked_v6) = self.connection_cache.get_unlinked_queue_counts();
+
+                {
+                    let mut log_line = protocol::info::log_line(
+                        protocol::info::Severity::Info,
+                        logger::MAX_LOG_LINE_SIZE,
+                    );
+                    _ = write!(
+                        log_line,
+                        "MemStats: connections active={} ended={} | packet_cache={} | unlinked_ports v4={} v6={}",
+                        active, ended, packet_cache_count, unlinked_v4, unlinked_v6
+                    );
+                    logger::add_line(log_line);
+                }
+
+                self.connection_cache
+                    .walk_over_connections_v4(|conn: &ConnectionV4| {
+                        let proto = match conn.protocol {
+                            IpProtocol::Tcp => "TCP",
+                            IpProtocol::Udp => "UDP",
+                            _ => "???",
+                        };
+                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
+                        let mut log_line = protocol::info::log_line(
+                            protocol::info::Severity::Info,
+                            logger::MAX_LOG_LINE_SIZE,
+                        );
+                        _ = write!(
+                            log_line,
+                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+                            proto,
+                            conn.direction,
+                            conn.local_address,
+                            conn.local_port,
+                            conn.remote_address,
+                            conn.remote_port,
+                            conn.process_id,
+                            conn.get_verdict(),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                            status,
+                        );
+                        logger::add_line(log_line);
+                    });
+
+                self.connection_cache
+                    .walk_over_connections_v6(|conn: &ConnectionV6| {
+                        let proto = match conn.protocol {
+                            IpProtocol::Tcp => "TCP",
+                            IpProtocol::Udp => "UDP",
+                            _ => "???",
+                        };
+                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
+                        let mut log_line = protocol::info::log_line(
+                            protocol::info::Severity::Info,
+                            logger::MAX_LOG_LINE_SIZE,
+                        );
+                        _ = write!(
+                            log_line,
+                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+                            proto,
+                            conn.direction,
+                            conn.local_address,
+                            conn.local_port,
+                            conn.remote_address,
+                            conn.remote_port,
+                            conn.process_id,
+                            conn.get_verdict(),
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                            status,
+                        );
+                        logger::add_line(log_line);
+                    });
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
@@ -334,10 +397,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 }
@@ -354,10 +417,10 @@ impl Device {
                         conn.remote_address.octets(),
                         conn.local_port,
                         conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::Relaxed),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::Relaxed),
+                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
                     );
                     _ = self.event_queue.push(info);
                 }

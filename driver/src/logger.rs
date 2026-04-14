@@ -16,7 +16,7 @@ static START_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() }
 static END_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
 
 pub fn add_line(log_line: Info) {
-    let mut index = END_INDEX.fetch_add(1, Ordering::Acquire);
+    let mut index = END_INDEX.fetch_add(1, Ordering::SeqCst);
     unsafe {
         index %= SIZE_OF_LOG_LINE_BUFFER;
         let ptr = &mut LOG_LINES[index];
@@ -30,8 +30,8 @@ pub fn add_line(log_line: Info) {
 
 pub fn flush() -> Vec<Info> {
     let mut vec = Vec::new();
-    let end_index = END_INDEX.load(Ordering::Acquire);
-    let start_index = START_INDEX.load(Ordering::Acquire);
+    let end_index = END_INDEX.load(Ordering::SeqCst);
+    let start_index = START_INDEX.load(Ordering::SeqCst);
     if end_index <= start_index {
         return vec;
     }
@@ -46,7 +46,7 @@ pub fn flush() -> Vec<Info> {
         }
     }
 
-    START_INDEX.store(end_index, Ordering::Release);
+    START_INDEX.store(end_index, Ordering::SeqCst);
     vec
 }
 

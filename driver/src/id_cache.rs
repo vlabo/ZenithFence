@@ -5,7 +5,7 @@ use protocol::info::Info;
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
 
-use crate::{connection::Direction, connection_map::Key, device::Packet};
+use crate::{connection::{Direction, Key}, device::Packet};
 
 pub const PACKET_MISSING_ID: u64 = u64::MAX;
 

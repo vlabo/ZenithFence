@@ -1,15 +1,11 @@
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-};
+use alloc::string::{String, ToString};
 use core::{
     fmt::{Debug, Display},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
+use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
-
-use crate::connection_map::Key;
 
 pub static PM_DNS_PORT: u16 = 53;
 pub static PM_SPN_PORT: u16 = 717;
@@ -94,13 +90,6 @@ impl Debug for Direction {
     }
 }
 
-#[derive(Clone)]
-pub struct ConnectionExtra {
-    pub(crate) process_id: u64,
-    pub(crate) end_timestamp: u64,
-    pub(crate) direction: Direction,
-}
-
 pub trait Connection {
     fn redirect_info(&self) -> Option<RedirectInfo> {
         let redirect_address = if self.is_ipv6() {
@@ -130,8 +119,8 @@ pub trait Connection {
         }
     }
 
-    /// Returns true if the connection is equal to the given key. The key is considered equal if the remote port and address are equal.
-    fn remote_equals(&self, key: &Key) -> bool;
+    /// Returns true if the connection is equal to the given key.
+    fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
     /// Returns the protocol of the connection.
@@ -153,7 +142,7 @@ pub trait Connection {
     // Returns the process id of the connection.
     fn get_process_id(&self) -> u64;
     /// Ends the connection.
-    fn end(&mut self, timestamp: u64);
+    fn end(&self, timestamp: u64);
     /// Returns true if the connection has ended.
     fn has_ended(&self) -> bool {
         self.get_end_time() > 0
@@ -164,7 +153,7 @@ pub trait Connection {
     fn get_last_accessed_time(&self) -> u64;
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
-    fn set_verdict(&mut self, verdict: Verdict);
+    fn set_verdict(&self, verdict: Verdict);
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
 
@@ -175,19 +164,19 @@ pub trait Connection {
                 // Inbound traffic.
                 self.get_bandwidth_usage()
                     .rx_packets
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::SeqCst);
                 self.get_bandwidth_usage()
                     .rx_bytes
-                    .fetch_add(bytes, Ordering::Relaxed);
+                    .fetch_add(bytes, Ordering::SeqCst);
             }
             Direction::Outbound => {
                 // Outbound traffic.
                 self.get_bandwidth_usage()
                     .tx_packets
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::SeqCst);
                 self.get_bandwidth_usage()
                     .tx_bytes
-                    .fetch_add(bytes, Ordering::Relaxed);
+                    .fetch_add(bytes, Ordering::SeqCst);
             }
         }
     }
@@ -203,10 +192,10 @@ pub struct BandwidthUsage {
 impl Clone for BandwidthUsage {
     fn clone(&self) -> Self {
         Self {
-            rx_bytes: AtomicU64::new(self.rx_bytes.load(Ordering::Relaxed)),
-            rx_packets: AtomicU64::new(self.rx_packets.load(Ordering::Relaxed)),
-            tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::Relaxed)),
-            tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::Relaxed)),
+            rx_bytes: AtomicU64::new(self.rx_bytes.load(Ordering::SeqCst)),
+            rx_packets: AtomicU64::new(self.rx_packets.load(Ordering::SeqCst)),
+            tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::SeqCst)),
+            tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::SeqCst)),
         }
     }
 }
@@ -217,10 +206,12 @@ pub struct ConnectionV4 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv4Address,
     pub(crate) remote_port: u16,
-    pub(crate) verdict: Verdict,
+    pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
-    pub(crate) extra: Box<ConnectionExtra>,
+    pub(crate) process_id: u64,
+    pub(crate) end_timestamp: AtomicU64,
+    pub(crate) direction: Direction,
 }
 
 pub struct ConnectionV6 {
@@ -229,10 +220,12 @@ pub struct ConnectionV6 {
     pub(crate) local_port: u16,
     pub(crate) remote_address: Ipv6Address,
     pub(crate) remote_port: u16,
-    pub(crate) verdict: Verdict,
+    pub(crate) verdict: AtomicU8,
     pub(crate) last_accessed_timestamp: AtomicU64,
     pub(crate) bandwidth_usage: BandwidthUsage,
-    pub(crate) extra: Box<ConnectionExtra>,
+    pub(crate) process_id: u64,
+    pub(crate) end_timestamp: AtomicU64,
+    pub(crate) direction: Direction,
 }
 
 #[derive(Debug)]
@@ -243,22 +236,6 @@ pub struct RedirectInfo {
     pub(crate) redirect_port: u16,
     pub(crate) unify: bool,
     pub(crate) redirect_address: IpAddress,
-}
-
-pub struct ConnectionInfo {
-    pub verdict: Verdict,
-    pub process_id: u64,
-    pub redirect_info: Option<RedirectInfo>,
-}
-
-impl ConnectionInfo {
-    pub fn from_connection<T: Connection>(conn: &T) -> Self {
-        ConnectionInfo {
-            verdict: conn.get_verdict(),
-            process_id: conn.get_process_id(),
-            redirect_info: conn.redirect_info(),
-        }
-    }
 }
 
 impl ConnectionV4 {
@@ -280,7 +257,7 @@ impl ConnectionV4 {
             local_port: key.local_port,
             remote_address,
             remote_port: key.remote_port,
-            verdict: Verdict::Undecided,
+            verdict: AtomicU8::new(Verdict::Undecided as u8),
             last_accessed_timestamp: AtomicU64::new(timestamp),
             bandwidth_usage: BandwidthUsage {
                 rx_bytes: AtomicU64::new(0),
@@ -288,19 +265,25 @@ impl ConnectionV4 {
                 tx_bytes: AtomicU64::new(0),
                 tx_packets: AtomicU64::new(0),
             },
-            extra: Box::new(ConnectionExtra {
-                process_id,
-                direction,
-                end_timestamp: 0,
-            }),
+            process_id,
+            direction,
+            end_timestamp: AtomicU64::new(0),
         })
     }
 }
 
 impl Connection for ConnectionV4 {
-    fn remote_equals(&self, key: &Key) -> bool {
+    fn equals(&self, key: &Key) -> bool {
         if self.remote_port != key.remote_port {
             return false;
+        }
+        if self.local_port != key.local_port {
+            return false;
+        }
+        if let IpAddress::Ipv4(local_address) = &key.local_address {
+            if !self.local_address.eq(local_address) {
+                return false;
+            }
         }
         if let IpAddress::Ipv4(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);
@@ -309,8 +292,8 @@ impl Connection for ConnectionV4 {
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
-        match self.verdict {
-            Verdict::RedirectNameServer => {
+        match FromPrimitive::from_u8(self.verdict.load(Ordering::SeqCst)) {
+            Some(Verdict::RedirectNameServer) => {
                 if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
@@ -320,7 +303,7 @@ impl Connection for ConnectionV4 {
                     IpAddress::Ipv6(_) => false,
                 }
             }
-            Verdict::RedirectTunnel => {
+            Some(Verdict::RedirectTunnel) => {
                 if key.remote_port != PM_SPN_PORT {
                     return false;
                 }
@@ -335,7 +318,8 @@ impl Connection for ConnectionV4 {
     }
 
     fn get_verdict(&self) -> Verdict {
-        self.verdict
+        use num_traits::FromPrimitive;
+        Verdict::from_u8(self.verdict.load(Ordering::SeqCst)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -359,32 +343,32 @@ impl Connection for ConnectionV4 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.extra.process_id
+        self.process_id
     }
 
     fn get_direction(&self) -> Direction {
-        self.extra.direction
+        self.direction
     }
 
-    fn end(&mut self, timestamp: u64) {
-        self.extra.end_timestamp = timestamp;
+    fn end(&self, timestamp: u64) {
+        self.end_timestamp.store(timestamp, Ordering::SeqCst);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp
+        self.end_timestamp.load(Ordering::SeqCst)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
-        self.last_accessed_timestamp.load(Ordering::Relaxed)
+        self.last_accessed_timestamp.load(Ordering::SeqCst)
     }
 
     fn set_last_accessed_time(&self, timestamp: u64) {
         self.last_accessed_timestamp
-            .store(timestamp, Ordering::Relaxed);
+            .store(timestamp, Ordering::SeqCst);
     }
 
-    fn set_verdict(&mut self, verdict: Verdict) {
-        self.verdict = verdict;
+    fn set_verdict(&self, verdict: Verdict) {
+        self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -400,12 +384,14 @@ impl Clone for ConnectionV4 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: self.verdict,
+            verdict: AtomicU8::new(self.verdict.load(Ordering::SeqCst)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
-                self.last_accessed_timestamp.load(Ordering::Relaxed),
+                self.last_accessed_timestamp.load(Ordering::SeqCst),
             ),
-            extra: self.extra.clone(),
+            process_id: self.process_id,
+            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::SeqCst)),
+            direction: self.direction,
         }
     }
 }
@@ -428,7 +414,7 @@ impl ConnectionV6 {
             local_port: key.local_port,
             remote_address,
             remote_port: key.remote_port,
-            verdict: Verdict::Undecided,
+            verdict: AtomicU8::new(Verdict::Undecided as u8),
             last_accessed_timestamp: AtomicU64::new(timestamp),
             bandwidth_usage: BandwidthUsage {
                 rx_bytes: AtomicU64::new(0),
@@ -436,19 +422,25 @@ impl ConnectionV6 {
                 tx_bytes: AtomicU64::new(0),
                 tx_packets: AtomicU64::new(0),
             },
-            extra: Box::new(ConnectionExtra {
-                process_id,
-                direction,
-                end_timestamp: 0,
-            }),
+            process_id,
+            direction,
+            end_timestamp: AtomicU64::new(0),
         })
     }
 }
 
 impl Connection for ConnectionV6 {
-    fn remote_equals(&self, key: &Key) -> bool {
+    fn equals(&self, key: &Key) -> bool {
         if self.remote_port != key.remote_port {
             return false;
+        }
+        if self.local_port != key.local_port {
+            return false;
+        }
+        if let IpAddress::Ipv6(local_address) = &key.local_address {
+            if !self.local_address.eq(local_address) {
+                return false;
+            }
         }
         if let IpAddress::Ipv6(remote_address) = &key.remote_address {
             return self.remote_address.eq(remote_address);
@@ -457,8 +449,8 @@ impl Connection for ConnectionV6 {
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
-        match self.verdict {
-            Verdict::RedirectNameServer => {
+        match Verdict::from_u8(self.verdict.load(Ordering::SeqCst)) {
+            Some(Verdict::RedirectNameServer) => {
                 if key.remote_port != PM_DNS_PORT {
                     return false;
                 }
@@ -468,7 +460,7 @@ impl Connection for ConnectionV6 {
                     IpAddress::Ipv6(a) => a.is_loopback(),
                 }
             }
-            Verdict::RedirectTunnel => {
+            Some(Verdict::RedirectTunnel) => {
                 if key.remote_port != PM_SPN_PORT {
                     return false;
                 }
@@ -483,7 +475,8 @@ impl Connection for ConnectionV6 {
     }
 
     fn get_verdict(&self) -> Verdict {
-        self.verdict
+        use num_traits::FromPrimitive;
+        Verdict::from_u8(self.verdict.load(Ordering::SeqCst)).unwrap_or(Verdict::Undecided)
     }
 
     fn get_local_address(&self) -> IpAddress {
@@ -507,32 +500,32 @@ impl Connection for ConnectionV6 {
     }
 
     fn get_process_id(&self) -> u64 {
-        self.extra.process_id
+        self.process_id
     }
 
     fn get_direction(&self) -> Direction {
-        self.extra.direction
+        self.direction
     }
 
-    fn end(&mut self, timestamp: u64) {
-        self.extra.end_timestamp = timestamp;
+    fn end(&self, timestamp: u64) {
+        self.end_timestamp.store(timestamp, Ordering::SeqCst);
     }
 
     fn get_end_time(&self) -> u64 {
-        self.extra.end_timestamp
+        self.end_timestamp.load(Ordering::SeqCst)
     }
 
     fn get_last_accessed_time(&self) -> u64 {
-        self.last_accessed_timestamp.load(Ordering::Relaxed)
+        self.last_accessed_timestamp.load(Ordering::SeqCst)
     }
 
     fn set_last_accessed_time(&self, timestamp: u64) {
         self.last_accessed_timestamp
-            .store(timestamp, Ordering::Relaxed);
+            .store(timestamp, Ordering::SeqCst);
     }
 
-    fn set_verdict(&mut self, verdict: Verdict) {
-        self.verdict = verdict;
+    fn set_verdict(&self, verdict: Verdict) {
+        self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
@@ -548,12 +541,64 @@ impl Clone for ConnectionV6 {
             local_port: self.local_port,
             remote_address: self.remote_address,
             remote_port: self.remote_port,
-            verdict: self.verdict,
+            verdict: AtomicU8::new(self.verdict.load(Ordering::SeqCst)),
             bandwidth_usage: self.bandwidth_usage.clone(),
             last_accessed_timestamp: AtomicU64::new(
-                self.last_accessed_timestamp.load(Ordering::Relaxed),
+                self.last_accessed_timestamp.load(Ordering::SeqCst),
             ),
-            extra: self.extra.clone(),
+            process_id: self.process_id,
+            end_timestamp: AtomicU64::new(self.end_timestamp.load(Ordering::SeqCst)),
+            direction: self.direction,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+pub struct Key {
+    pub(crate) protocol: IpProtocol,
+    pub(crate) local_address: IpAddress,
+    pub(crate) local_port: u16,
+    pub(crate) remote_address: IpAddress,
+    pub(crate) remote_port: u16,
+}
+
+impl core::fmt::Display for Key {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "p: {} l: {}:{} r: {}:{}",
+            self.protocol,
+            self.local_address,
+            self.local_port,
+            self.remote_address,
+            self.remote_port
+        )
+    }
+}
+
+impl Key {
+    pub fn is_ipv6(&self) -> bool {
+        match self.local_address {
+            IpAddress::Ipv4(_) => false,
+            IpAddress::Ipv6(_) => true,
+        }
+    }
+
+    pub fn is_loopback(&self) -> bool {
+        match self.local_address {
+            IpAddress::Ipv4(ip) => ip.is_loopback(),
+            IpAddress::Ipv6(ip) => ip.is_loopback(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn reverse(&self) -> Key {
+        Key {
+            protocol: self.protocol,
+            local_address: self.remote_address,
+            local_port: self.remote_port,
+            remote_address: self.local_address,
+            remote_port: self.local_port,
         }
     }
 }
