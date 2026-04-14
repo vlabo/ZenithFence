@@ -9,7 +9,7 @@ use crate::mpsc_queue::MpscQueue;
 use crate::rcu_port::{ConnectionArray, RCUPort};
 use smoltcp::wire::IpProtocol;
 
-// 0-65535 must be valid ports. 0 is not a valid port number but its kept for feature proofing for special cases.
+// 0-65535 must be valid ports. 0 is not a valid port number but its kept for future proofing for special cases.
 const PORT_COUT: usize = u16::MAX as usize + 1;
 type PortArray<T> = [RCUPort<T>; PORT_COUT];
 
@@ -27,14 +27,14 @@ fn get_port<'a, T: Connection>(
     }
 }
 
-fn alloc_port_array<T: Connection>() -> Box<[RCUPort<T>; PORT_COUT]> {
+fn alloc_port_array<T: Connection>() -> Box<PortArray<T>> {
     // RCUPort<T> is valid when zeroed:
     //   - AtomicPtr is valid as null
     //   - Mutex<()> / RwSpinLock uses i32 which is valid at 0
     // alloc_zeroed is used to allocate directly on the heap.
-    let layout = core::alloc::Layout::new::<[RCUPort<T>; PORT_COUT]>();
+    let layout = core::alloc::Layout::new::<PortArray<T>>();
     unsafe {
-        let ptr = alloc::alloc::alloc_zeroed(layout) as *mut [RCUPort<T>; PORT_COUT];
+        let ptr = alloc::alloc::alloc_zeroed(layout) as *mut PortArray<T>;
         Box::from_raw(ptr)
     }
 }
