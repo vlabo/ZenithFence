@@ -9,10 +9,14 @@ use crate::mpsc_queue::MpscQueue;
 use crate::rcu_port::{ConnectionArray, RCUPort};
 use smoltcp::wire::IpProtocol;
 
+// 0-65535 must be valid ports. 0 is not a valid port number but its kept for feature proofing for special cases.
+const PORT_COUT: usize = u16::MAX as usize + 1;
+type PortArray<T> = [RCUPort<T>; PORT_COUT];
+
 // Selects the correct per-port slot from the tcp/udp arrays.
 fn get_port<'a, T: Connection>(
-    tcp: &'a [RCUPort<T>; u16::MAX as usize],
-    udp: &'a [RCUPort<T>; u16::MAX as usize],
+    tcp: &'a PortArray<T>,
+    udp: &'a PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
 ) -> Option<&'a RCUPort<T>> {
@@ -23,21 +27,21 @@ fn get_port<'a, T: Connection>(
     }
 }
 
-fn alloc_port_array<T: Connection>() -> Box<[RCUPort<T>; u16::MAX as usize]> {
+fn alloc_port_array<T: Connection>() -> Box<[RCUPort<T>; PORT_COUT]> {
     // RCUPort<T> is valid when zeroed:
     //   - AtomicPtr is valid as null
     //   - Mutex<()> / RwSpinLock uses i32 which is valid at 0
     // alloc_zeroed is used to allocate directly on the heap.
-    let layout = core::alloc::Layout::new::<[RCUPort<T>; u16::MAX as usize]>();
+    let layout = core::alloc::Layout::new::<[RCUPort<T>; PORT_COUT]>();
     unsafe {
-        let ptr = alloc::alloc::alloc_zeroed(layout) as *mut [RCUPort<T>; u16::MAX as usize];
+        let ptr = alloc::alloc::alloc_zeroed(layout) as *mut [RCUPort<T>; PORT_COUT];
         Box::from_raw(ptr)
     }
 }
 
 fn ports_clear<T: Connection>(
-    tcp: &[RCUPort<T>; u16::MAX as usize],
-    udp: &[RCUPort<T>; u16::MAX as usize],
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
     queue: &MpscQueue<ConnectionArray<T>>,
 ) {
     // Free all tcp connections
@@ -57,8 +61,8 @@ fn ports_clear<T: Connection>(
 
 // get_connection generic function for getting a connection.
 fn get_connection<T: Connection>(
-    tcp: &[RCUPort<T>; u16::MAX as usize],
-    udp: &[RCUPort<T>; u16::MAX as usize],
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
     key: &Key,
 ) -> Option<Arc<T>> {
     // Get the connection array port.
@@ -76,11 +80,7 @@ fn get_connection<T: Connection>(
 }
 
 // ports_walk generic function for waling over all connections.
-fn ports_walk<T: Connection, F: FnMut(&T)>(
-    tcp: &[RCUPort<T>; u16::MAX as usize],
-    udp: &[RCUPort<T>; u16::MAX as usize],
-    mut iter: F,
-) {
+fn ports_walk<T: Connection, F: FnMut(&T)>(tcp: &PortArray<T>, udp: &PortArray<T>, mut iter: F) {
     for port in tcp.iter().chain(udp.iter()) {
         let guard = port.read();
         if let Some(snap) = guard.get() {
@@ -92,8 +92,8 @@ fn ports_walk<T: Connection, F: FnMut(&T)>(
 }
 
 fn ports_clean_ended<T: Connection>(
-    tcp: &[RCUPort<T>; u16::MAX as usize],
-    udp: &[RCUPort<T>; u16::MAX as usize],
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
     removed_connections: &mut Vec<Arc<T>>,
     queue: &MpscQueue<ConnectionArray<T>>,
 ) {
@@ -192,10 +192,10 @@ fn ports_clean_ended<T: Connection>(
 // ConnectionCache holds the state of all active connections.
 pub struct ConnectionCache {
     // Connection states
-    tcp_v4: Box<[RCUPort<ConnectionV4>; u16::MAX as usize]>,
-    udp_v4: Box<[RCUPort<ConnectionV4>; u16::MAX as usize]>,
-    tcp_v6: Box<[RCUPort<ConnectionV6>; u16::MAX as usize]>,
-    udp_v6: Box<[RCUPort<ConnectionV6>; u16::MAX as usize]>,
+    tcp_v4: Box<PortArray<ConnectionV4>>,
+    udp_v4: Box<PortArray<ConnectionV4>>,
+    tcp_v6: Box<PortArray<ConnectionV6>>,
+    udp_v6: Box<PortArray<ConnectionV6>>,
 
     // Holds ended connection that need to be send as an event to user space.
     tmp_ended_connections_buffer_v4: Vec<Arc<ConnectionV4>>,
