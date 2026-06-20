@@ -254,7 +254,7 @@ use std::fs::File;
 use std::io::Write;
 
 #[cfg(test)]
-use rand::seq::SliceRandom;
+use rand::prelude::IndexedRandom;
 
 #[test]
 fn generate_test_info_file() -> Result<(), std::io::Error> {
@@ -271,7 +271,7 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
     ];
 
     let mut selected: Vec<InfoType> = Vec::with_capacity(1000);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..selected.capacity() {
         selected.push(enums.choose(&mut rng).unwrap().clone());
     }
