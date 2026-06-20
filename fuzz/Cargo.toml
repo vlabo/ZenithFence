@@ -1,0 +1,81 @@
+[package]
+name = "driver-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# cargo-fuzz / libFuzzer harness for the ZenithFence driver. This crate is the
+# build root when fuzzing, so its profiles win and the driver's `panic = "abort"`
+# is irrelevant here. It depends on `driver` with the `mock` feature so the
+# packet-handling code links against the host mock_wdk (no kernel).
+#
+# Requires a nightly toolchain + `cargo install cargo-fuzz`. Most reliable on
+# Linux/WSL (libFuzzer + AddressSanitizer). Run with: `just fuzz <target> <secs>`.
+
+[package.metadata]
+cargo-fuzz = true
+
+# Shared fuzz-target logic, used by BOTH the libFuzzer targets (Linux) and the
+# `replay` binary (runs on Windows). Keeps one source of truth.
+[lib]
+name = "driver_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+smoltcp = { version = "0.12", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
+protocol = { path = "../protocol" }
+
+[dependencies.driver]
+path = "../driver"
+default-features = false
+features = ["mock"]
+
+# Keep symbols/line info for good ASAN reports.
+[profile.release]
+debug = 1
+
+# Windows-runnable replay / smoke runner (has a real main; no libFuzzer).
+# `cargo run --bin replay -- <target> [files...]`
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_key_v4"
+path = "fuzz_targets/packet_key_v4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_key_v6"
+path = "fuzz_targets/packet_key_v6.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_redirect"
+path = "fuzz_targets/packet_redirect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "device_write"
+path = "fuzz_targets/device_write.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protocol_command"
+path = "fuzz_targets/protocol_command.rs"
+test = false
+doc = false
+bench = false

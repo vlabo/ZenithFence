@@ -1,0 +1,37 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # `just test` runs:
+      #   - kext-interface-gen   (regenerate Go command fixture)
+      #   - test-protocol        (Rust protocol parsers + bounds regression tests)
+      #   - test-kext-interface  (Go <-> Rust differential on the .bin fixtures)
+      #   - test-driver          (host property tests against mock_wdk)
+      # None of these need the WDK / a kernel.
+      - name: Run tests
+        run: just test

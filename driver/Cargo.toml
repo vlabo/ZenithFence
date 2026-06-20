@@ -8,7 +8,10 @@ edition = "2021"
 [lib]
 name = "driver"
 path = "src/lib.rs"
-crate-type = ["staticlib"]
+# "rlib" is added so the fuzz/ crate can depend on `driver` as a normal Rust
+# library. It is harmless for the production build: the WDK link step consumes
+# the `staticlib` output (driver.lib); the extra rlib is ignored.
+crate-type = ["staticlib", "rlib"]
 
 [profile.dev]
 panic = "abort"
@@ -16,16 +19,29 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
+[features]
+# Production build (default): link the real kernel `wdk` + windows-sys.
+default = ["real_wdk"]
+real_wdk = ["dep:wdk", "dep:windows-sys"]
+# Host fuzz/test build: link `mock_wdk` instead (see src/lib.rs extern crate rename).
+# Build with: cargo build --no-default-features --features mock
+mock = ["dep:mock_wdk"]
+
 [dependencies]
-wdk = { path = "../wdk" }
+wdk = { path = "../wdk", optional = true }
+mock_wdk = { path = "../mock_wdk", optional = true }
 protocol = { path = "../protocol" }
 num = { version = "0.4", default-features = false }
 num-derive = { version = "0.4", default-features = false }
 num-traits = { version = "0.2", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
 
+[dev-dependencies]
+proptest = "1"
+
 # WARNING: Do not update. The version was choosen for a reason. See wdk/README.md for more detiels.
 [dependencies.windows-sys]
 git = "https://github.com/microsoft/windows-rs"
 rev = "41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
+optional = true
 features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Security", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_WindowsFilteringPlatform"]

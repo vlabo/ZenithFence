@@ -1,0 +1,51 @@
+name: Nightly fuzz
+
+on:
+  schedule:
+    # 03:00 UTC every day
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Seconds to run each target
+        default: "300"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - packet_key_v4
+          - packet_key_v6
+          - packet_redirect
+          - device_write
+          - protocol_command
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ github.event.inputs.duration || '300' }}
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

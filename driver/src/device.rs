@@ -133,7 +133,7 @@ impl Device {
         let mut buffer = write_request.get_buffer();
         let command = protocol::command::parse_type(buffer);
         let Some(command) = command else {
-            err!("Unknown command number: {}", buffer[0]);
+            err!("unknown or empty command ({} bytes)", buffer.len());
             return;
         };
 
@@ -148,7 +148,10 @@ impl Device {
                 self.shutdown();
             }
             CommandType::Verdict => {
-                let verdict = protocol::command::parse_verdict(buffer);
+                let Some(verdict) = protocol::command::parse_verdict(buffer) else {
+                    err!("verdict command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
@@ -191,7 +194,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV4 => {
-                let update = protocol::command::parse_update_v4(buffer);
+                let Some(update) = protocol::command::parse_update_v4(buffer) else {
+                    err!("updateV4 command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -213,7 +219,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV6 => {
-                let update = protocol::command::parse_update_v6(buffer);
+                let Some(update) = protocol::command::parse_update_v6(buffer) else {
+                    err!("updateV6 command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -242,7 +251,10 @@ impl Device {
                 }
             }
             CommandType::GetConnectionsUpdate => {
-                let update = protocol::command::parse_update_info(buffer);
+                let Some(update) = protocol::command::parse_update_info(buffer) else {
+                    err!("getConnectionsUpdate command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 let timestamp = update.timestamp;
                 wdk::dbg!("GetConnectionsUpdate command");
 
@@ -470,5 +482,49 @@ impl Drop for Device {
     fn drop(&mut self) {
         _ = logger::flush();
         // dbg!("Device Context drop called.");
+    }
+}
+
+#[cfg(all(test, feature = "mock"))]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use wdk::driver::Driver;
+    use wdk::irp_helpers::WriteRequest;
+
+    fn mock_device() -> Device {
+        Device::new(&Driver::mock()).expect("mock device construction")
+    }
+
+    fn write(device: &mut Device, bytes: &[u8]) {
+        let mut wr = WriteRequest::from_bytes(bytes);
+        device.write(&mut wr);
+    }
+
+    // Regression for the two confirmed command-channel bugs: an empty buffer
+    // (used to panic on `bytes[0]`) and short command tails (used to OOB-read
+    // `size_of::<T>()` bytes in `as_type`). Must now be handled without panicking.
+    #[test]
+    fn device_write_handles_empty_and_short_commands() {
+        let mut device = mock_device();
+        write(&mut device, &[]);
+        for cmd in 0u8..=8 {
+            write(&mut device, &[cmd]);
+            write(&mut device, &[cmd, 0]);
+            write(&mut device, &[cmd, 0, 0, 0]);
+        }
+        for cmd in [9u8, 50, 200, 255] {
+            write(&mut device, &[cmd, 1, 2, 3]);
+        }
+    }
+
+    proptest! {
+        // The user-space command channel must never panic on arbitrary input.
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn device_write_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..96)) {
+            let mut device = mock_device();
+            write(&mut device, &bytes);
+        }
     }
 }

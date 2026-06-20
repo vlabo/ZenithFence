@@ -1,0 +1,16 @@
+[package]
+name = "mock_wdk"
+version = "0.1.0"
+edition = "2021"
+
+# A pure-safe-std, windows-sys-free reimplementation of the subset of the `wdk`
+# crate's public API that the `driver` crate uses. It is linked into the driver
+# in place of the real `wdk` (via `extern crate mock_wdk as wdk`) when the
+# driver is built with `--features mock`, so the packet-handling logic can be
+# fuzz/property tested in user space. NOT part of the production driver build.
+
+[lib]
+name = "mock_wdk"
+path = "src/lib.rs"
+
+[dependencies]

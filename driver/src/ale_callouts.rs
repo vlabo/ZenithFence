@@ -587,3 +587,173 @@ pub fn ale_resource_monitor(data: CalloutData) {
         _ => {}
     }
 }
+
+#[cfg(all(test, feature = "mock"))]
+mod tests {
+    use super::ale_layer_accept_v4;
+    use crate::connection::{Key, Verdict};
+    use crate::device::Device;
+    use crate::entry::{clear_device, get_device, set_device};
+    use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address};
+    use std::sync::Mutex;
+    use wdk::driver::Driver;
+    use wdk::filter_engine::callout_data::{CalloutData, Value};
+    use wdk::filter_engine::classify::{ClassifyOut, FWP_ACTION_BLOCK, FWP_ACTION_PERMIT};
+    use wdk::filter_engine::layer::{FieldsAleAuthRecvAcceptV4, FieldsInboundIppacketV4, Layer};
+    use wdk::filter_engine::net_buffer::NET_BUFFER_LIST;
+    use wdk::irp_helpers::WriteRequest;
+
+    // Callouts reach the device through the global `static mut DEVICE`, so tests
+    // that install a device must not run concurrently.
+    static DEVICE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn install_device() {
+        let device = Box::new(Device::new(&Driver::mock()).expect("mock device"));
+        set_device(Box::into_raw(device));
+    }
+
+    fn uninstall_device() {
+        let ptr = clear_device();
+        if !ptr.is_null() {
+            unsafe { drop(Box::from_raw(ptr)) };
+        }
+    }
+
+    fn ale_recv_v4_values(
+        proto: u8,
+        local_ip: [u8; 4],
+        local_port: u16,
+        remote_ip: [u8; 4],
+        remote_port: u16,
+    ) -> Vec<Value> {
+        type F = FieldsAleAuthRecvAcceptV4;
+        let mut v = vec![Value::U32(0); F::Max as usize];
+        v[F::IpProtocol as usize] = Value::U8(proto);
+        v[F::IpLocalAddress as usize] = Value::U32(u32::from_be_bytes(local_ip));
+        v[F::IpLocalPort as usize] = Value::U16(local_port);
+        v[F::IpRemoteAddress as usize] = Value::U32(u32::from_be_bytes(remote_ip));
+        v[F::IpRemotePort as usize] = Value::U16(remote_port);
+        v[F::Flags as usize] = Value::U32(0);
+        v
+    }
+
+    fn inbound_ippacket_v4_values() -> Vec<Value> {
+        vec![Value::U32(0); FieldsInboundIppacketV4::Max as usize]
+    }
+
+    // Minimal IPv4 + TCP header carrying the given addresses/ports. Only the
+    // fields `get_key_from_nbl_v4` reads are populated.
+    fn ipv4_tcp_packet(src: [u8; 4], dst: [u8; 4], src_port: u16, dst_port: u16) -> Vec<u8> {
+        let mut p = vec![0u8; 40];
+        p[0] = 0x45; // version 4, IHL 5
+        p[9] = 6; // TCP
+        p[12..16].copy_from_slice(&src);
+        p[16..20].copy_from_slice(&dst);
+        p[20..22].copy_from_slice(&src_port.to_be_bytes());
+        p[22..24].copy_from_slice(&dst_port.to_be_bytes());
+        p
+    }
+
+    fn ale_key() -> Key {
+        Key {
+            protocol: IpProtocol::Tcp,
+            local_address: IpAddress::Ipv4(Ipv4Address::new(10, 0, 0, 5)),
+            local_port: 8080,
+            remote_address: IpAddress::Ipv4(Ipv4Address::new(93, 184, 216, 34)),
+            remote_port: 12345,
+        }
+    }
+
+    // Full pipeline: inbound ALE accept (pends) -> user-space PermanentAccept
+    // verdict -> packet layer permits the matching flow. Asserts the verdict set
+    // via the command channel is the one observed at the packet layer.
+    #[test]
+    fn ale_accept_verdict_packet_pipeline() {
+        let _g = DEVICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_device();
+
+        // 1. New inbound connection -> block + absorb, pended for user space.
+        let mut co = ClassifyOut::new();
+        let mut ale_nbl = NET_BUFFER_LIST::new_box(vec![0u8; 60], 40);
+        let data = CalloutData::mock(
+            Layer::AleAuthRecvAcceptV4,
+            ale_recv_v4_values(6, [10, 0, 0, 5], 8080, [93, 184, 216, 34], 12345),
+            Some(4321),
+            &mut co as *mut _,
+            ale_nbl.as_mut() as *mut _,
+            20,
+            20,
+        );
+        ale_layer_accept_v4(data);
+
+        assert_eq!(co.action(), FWP_ACTION_BLOCK);
+        assert!(co.is_absorb());
+        {
+            let device = get_device().unwrap();
+            assert_eq!(
+                device.connection_cache.get_verdict(&ale_key()).map(|v| v as u8),
+                Some(Verdict::Undecided as u8),
+            );
+            assert_eq!(device.packet_cache.get_entries_count(), 1);
+        }
+
+        // 2. User space returns PermanentAccept for packet id 1.
+        let mut cmd = vec![1u8]; // CommandType::Verdict
+        cmd.extend_from_slice(&1u64.to_le_bytes());
+        cmd.push(Verdict::PermanentAccept as u8);
+        {
+            let device = get_device().unwrap();
+            let mut wr = WriteRequest::from_bytes(&cmd);
+            device.write(&mut wr);
+            assert_eq!(
+                device.connection_cache.get_verdict(&ale_key()).map(|v| v as u8),
+                Some(Verdict::PermanentAccept as u8),
+            );
+            assert_eq!(device.packet_cache.get_entries_count(), 0);
+        }
+
+        // 3. Packet layer sees the same flow and permits it.
+        let mut co2 = ClassifyOut::new();
+        let mut pkt_nbl = NET_BUFFER_LIST::new_box(
+            ipv4_tcp_packet([93, 184, 216, 34], [10, 0, 0, 5], 12345, 8080),
+            20,
+        );
+        let data2 = CalloutData::mock(
+            Layer::InboundIppacketV4,
+            inbound_ippacket_v4_values(),
+            None,
+            &mut co2 as *mut _,
+            pkt_nbl.as_mut() as *mut _,
+            0,
+            0,
+        );
+        crate::packet_callouts::ip_packet_layer_inbound_v4(data2);
+        assert_eq!(co2.action(), FWP_ACTION_PERMIT);
+
+        uninstall_device();
+    }
+
+    // The ALE accept callout must not panic for any protocol value, and must
+    // always set some action.
+    #[test]
+    fn ale_accept_never_panics_across_protocols() {
+        let _g = DEVICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_device();
+        for proto in [6u8, 17, 1, 0, 255] {
+            let mut co = ClassifyOut::new();
+            let mut nbl = NET_BUFFER_LIST::new_box(vec![0u8; 60], 40);
+            let data = CalloutData::mock(
+                Layer::AleAuthRecvAcceptV4,
+                ale_recv_v4_values(proto, [10, 0, 0, 9], 1111, [1, 2, 3, 4], 2222),
+                Some(7),
+                &mut co as *mut _,
+                nbl.as_mut() as *mut _,
+                20,
+                20,
+            );
+            ale_layer_accept_v4(data);
+            assert_ne!(co.action(), 0);
+        }
+        uninstall_device();
+    }
+}
