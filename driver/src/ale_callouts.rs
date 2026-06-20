@@ -5,6 +5,7 @@ use crate::device::{Device, Packet};
 
 use crate::id_cache;
 use crate::info;
+use protocol::info::{ConnectionEndV4, ConnectionEndV6};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{
@@ -392,19 +393,19 @@ pub fn endpoint_closure_v4(data: CalloutData) {
         };
 
         if let Some(conn) = device.connection_cache.end_v4(key) {
-            let info = protocol::info::connection_end_event_v4_info(
-                data.get_process_id().unwrap_or(0),
-                conn.get_direction() as u8,
-                u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                conn.local_address.octets(),
-                conn.remote_address.octets(),
-                conn.local_port,
-                conn.remote_port,
-                conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-            );
+            let info = protocol::info::connection_end_v4(ConnectionEndV4 {
+                process_id: data.get_process_id().unwrap_or(0),
+                direction: conn.get_direction() as u8,
+                protocol: u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
+                local_ip: conn.local_address.octets(),
+                remote_ip: conn.remote_address.octets(),
+                local_port: conn.local_port,
+                remote_port: conn.remote_port,
+                rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+            });
             let _ = device.event_queue.push(info);
         }
     } else {
@@ -436,19 +437,19 @@ pub fn endpoint_closure_v6(data: CalloutData) {
             };
 
             if let Some(conn) = device.connection_cache.end_v6(key) {
-                let info = protocol::info::connection_end_event_v6_info(
-                    data.get_process_id().unwrap_or(0),
-                    conn.get_direction() as u8,
-                    u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                    conn.local_address.octets(),
-                    conn.remote_address.octets(),
-                    conn.local_port,
-                    conn.remote_port,
-                    conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                );
+                let info = protocol::info::connection_end_v6(ConnectionEndV6 {
+                    process_id: data.get_process_id().unwrap_or(0),
+                    direction: conn.get_direction() as u8,
+                    protocol: u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
+                    local_ip: conn.local_address.octets(),
+                    remote_ip: conn.remote_address.octets(),
+                    local_port: conn.local_port,
+                    remote_port: conn.remote_port,
+                    rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                    rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                    tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                    tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                });
                 let _ = device.event_queue.push(info);
             }
         }
@@ -474,19 +475,19 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = protocol::info::connection_end_event_v4_info(
+                    let info = protocol::info::connection_end_v4(ConnectionEndV4 {
                         process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                        direction: conn.get_direction() as u8,
+                        protocol: data.get_value_u8(Fields::IpProtocol as usize),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -505,19 +506,19 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = protocol::info::connection_end_event_v6_info(
+                    let info = protocol::info::connection_end_v6(ConnectionEndV6 {
                         process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                        direction: conn.get_direction() as u8,
+                        protocol: data.get_value_u8(Fields::IpProtocol as usize),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -536,19 +537,19 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = protocol::info::connection_end_event_v4_info(
+                    let info = protocol::info::connection_end_v4(ConnectionEndV4 {
                         process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                        direction: conn.get_direction() as u8,
+                        protocol: data.get_value_u8(Fields::IpProtocol as usize),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     let _ = device.event_queue.push(info);
                 }
             }
@@ -567,19 +568,19 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     process_id,
                 );
                 for conn in conns {
-                    let info = protocol::info::connection_end_event_v6_info(
+                    let info = protocol::info::connection_end_v6(ConnectionEndV6 {
                         process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                        direction: conn.get_direction() as u8,
+                        protocol: data.get_value_u8(Fields::IpProtocol as usize),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     let _ = device.event_queue.push(info);
                 }
             }

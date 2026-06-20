@@ -2,7 +2,10 @@ use core::sync::atomic::Ordering;
 
 use alloc::string::String;
 use num_traits::FromPrimitive;
-use protocol::{command::CommandType, info::Info};
+use protocol::{
+    command::CommandType,
+    info::{ConnectionEndV4, ConnectionEndV6, ConnectionUpdateV4, ConnectionUpdateV6, Info},
+};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::{
     driver::Driver,
@@ -148,7 +151,10 @@ impl Device {
                 self.shutdown();
             }
             CommandType::Verdict => {
-                let verdict = protocol::command::parse_verdict(buffer);
+                let Some(verdict) = protocol::command::parse_verdict(buffer) else {
+                    err!("malformed Verdict command");
+                    return;
+                };
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
@@ -191,7 +197,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV4 => {
-                let update = protocol::command::parse_update_v4(buffer);
+                let Some(update) = protocol::command::parse_update_v4(buffer) else {
+                    err!("malformed UpdateV4 command");
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -213,7 +222,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV6 => {
-                let update = protocol::command::parse_update_v6(buffer);
+                let Some(update) = protocol::command::parse_update_v6(buffer) else {
+                    err!("malformed UpdateV6 command");
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -242,7 +254,10 @@ impl Device {
                 }
             }
             CommandType::GetConnectionsUpdate => {
-                let update = protocol::command::parse_update_info(buffer);
+                let Some(update) = protocol::command::parse_update_info(buffer) else {
+                    err!("malformed GetConnectionsUpdate command");
+                    return;
+                };
                 let timestamp = update.timestamp;
                 wdk::dbg!("GetConnectionsUpdate command");
 
@@ -252,17 +267,17 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v4_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = protocol::info::connection_update_v4(ConnectionUpdateV4 {
+                        protocol: conn.protocol.into(),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     _ = self.event_queue.push(info);
                 };
 
@@ -272,17 +287,17 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v6_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = protocol::info::connection_update_v6(ConnectionUpdateV6 {
+                        protocol: conn.protocol.into(),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     _ = self.event_queue.push(info);
                 };
 
@@ -293,7 +308,7 @@ impl Device {
 
                 _ = self
                     .event_queue
-                    .push(protocol::info::connection_update_end_info());
+                    .push(protocol::info::connection_update_end());
             }
             CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");
@@ -389,19 +404,19 @@ impl Device {
 
                 // Process ended ipv4 connections
                 for conn in conn_v4.iter() {
-                    let info = protocol::info::connection_end_event_v4_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = protocol::info::connection_end_v4(ConnectionEndV4 {
+                        process_id: conn.get_process_id(),
+                        direction: conn.get_direction() as u8,
+                        protocol: conn.protocol.into(),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     _ = self.event_queue.push(info);
                 }
 
@@ -409,19 +424,19 @@ impl Device {
 
                 // Process ended ipv6 connections
                 for conn in conn_v6.iter() {
-                    let info = protocol::info::connection_end_event_v6_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = protocol::info::connection_end_v6(ConnectionEndV6 {
+                        process_id: conn.get_process_id(),
+                        direction: conn.get_direction() as u8,
+                        protocol: conn.protocol.into(),
+                        local_ip: conn.local_address.octets(),
+                        remote_ip: conn.remote_address.octets(),
+                        local_port: conn.local_port,
+                        remote_port: conn.remote_port,
+                        rx_bytes: conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                        rx_packets: conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                        tx_bytes: conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                        tx_packets: conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                    });
                     _ = self.event_queue.push(info);
                 }
                 conn_v6.clear();

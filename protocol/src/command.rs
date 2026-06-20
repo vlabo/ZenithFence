@@ -2,6 +2,7 @@
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 #[repr(u8)]
 #[derive(Clone, Copy, FromPrimitive)]
@@ -25,14 +26,14 @@ pub struct Command {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, FromBytes, KnownLayout, Immutable, Unaligned)]
 pub struct Verdict {
     pub id: u64,
     pub verdict: u8,
 }
 
 #[repr(C, packed)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, FromBytes, KnownLayout, Immutable, Unaligned)]
 pub struct UpdateV4 {
     pub protocol: u8,
     pub local_address: [u8; 4],
@@ -43,7 +44,7 @@ pub struct UpdateV4 {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, FromBytes, KnownLayout, Immutable, Unaligned)]
 pub struct UpdateV6 {
     pub protocol: u8,
     pub local_address: [u8; 16],
@@ -54,7 +55,7 @@ pub struct UpdateV6 {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, FromBytes, KnownLayout, Immutable, Unaligned)]
 pub struct ConnectionsUpdate {
     pub timestamp: u64,
 }
@@ -63,26 +64,22 @@ pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
     FromPrimitive::from_u8(bytes[0])
 }
 
-pub fn parse_verdict(bytes: &[u8]) -> &Verdict {
-    as_type(bytes)
+pub fn parse_verdict(bytes: &[u8]) -> Option<&Verdict> {
+    Verdict::ref_from_prefix(bytes).ok().map(|(value, _)| value)
 }
 
-pub fn parse_update_v4(bytes: &[u8]) -> &UpdateV4 {
-    as_type(bytes)
+pub fn parse_update_v4(bytes: &[u8]) -> Option<&UpdateV4> {
+    UpdateV4::ref_from_prefix(bytes).ok().map(|(value, _)| value)
 }
 
-pub fn parse_update_v6(bytes: &[u8]) -> &UpdateV6 {
-    as_type(bytes)
+pub fn parse_update_v6(bytes: &[u8]) -> Option<&UpdateV6> {
+    UpdateV6::ref_from_prefix(bytes).ok().map(|(value, _)| value)
 }
 
-pub fn parse_update_info(bytes: &[u8]) -> &ConnectionsUpdate {
-    as_type(bytes)
-}
-
-fn as_type<T>(bytes: &[u8]) -> &T {
-    let ptr: *const u8 = &bytes[0];
-    let t_ptr: *const T = ptr as _;
-    unsafe { t_ptr.as_ref().unwrap() }
+pub fn parse_update_info(bytes: &[u8]) -> Option<&ConnectionsUpdate> {
+    ConnectionsUpdate::ref_from_prefix(bytes)
+        .ok()
+        .map(|(value, _)| value)
 }
 
 #[cfg(test)]
@@ -113,7 +110,7 @@ fn test_go_command_file() {
                         panic!("unexpected bytes count")
                     }
 
-                    assert_eq!(parse_verdict(&buf), &Verdict { id: 1, verdict: 2 })
+                    assert_eq!(parse_verdict(&buf).unwrap(), &Verdict { id: 1, verdict: 2 })
                 }
                 CommandType::UpdateV4 => {
                     let mut buf = [0; size_of::<UpdateV4>()];
@@ -123,7 +120,7 @@ fn test_go_command_file() {
                     }
 
                     assert_eq!(
-                        parse_update_v4(&buf),
+                        parse_update_v4(&buf).unwrap(),
                         &UpdateV4 {
                             protocol: 1,
                             local_address: [1, 2, 3, 4],
@@ -142,7 +139,7 @@ fn test_go_command_file() {
                     }
 
                     assert_eq!(
-                        parse_update_v6(&buf),
+                        parse_update_v6(&buf).unwrap(),
                         &UpdateV6 {
                             protocol: 1,
                             local_address: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -167,7 +164,7 @@ fn test_go_command_file() {
                     }
 
                     assert_eq!(
-                        parse_update_info(&buf),
+                        parse_update_info(&buf).unwrap(),
                         &ConnectionsUpdate {
                             timestamp: 1234567890
                         }

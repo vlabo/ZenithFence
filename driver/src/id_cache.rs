@@ -1,7 +1,7 @@
 use core::mem;
 
 use alloc::collections::VecDeque;
-use protocol::info::Info;
+use protocol::info::{ConnectionV4, ConnectionV6, Info};
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
 
@@ -98,30 +98,34 @@ pub fn build_loopback_info(key: &Key, process_id: u64, direction: Direction) -> 
 
     match (key.local_address, key.remote_address) {
         (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
-            Some(protocol::info::connection_info_v6(
-                PACKET_MISSING_ID,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.octets(),
-                remote_ip.octets(),
-                local_port,
-                remote_port,
-                4, // Transport layer
+            Some(protocol::info::connection_v6(
+                ConnectionV6 {
+                    id: PACKET_MISSING_ID,
+                    process_id,
+                    direction: direction as u8,
+                    protocol: u8::from(key.protocol),
+                    local_ip: local_ip.octets(),
+                    remote_ip: remote_ip.octets(),
+                    local_port,
+                    remote_port,
+                    payload_layer: 4, // Transport layer
+                },
                 &[],
             ))
         }
         (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
-            Some(protocol::info::connection_info_v4(
-                PACKET_MISSING_ID,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.octets(),
-                remote_ip.octets(),
-                local_port,
-                remote_port,
-                4, // Transport layer
+            Some(protocol::info::connection_v4(
+                ConnectionV4 {
+                    id: PACKET_MISSING_ID,
+                    process_id,
+                    direction: direction as u8,
+                    protocol: u8::from(key.protocol),
+                    local_ip: local_ip.octets(),
+                    remote_ip: remote_ip.octets(),
+                    local_port,
+                    remote_port,
+                    payload_layer: 4, // Transport layer
+                },
                 &[],
             ))
         }
@@ -155,30 +159,34 @@ pub fn build_info(
 
     match (key.local_address, key.remote_address) {
         (IpAddress::Ipv6(local_ip), IpAddress::Ipv6(remote_ip)) if key.is_ipv6() => {
-            Some(protocol::info::connection_info_v6(
-                packet_id,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.octets(),
-                remote_ip.octets(),
-                local_port,
-                remote_port,
-                payload_layer,
+            Some(protocol::info::connection_v6(
+                ConnectionV6 {
+                    id: packet_id,
+                    process_id,
+                    direction: direction as u8,
+                    protocol: u8::from(key.protocol),
+                    local_ip: local_ip.octets(),
+                    remote_ip: remote_ip.octets(),
+                    local_port,
+                    remote_port,
+                    payload_layer,
+                },
                 payload,
             ))
         }
         (IpAddress::Ipv4(local_ip), IpAddress::Ipv4(remote_ip)) => {
-            Some(protocol::info::connection_info_v4(
-                packet_id,
-                process_id,
-                direction as u8,
-                u8::from(key.protocol),
-                local_ip.octets(),
-                remote_ip.octets(),
-                local_port,
-                remote_port,
-                payload_layer,
+            Some(protocol::info::connection_v4(
+                ConnectionV4 {
+                    id: packet_id,
+                    process_id,
+                    direction: direction as u8,
+                    protocol: u8::from(key.protocol),
+                    local_ip: local_ip.octets(),
+                    remote_ip: remote_ip.octets(),
+                    local_port,
+                    remote_port,
+                    payload_layer,
+                },
                 payload,
             ))
         }

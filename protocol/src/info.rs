@@ -1,4 +1,17 @@
 use alloc::vec::Vec;
+use zerocopy::{Immutable, IntoBytes};
+
+// Every message is sent on the wire as a frame:
+//
+//     [kind: u8][len: u32 LE][body ...]
+//
+// `body` is the packed bytes of one of the structs below. The two new-connection
+// variants append `[payload_len: u32 LE][payload ...]` after their fixed header.
+//
+// The structs are `#[repr(C, packed)]` and serialized via zerocopy's `as_bytes`,
+// which copies their in-memory representation verbatim. This is only equivalent to
+// the little-endian wire format because the driver is amd64-only (little-endian);
+// see the project README.
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
@@ -13,106 +26,142 @@ enum InfoType {
     ConnectionUpdateEnd = 7,
 }
 
-// Fallow this pattern when adding new packets: [InfoType: u8, data_size_in_bytes: u32, data: ...]
-
-trait PushBytes {
-    fn push(self, vec: &mut Vec<u8>);
+/// Fixed header of a new-connection event (IPv4). The captured packet payload is
+/// appended after this struct on the wire.
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionV4 {
+    pub id: u64,
+    pub process_id: u64,
+    pub direction: u8,
+    pub protocol: u8,
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub payload_layer: u8,
 }
 
-impl PushBytes for u8 {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.push(self);
-    }
+/// Fixed header of a new-connection event (IPv6). The captured packet payload is
+/// appended after this struct on the wire.
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionV6 {
+    pub id: u64,
+    pub process_id: u64,
+    pub direction: u8,
+    pub protocol: u8,
+    pub local_ip: [u8; 16],
+    pub remote_ip: [u8; 16],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub payload_layer: u8,
 }
 
-impl PushBytes for InfoType {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.push(self as u8);
-    }
+/// Connection-ended event (IPv4) carrying final byte/packet counters.
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionEndV4 {
+    pub process_id: u64,
+    pub direction: u8,
+    pub protocol: u8,
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
 }
 
-impl PushBytes for u16 {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&u16::to_le_bytes(self));
-    }
+/// Connection-ended event (IPv6) carrying final byte/packet counters.
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionEndV6 {
+    pub process_id: u64,
+    pub direction: u8,
+    pub protocol: u8,
+    pub local_ip: [u8; 16],
+    pub remote_ip: [u8; 16],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
 }
 
-impl PushBytes for u32 {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&u32::to_le_bytes(self));
-    }
+/// Periodic bandwidth update for a tracked connection (IPv4).
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionUpdateV4 {
+    pub protocol: u8,
+    pub local_ip: [u8; 4],
+    pub remote_ip: [u8; 4],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
 }
 
-impl PushBytes for u64 {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&u64::to_le_bytes(self));
-    }
+/// Periodic bandwidth update for a tracked connection (IPv6).
+#[repr(C, packed)]
+#[derive(IntoBytes, Immutable, Clone, Copy)]
+pub struct ConnectionUpdateV6 {
+    pub protocol: u8,
+    pub local_ip: [u8; 16],
+    pub remote_ip: [u8; 16],
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
 }
 
-impl PushBytes for usize {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&u64::to_le_bytes(self as u64));
-    }
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum Severity {
+    Trace = 1,
+    Debug = 2,
+    Info = 3,
+    Warning = 4,
+    Error = 5,
+    Critical = 6,
+    Disabled = 7,
 }
 
-impl PushBytes for [u8; 4] {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&self);
-    }
-}
-
-impl PushBytes for [u8; 16] {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(&self);
-    }
-}
-
-impl PushBytes for &[u8] {
-    fn push(self, vec: &mut Vec<u8>) {
-        vec.extend_from_slice(self);
-    }
-}
-
-macro_rules! push_bytes {
-    ($vec:expr,$value:expr) => {
-        PushBytes::push($value, $vec);
-    };
-}
-
-macro_rules! get_combined_size{
-    ($($a:expr),*)=>{{0 $(+core::mem::size_of_val(&$a))*}}
-}
-
+/// A framed, ready-to-send message: the `[kind][len][body]` bytes.
 pub struct Info(Vec<u8>);
 
 impl Info {
-    fn new(info_type: InfoType, size: usize) -> Self {
-        let mut vec = Vec::with_capacity(size + 5); // +1 for the info type +4 for the size.
-        push_bytes!(&mut vec, info_type);
-        push_bytes!(&mut vec, size as u32);
+    /// Writes the `[kind][len]` frame header followed by `body`.
+    fn framed(info_type: InfoType, body: &[u8]) -> Self {
+        let mut vec = Vec::with_capacity(5 + body.len());
+        vec.push(info_type as u8);
+        vec.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        vec.extend_from_slice(body);
         Self(vec)
     }
 
-    fn with_capacity(info_type: InfoType, capacity: usize) -> Self {
-        let mut vec = Vec::with_capacity(capacity + 5); // +1 for the info type + 4 for the size.
-        push_bytes!(&mut vec, info_type);
-        push_bytes!(&mut vec, 0 as u32);
-        Self(vec)
-    }
-
-    #[cfg(test)]
-    fn assert_size(&self) {
-        let size = u32::from_le_bytes([self.0[1], self.0[2], self.0[3], self.0[4]]) as usize;
-        assert_eq!(size, self.0.len() - 5);
-    }
-
+    /// Recomputes the `len` field from the current body length. Used while a log
+    /// line's text is streamed in via [`core::fmt::Write`].
     fn update_size(&mut self) {
         let size = (self.0.len() - 5) as u32;
         self.0[1..5].copy_from_slice(&size.to_le_bytes());
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        return self.0.as_slice();
+        self.0.as_slice()
+    }
+
+    #[cfg(test)]
+    fn assert_size(&self) {
+        let size = u32::from_le_bytes([self.0[1], self.0[2], self.0[3], self.0[4]]) as usize;
+        assert_eq!(size, self.0.len() - 5);
     }
 }
 
@@ -135,276 +184,67 @@ impl core::fmt::Write for Info {
     }
 }
 
-// connection_info_v4 creates an Info packet for a connection (IPv4).
-pub fn connection_info_v4(
-    id: u64,
-    process_id: u64,
-    direction: u8,
-    protocol: u8,
-    local_ip: [u8; 4],
-    remote_ip: [u8; 4],
-    local_port: u16,
-    remote_port: u16,
-    payload_layer: u8,
+/// Frames a fixed-size event struct.
+fn frame<T: IntoBytes + Immutable>(info_type: InfoType, event: &T) -> Info {
+    Info::framed(info_type, event.as_bytes())
+}
+
+/// Frames a connection event whose fixed `header` is followed by a variable
+/// `payload`. Body layout: `[header][payload_len: u32 LE][payload]`.
+fn frame_connection<T: IntoBytes + Immutable>(
+    info_type: InfoType,
+    header: &T,
     payload: &[u8],
 ) -> Info {
-    let mut size = get_combined_size!(
-        id,
-        process_id,
-        direction,
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        payload_layer,
-        payload.len() as u32
-    );
-    size += payload.len();
-
-    let mut info = Info::new(InfoType::ConnectionIpv4, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, id);
-    push_bytes!(vec, process_id);
-    push_bytes!(vec, direction);
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, payload_layer);
-    push_bytes!(vec, payload.len() as u32);
-    push_bytes!(vec, payload);
-    info
+    let header = header.as_bytes();
+    let body_len = header.len() + 4 + payload.len();
+    let mut vec = Vec::with_capacity(5 + body_len);
+    vec.push(info_type as u8);
+    vec.extend_from_slice(&(body_len as u32).to_le_bytes());
+    vec.extend_from_slice(header);
+    vec.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    vec.extend_from_slice(payload);
+    Info(vec)
 }
 
-// connection_info_v6 creates an Info packet for a connection (IPv6).
-pub fn connection_info_v6(
-    id: u64,
-    process_id: u64,
-    direction: u8,
-    protocol: u8,
-    local_ip: [u8; 16],
-    remote_ip: [u8; 16],
-    local_port: u16,
-    remote_port: u16,
-    payload_layer: u8,
-    payload: &[u8],
-) -> Info {
-    let mut size = get_combined_size!(
-        id,
-        process_id,
-        direction,
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        payload_layer,
-        payload.len() as u32
-    );
-    size += payload.len();
-    let mut info = Info::new(InfoType::ConnectionIpv6, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, id);
-    push_bytes!(vec, process_id);
-    push_bytes!(vec, direction);
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, payload_layer);
-    push_bytes!(vec, payload.len() as u32);
-    if !payload.is_empty() {
-        push_bytes!(vec, payload);
-    }
-    info
+pub fn connection_v4(conn: ConnectionV4, payload: &[u8]) -> Info {
+    frame_connection(InfoType::ConnectionIpv4, &conn, payload)
 }
 
-// connection_end_event_v4_info creates an Info packet for a connection end event (IPv4).
-pub fn connection_end_event_v4_info(
-    process_id: u64,
-    direction: u8,
-    protocol: u8,
-    local_ip: [u8; 4],
-    remote_ip: [u8; 4],
-    local_port: u16,
-    remote_port: u16,
-    rx_bytes: u64,
-    rx_packets: u64,
-    tx_bytes: u64,
-    tx_packets: u64,
-) -> Info {
-    let size = get_combined_size!(
-        process_id,
-        direction,
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        rx_bytes,
-        rx_packets,
-        tx_bytes,
-        tx_packets
-    );
-    let mut info = Info::new(InfoType::ConnectionEndEventV4, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, process_id);
-    push_bytes!(vec, direction);
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, rx_bytes);
-    push_bytes!(vec, rx_packets);
-    push_bytes!(vec, tx_bytes);
-    push_bytes!(vec, tx_packets);
-    info
+pub fn connection_v6(conn: ConnectionV6, payload: &[u8]) -> Info {
+    frame_connection(InfoType::ConnectionIpv6, &conn, payload)
 }
 
-// connection_end_event_v6_info creates an Info packet for a connection end event (IPv6).
-pub fn connection_end_event_v6_info(
-    process_id: u64,
-    direction: u8,
-    protocol: u8,
-    local_ip: [u8; 16],
-    remote_ip: [u8; 16],
-    local_port: u16,
-    remote_port: u16,
-    rx_bytes: u64,
-    rx_packets: u64,
-    tx_bytes: u64,
-    tx_packets: u64,
-) -> Info {
-    let size = get_combined_size!(
-        process_id,
-        direction,
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        rx_bytes,
-        rx_packets,
-        tx_bytes,
-        tx_packets
-    );
-    let mut info = Info::new(InfoType::ConnectionEndEventV6, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, process_id);
-    push_bytes!(vec, direction);
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, rx_bytes);
-    push_bytes!(vec, rx_packets);
-    push_bytes!(vec, tx_bytes);
-    push_bytes!(vec, tx_packets);
-    info
+pub fn connection_end_v4(event: ConnectionEndV4) -> Info {
+    frame(InfoType::ConnectionEndEventV4, &event)
 }
 
-// connection_update_event_v4_info creates an Info packet for a connection update event (IPv4).
-pub fn connection_update_event_v4_info(
-    protocol: u8,
-    local_ip: [u8; 4],
-    remote_ip: [u8; 4],
-    local_port: u16,
-    remote_port: u16,
-    rx_bytes: u64,
-    rx_packets: u64,
-    tx_bytes: u64,
-    tx_packets: u64,
-) -> Info {
-    let size = get_combined_size!(
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        rx_bytes,
-        rx_packets,
-        tx_bytes,
-        tx_packets
-    );
-    let mut info = Info::new(InfoType::ConnectionUpdateEventV4, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, rx_bytes);
-    push_bytes!(vec, rx_packets);
-    push_bytes!(vec, tx_bytes);
-    push_bytes!(vec, tx_packets);
-    info
+pub fn connection_end_v6(event: ConnectionEndV6) -> Info {
+    frame(InfoType::ConnectionEndEventV6, &event)
 }
 
-// connection_update_event_v6_info creates an Info packet for a connection update event (IPv6).
-pub fn connection_update_event_v6_info(
-    protocol: u8,
-    local_ip: [u8; 16],
-    remote_ip: [u8; 16],
-    local_port: u16,
-    remote_port: u16,
-    rx_bytes: u64,
-    rx_packets: u64,
-    tx_bytes: u64,
-    tx_packets: u64,
-) -> Info {
-    let size = get_combined_size!(
-        protocol,
-        local_ip,
-        remote_ip,
-        local_port,
-        remote_port,
-        rx_bytes,
-        rx_packets,
-        tx_bytes,
-        tx_packets
-    );
-    let mut info = Info::new(InfoType::ConnectionUpdateEventV6, size);
-    let vec = &mut info.0;
-    push_bytes!(vec, protocol);
-    push_bytes!(vec, local_ip);
-    push_bytes!(vec, remote_ip);
-    push_bytes!(vec, local_port);
-    push_bytes!(vec, remote_port);
-    push_bytes!(vec, rx_bytes);
-    push_bytes!(vec, rx_packets);
-    push_bytes!(vec, tx_bytes);
-    push_bytes!(vec, tx_packets);
-    info
+pub fn connection_update_v4(event: ConnectionUpdateV4) -> Info {
+    frame(InfoType::ConnectionUpdateEventV4, &event)
 }
 
-// connection_update_end_info signals the end of connection updates.
-pub fn connection_update_end_info() -> Info {
-    let info = Info::new(InfoType::ConnectionUpdateEnd, 0);
-    info
+pub fn connection_update_v6(event: ConnectionUpdateV6) -> Info {
+    frame(InfoType::ConnectionUpdateEventV6, &event)
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy)]
-pub enum Severity {
-    Trace = 1,
-    Debug = 2,
-    Info = 3,
-    Warning = 4,
-    Error = 5,
-    Critical = 6,
-    Disabled = 7,
+/// Signals the end of a batch of connection updates.
+pub fn connection_update_end() -> Info {
+    Info::framed(InfoType::ConnectionUpdateEnd, &[])
 }
 
-// log_line creates an Info packet for a log line.
+/// Starts a log-line message. The text is appended via [`core::fmt::Write`].
 pub fn log_line(severity: Severity, capacity: usize) -> Info {
-    let mut info = Info::with_capacity(InfoType::LogLine, capacity);
-    let vec = &mut info.0;
-    push_bytes!(vec, severity as u8);
+    // Body is `[severity: u8][text ...]`; the text is streamed in afterwards.
+    let mut vec = Vec::with_capacity(5 + 1 + capacity);
+    vec.push(InfoType::LogLine as u8);
+    vec.extend_from_slice(&0u32.to_le_bytes()); // len, patched as text is written
+    vec.push(severity as u8);
+    let mut info = Info(vec);
+    info.update_size();
     info
 }
 
@@ -446,103 +286,107 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                 info.0
             }
             InfoType::ConnectionIpv4 => {
-                let info = connection_info_v4(
-                    1,
-                    2,
-                    3,
-                    4,
-                    [1, 2, 3, 4],
-                    [2, 3, 4, 5],
-                    5,
-                    6,
-                    7,
+                let info = connection_v4(
+                    ConnectionV4 {
+                        id: 1,
+                        process_id: 2,
+                        direction: 3,
+                        protocol: 4,
+                        local_ip: [1, 2, 3, 4],
+                        remote_ip: [2, 3, 4, 5],
+                        local_port: 5,
+                        remote_port: 6,
+                        payload_layer: 7,
+                    },
                     &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                 );
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionIpv6 => {
-                let info = connection_info_v6(
-                    1,
-                    2,
-                    3,
-                    4,
-                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    5,
-                    6,
-                    7,
+                let info = connection_v6(
+                    ConnectionV6 {
+                        id: 1,
+                        process_id: 2,
+                        direction: 3,
+                        protocol: 4,
+                        local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                        remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                        local_port: 5,
+                        remote_port: 6,
+                        payload_layer: 7,
+                    },
                     &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                 );
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionEndEventV4 => {
-                let info = connection_end_event_v4_info(
-                    1,
-                    2,
-                    3,
-                    [1, 2, 3, 4],
-                    [2, 3, 4, 5],
-                    4,
-                    5,
-                    6,
-                    7,
-                    8,
-                    9,
-                );
+                let info = connection_end_v4(ConnectionEndV4 {
+                    process_id: 1,
+                    direction: 2,
+                    protocol: 3,
+                    local_ip: [1, 2, 3, 4],
+                    remote_ip: [2, 3, 4, 5],
+                    local_port: 4,
+                    remote_port: 5,
+                    rx_bytes: 6,
+                    rx_packets: 7,
+                    tx_bytes: 8,
+                    tx_packets: 9,
+                });
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionEndEventV6 => {
-                let info = connection_end_event_v6_info(
-                    1,
-                    2,
-                    3,
-                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    4,
-                    5,
-                    6,
-                    7,
-                    8,
-                    9,
-                );
+                let info = connection_end_v6(ConnectionEndV6 {
+                    process_id: 1,
+                    direction: 2,
+                    protocol: 3,
+                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    local_port: 4,
+                    remote_port: 5,
+                    rx_bytes: 6,
+                    rx_packets: 7,
+                    tx_bytes: 8,
+                    tx_packets: 9,
+                });
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionUpdateEventV4 => {
-                let info = connection_update_event_v4_info(
-                    1,
-                    [1, 2, 3, 4],
-                    [2, 3, 4, 5],
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7,
-                );
+                let info = connection_update_v4(ConnectionUpdateV4 {
+                    protocol: 1,
+                    local_ip: [1, 2, 3, 4],
+                    remote_ip: [2, 3, 4, 5],
+                    local_port: 2,
+                    remote_port: 3,
+                    rx_bytes: 4,
+                    rx_packets: 5,
+                    tx_bytes: 6,
+                    tx_packets: 7,
+                });
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionUpdateEventV6 => {
-                let info = connection_update_event_v6_info(
-                    1,
-                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7,
-                );
+                let info = connection_update_v6(ConnectionUpdateV6 {
+                    protocol: 1,
+                    local_ip: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                    remote_ip: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    local_port: 2,
+                    remote_port: 3,
+                    rx_bytes: 4,
+                    rx_packets: 5,
+                    tx_bytes: 6,
+                    tx_packets: 7,
+                });
                 info.assert_size();
                 info.0
             }
             InfoType::ConnectionUpdateEnd => {
-                let info = connection_update_end_info();
+                let info = connection_update_end();
                 info.assert_size();
                 info.0
             }
