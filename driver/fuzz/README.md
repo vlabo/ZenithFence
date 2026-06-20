@@ -28,7 +28,7 @@ just fuzz packet_redirect 120      # run target for 120s
 just fuzz-build                    # build all targets (CI smoke check)
 
 # or directly
-cd fuzz && cargo +nightly fuzz run device_write -- -max_total_time=60
+cd driver/fuzz && cargo +nightly fuzz run device_write -- -max_total_time=60
 ```
 
 ## Run on Windows (replay / smoke -- NOT coverage-guided)
@@ -47,7 +47,7 @@ just fuzz-replay device_write                 # random-input smoke loop
 just fuzz-replay protocol_command crash-abc   # replay a specific input file
 
 # or directly
-cd fuzz
+cd driver/fuzz
 cargo run --bin replay -- packet_redirect           # random smoke (env: ITERS, SEED)
 cargo run --bin replay -- device_write artifacts/x  # reproduce a Linux crash on Windows
 ```

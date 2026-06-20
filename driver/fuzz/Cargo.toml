@@ -25,10 +25,10 @@ path = "src/lib.rs"
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 smoltcp = { version = "0.12", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
-protocol = { path = "../protocol" }
+protocol = { path = "../../protocol" }
 
 [dependencies.driver]
-path = "../driver"
+path = ".."
 default-features = false
 features = ["mock"]
 
