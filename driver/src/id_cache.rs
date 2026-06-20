@@ -64,6 +64,16 @@ impl IdCache {
         return values.len();
     }
 
+    /// Fuzz helper: snapshot the ids currently pending in the cache. The callout
+    /// fuzz harness uses this to issue `Verdict` commands that reference a real
+    /// pended packet (instead of an id that would never match), so the full
+    /// ALE-pend -> user-verdict -> packet-layer pipeline actually links up.
+    #[cfg(feature = "mock")]
+    pub fn fuzz_live_ids(&self) -> alloc::vec::Vec<u64> {
+        let values = self.values.read_lock();
+        values.iter().map(|entry| entry.id).collect()
+    }
+
     pub fn pop_all(&mut self) -> VecDeque<Entry<(Key, Packet)>> {
         let mut new_values = VecDeque::with_capacity(1);
         let mut values = self.values.write_lock();

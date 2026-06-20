@@ -79,3 +79,10 @@ path = "fuzz_targets/protocol_command.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "callouts"
+path = "fuzz_targets/callouts.rs"
+test = false
+doc = false
+bench = false

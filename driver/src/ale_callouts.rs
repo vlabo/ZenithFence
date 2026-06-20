@@ -756,4 +756,42 @@ mod tests {
         }
         uninstall_device();
     }
+
+    // Sanity check that the `fuzz_api` callout harness actually links the
+    // pipeline (ALE pend -> verdict command -> packet layer reads the verdict)
+    // and that its Tier-3 oracle is not vacuous. Shares DEVICE_LOCK with the
+    // other global-device tests. Mirrors what the `callouts` fuzz target asserts.
+    #[test]
+    fn fuzz_api_pipeline_links_and_oracle_holds() {
+        use crate::fuzz_api;
+        let _g = DEVICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_device();
+
+        // PermanentAccept pipeline on pool connection 0 (v4 TCP).
+        let r = fuzz_api::run_ale_accept_v4(0, 0, false, 100, &[], false);
+        assert_ne!(r.action, 0, "ALE accept must set an action");
+        let ids = fuzz_api::live_ids();
+        assert_eq!(ids.len(), 1, "ALE accept must pend exactly one packet");
+        fuzz_api::device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
+        assert_eq!(
+            fuzz_api::verdict_for_v4(0, 0),
+            Some(Verdict::PermanentAccept as u8),
+            "verdict command must reach the connection cache",
+        );
+        let r = fuzz_api::run_packet_in_v4(0, 0, &[], false);
+        assert_eq!(r.action, FWP_ACTION_PERMIT, "PermanentAccept must permit");
+        assert!(!r.absorb);
+
+        // PermanentBlock pipeline on pool connection 1 (v4 UDP).
+        let r = fuzz_api::run_ale_accept_v4(1, 1, false, 100, &[], false);
+        assert_ne!(r.action, 0);
+        let ids = fuzz_api::live_ids();
+        assert_eq!(ids.len(), 1, "previous packet should have been consumed");
+        fuzz_api::device_write_verdict(ids[0], Verdict::PermanentBlock as u8);
+        let r = fuzz_api::run_packet_in_v4(1, 1, &[], false);
+        assert_eq!(r.action, FWP_ACTION_BLOCK, "PermanentBlock must block");
+        assert!(!r.absorb, "PermanentBlock must not absorb");
+
+        uninstall_device();
+    }
 }
