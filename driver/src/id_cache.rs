@@ -1,4 +1,5 @@
 use core::mem;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use alloc::collections::VecDeque;
 use protocol::info::Info;
@@ -16,29 +17,37 @@ pub struct Entry<T> {
 
 pub struct IdCache {
     values: Mutex<VecDeque<Entry<(Key, Packet)>>>,
-    next_id: u64,
+    // Interior-mutable so `push` can take `&self`: in the kernel multiple
+    // callouts pend packets concurrently (the device is reached through a
+    // shared global), so the cache must be safe under `&self`. The id is handed
+    // out with `fetch_add` *while holding the values lock* (see `push`).
+    next_id: AtomicU64,
 }
 
 impl IdCache {
     pub fn new() -> Self {
         Self {
             values: Mutex::new(VecDeque::with_capacity(1000)),
-            next_id: 1, // 0 is invalid id
+            next_id: AtomicU64::new(1), // 0 is invalid id
         }
     }
 
     pub fn push(
-        &mut self,
+        &self,
         value: (Key, Packet),
         process_id: u64,
         direction: Direction,
         ale_layer: bool,
     ) -> Option<Info> {
-        let id = self.next_id;
-        let info = build_info(&value.0, id, process_id, direction, &value.1, ale_layer);
+        // Assign the id and enqueue under the *same* lock. This keeps the deque
+        // ordered by id (pop_id relies on `binary_search_by_key`) and makes
+        // duplicate ids impossible even when two threads push concurrently --
+        // assigning the id before the lock would let the push order invert
+        // relative to id order and break the search invariant.
         let mut values = self.values.write_lock();
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst); // Assuming this will not overflow.
+        let info = build_info(&value.0, id, process_id, direction, &value.1, ale_layer);
         values.push_back(Entry { value, id });
-        self.next_id = self.next_id.wrapping_add(1); // Assuming this will not overflow.
 
         // PACKET_MISSING_ID is not checked since there needs to be 18446744073709551614 connection created until it reaches that id.
         // Practically impossible and the impact is just one dropped packet.
@@ -46,7 +55,7 @@ impl IdCache {
         return info;
     }
 
-    pub fn pop_id(&mut self, id: u64) -> Option<(Key, Packet)> {
+    pub fn pop_id(&self, id: u64) -> Option<(Key, Packet)> {
         if id == PACKET_MISSING_ID {
             return None;
         }
@@ -74,7 +83,7 @@ impl IdCache {
         values.iter().map(|entry| entry.id).collect()
     }
 
-    pub fn pop_all(&mut self) -> VecDeque<Entry<(Key, Packet)>> {
+    pub fn pop_all(&self) -> VecDeque<Entry<(Key, Packet)>> {
         let mut new_values = VecDeque::with_capacity(1);
         let mut values = self.values.write_lock();
         mem::swap(&mut *values, &mut new_values);
@@ -133,7 +142,7 @@ mod tests {
 
     #[test]
     fn push_assigns_sequential_ids_and_pops_once() {
-        let mut cache = IdCache::new();
+        let cache = IdCache::new();
         let k = test_key();
         // ids are assigned sequentially starting at 1.
         for _ in 0..5 {

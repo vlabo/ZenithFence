@@ -794,4 +794,111 @@ mod tests {
 
         uninstall_device();
     }
+
+    // One worker thread: a deterministic, varied mix of every callout + command
+    // op, all aimed at a small "hot" set of connection slots so threads collide
+    // hard on the same RCU ports and the packet cache. The only per-call
+    // invariant asserted is that an ALE callout always sets an action -- true
+    // regardless of how the threads interleave.
+    fn mt_worker(tid: u64, iters: u64) {
+        use crate::fuzz_api as api;
+        // Inline xorshift64, seeded per thread (deterministic per run).
+        let mut st = tid.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        const HOT: u8 = 6; // few connections -> maximum contention
+        for _ in 0..iters {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            let r = st;
+            let conn = (r as u8) % HOT;
+            let proto = (r >> 8) as u8;
+            let pid = (r >> 16) as u16 as u64;
+            let verdict = ((r >> 32) as u8) % 10;
+            match ((r >> 24) as u8) % 14 {
+                0 => assert_ne!(
+                    api::run_ale_connect_v4(conn, proto, false, pid, &[], false).action,
+                    0
+                ),
+                1 => assert_ne!(
+                    api::run_ale_accept_v4(conn, proto, false, pid, &[], false).action,
+                    0
+                ),
+                2 => assert_ne!(
+                    api::run_ale_connect_v6(conn, proto, false, pid, &[], false).action,
+                    0
+                ),
+                3 => assert_ne!(
+                    api::run_ale_accept_v6(conn, proto, false, pid, &[], false).action,
+                    0
+                ),
+                4 => {
+                    api::run_packet_in_v4(conn, proto, &[], false);
+                }
+                5 => {
+                    api::run_packet_out_v4(conn, proto, &[], false);
+                }
+                6 => {
+                    api::run_packet_in_v6(conn, proto, &[], false);
+                }
+                7 => {
+                    api::run_packet_out_v6(conn, proto, &[], false);
+                }
+                8 => {
+                    let ids = api::live_ids();
+                    let id = if ids.is_empty() {
+                        r
+                    } else {
+                        ids[(r as usize) % ids.len()]
+                    };
+                    api::device_write_verdict(id, verdict);
+                }
+                9 => api::device_write_update_v4(conn, proto, verdict),
+                10 => api::device_write_update_v6(conn, proto, verdict),
+                11 => api::run_endpoint_close_v4(conn, proto, pid),
+                12 => api::run_resource_v4((r >> 40) as u8, proto, (r >> 48) as u16),
+                _ => api::drain_events(2),
+            }
+        }
+    }
+
+    // Stress: many threads pounding ONE shared device with concurrent callouts +
+    // commands in every combination. This is the "should never fail" check, and
+    // it runs natively on Windows via `just test-driver`. It exercises the real
+    // reader-writer lock in mock_wdk and the RCU reclamation path under genuine
+    // contention; it catches panics, deadlocks (test hang), use-after-free /
+    // double-free, and the kind of duplicate-id race the atomic IdCache fix
+    // closed. If the mock lock were still a no-op this test would corrupt/crash.
+    #[test]
+    fn callouts_mt_shared_device_stress() {
+        let _g = DEVICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_device();
+
+        const THREADS: usize = 8;
+        const ITERS: u64 = 10_000;
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let mut handles = Vec::with_capacity(THREADS);
+        for t in 0..THREADS {
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait(); // release all workers together for maximum overlap
+                mt_worker(t as u64 + 1, ITERS);
+            }));
+        }
+        for h in handles {
+            h.join()
+                .expect("a worker thread panicked under concurrent callouts");
+        }
+
+        // Quiesce oracle: with all workers joined, a shutdown must fully drain
+        // the packet cache regardless of how the threads interleaved.
+        crate::fuzz_api::device_shutdown();
+        assert_eq!(
+            crate::fuzz_api::packet_cache_len(),
+            0,
+            "packet cache not drained after MT quiesce + shutdown"
+        );
+
+        uninstall_device();
+    }
 }

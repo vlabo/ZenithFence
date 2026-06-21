@@ -116,11 +116,16 @@ pub struct CalloutResult {
     pub absorb: bool,
 }
 
-/// Number of distinct connections the fuzzer can address. Small on purpose:
-/// random 5-tuples never collide, so the ALE-pend -> verdict -> packet-layer
-/// pipeline would never link up. Drawing from a small pool makes collisions the
-/// common case. The last slot is a loopback connection (special-cased by ALE).
-pub const POOL_SIZE: u8 = 8;
+/// Number of distinct connection slots the fuzzer can address. The slot index
+/// (op byte `conn` mod `POOL_SIZE`) selects a *stable* 5-tuple so the
+/// ALE-pend -> verdict -> packet-layer pipeline links up across ops (fully
+/// random tuples would never collide). The pool is deliberately diverse and
+/// spans the whole address space (see `pool_v4`/`pool_v6`) so coverage is wide
+/// while collisions stay common. The last slot is always a loopback connection
+/// (special-cased by ALE). Fully fuzzer-controlled, arbitrary-range packets are
+/// exercised separately via the `raw` packet path (the bytes become the packet
+/// verbatim, so `get_key_from_nbl` parses arbitrary addresses/ports/protocols).
+pub const POOL_SIZE: u8 = 64;
 
 const IP4_HDR: u32 = 20;
 const IP6_HDR: u32 = 40;
@@ -144,12 +149,23 @@ struct TupleV6 {
     rport: u16,
 }
 
+/// Deterministic 32-bit mix (splitmix-style), used to spread slot indices over
+/// the entire address/port space.
+fn mix32(x: u32) -> u32 {
+    let mut z = x.wrapping_mul(0x9E37_79B1).wrapping_add(0x7F4A_7C15);
+    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
+    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
+    z ^ (z >> 16)
+}
+
 fn proto_from_sel(sel: u8) -> IpProtocol {
-    match sel % 4 {
-        0 => IpProtocol::Tcp,
-        1 => IpProtocol::Udp,
-        2 => IpProtocol::Icmp,
-        _ => IpProtocol::from(200u8), // an "other" protocol (not connection-tracked)
+    // Keep TCP/UDP frequent so the connection-tracked pipeline links; still
+    // cover ICMP and arbitrary "other" protocol numbers (not connection-tracked).
+    match sel % 8 {
+        0 | 1 | 2 => IpProtocol::Tcp,
+        3 | 4 | 5 => IpProtocol::Udp,
+        6 => IpProtocol::Icmp,
+        _ => IpProtocol::from(sel),
     }
 }
 
@@ -160,42 +176,96 @@ fn ports_for(proto: IpProtocol, lport: u16, rport: u16) -> (u16, u16) {
     }
 }
 
-fn v6_addr(last: u8) -> Ipv6Address {
-    Ipv6Address::from_octets([0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last])
+/// Whether a `proto_sel` op byte maps to a connection-tracked protocol
+/// (TCP/UDP). Kept here so the callout fuzz oracle doesn't hard-code the private
+/// `proto_from_sel` mapping: a *structured* TCP/UDP packet always parses, so the
+/// packet callout must set an action.
+pub fn proto_is_connectable(proto_sel: u8) -> bool {
+    matches!(proto_from_sel(proto_sel), IpProtocol::Tcp | IpProtocol::Udp)
+}
+
+// IPv6 address with a 2-byte prefix and a one-byte tail (rest zero).
+fn v6_prefix(p0: u8, p1: u8, last: u8) -> Ipv6Address {
+    Ipv6Address::from_octets([p0, p1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last])
+}
+
+// Full-spread IPv6 address derived from a seed (covers the whole v6 space).
+fn v6_from_seed(seed: u32) -> Ipv6Address {
+    let mut o = [0u8; 16];
+    let mut s = seed;
+    for chunk in o.chunks_mut(4) {
+        s = mix32(s);
+        chunk.copy_from_slice(&s.to_be_bytes());
+    }
+    Ipv6Address::from_octets(o)
 }
 
 fn pool_v4(conn: u8, proto_sel: u8) -> TupleV4 {
     let c = conn % POOL_SIZE;
-    let (local, remote) = if c == POOL_SIZE - 1 {
-        (Ipv4Address::new(127, 0, 0, 1), Ipv4Address::new(127, 0, 0, 2))
-    } else {
-        (
-            Ipv4Address::new(10, 0, 0, c + 1),
-            Ipv4Address::new(93, 184, 216, c + 1),
-        )
+    // Curated low slots (clean flows + edge cases), computed full-range middle
+    // slots, loopback always last. Slots 0/1 stay clean+distinct (the native
+    // pipeline test relies on them). Ports apply only to TCP/UDP (see ports_for).
+    let (local, remote, lport, rport) = match c {
+        0 => (Ipv4Address::new(10, 0, 0, 1), Ipv4Address::new(93, 184, 216, 34), 1000, 8000),
+        1 => (Ipv4Address::new(10, 0, 0, 2), Ipv4Address::new(8, 8, 8, 8), 1001, 8001),
+        2 => (Ipv4Address::new(192, 168, 1, 5), Ipv4Address::new(1, 1, 1, 1), 53, 53),
+        3 => (Ipv4Address::new(172, 16, 0, 9), Ipv4Address::new(140, 82, 121, 4), 443, 50000),
+        4 => (Ipv4Address::new(169, 254, 0, 7), Ipv4Address::new(169, 254, 0, 8), 5353, 5353),
+        5 => (Ipv4Address::new(100, 64, 0, 1), Ipv4Address::new(203, 0, 113, 9), 717, 1),
+        6 => (Ipv4Address::new(0, 0, 0, 0), Ipv4Address::new(255, 255, 255, 255), 0, 65535),
+        7 => (Ipv4Address::new(10, 0, 0, 3), Ipv4Address::new(224, 0, 0, 251), 5353, 5353),
+        _ if c == POOL_SIZE - 1 => {
+            (Ipv4Address::new(127, 0, 0, 1), Ipv4Address::new(127, 0, 0, 2), 1000, 8000)
+        }
+        _ => {
+            let a = mix32(c as u32 * 2);
+            let b = mix32(c as u32 * 2 + 1);
+            (
+                Ipv4Address::from_octets(a.to_be_bytes()),
+                Ipv4Address::from_octets(b.to_be_bytes()),
+                (a >> 16) as u16,
+                (b & 0xffff) as u16,
+            )
+        }
     };
     TupleV4 {
         proto: proto_from_sel(proto_sel),
         local,
-        lport: 1000 + c as u16,
+        lport,
         remote,
-        rport: 8000 + c as u16,
+        rport,
     }
 }
 
 fn pool_v6(conn: u8, proto_sel: u8) -> TupleV6 {
     let c = conn % POOL_SIZE;
-    let (local, remote) = if c == POOL_SIZE - 1 {
-        (Ipv6Address::LOCALHOST, v6_addr(0x88))
-    } else {
-        (v6_addr(c + 1), v6_addr(0x80 + c + 1))
+    let (local, remote, lport, rport) = match c {
+        0 => (v6_prefix(0x20, 0x01, 1), v6_prefix(0x20, 0x01, 0x80), 1000, 8000),
+        1 => (v6_prefix(0x20, 0x01, 2), v6_prefix(0x20, 0x01, 0x88), 1001, 8001),
+        2 => (v6_prefix(0xfe, 0x80, 1), v6_prefix(0xfe, 0x80, 2), 53, 53), // link-local
+        3 => (v6_prefix(0xfc, 0x00, 1), v6_prefix(0x20, 0x01, 0x90), 443, 50000), // ULA
+        4 => (v6_prefix(0xff, 0x02, 1), v6_prefix(0x20, 0x01, 0x91), 5353, 5353), // multicast
+        5 => (Ipv6Address::from_octets([0u8; 16]), v6_prefix(0x20, 0x01, 0x92), 0, 65535),
+        _ if c == POOL_SIZE - 1 => {
+            (Ipv6Address::LOCALHOST, v6_prefix(0x20, 0x01, 0x88), 1000, 8000)
+        }
+        _ => {
+            let a = mix32(c as u32 * 2 + 0x6000);
+            let b = mix32(c as u32 * 2 + 0x6001);
+            (
+                v6_from_seed(a),
+                v6_from_seed(b),
+                (a >> 16) as u16,
+                (b & 0xffff) as u16,
+            )
+        }
     };
     TupleV6 {
         proto: proto_from_sel(proto_sel),
         local,
-        lport: 1000 + c as u16,
+        lport,
         remote,
-        rport: 8000 + c as u16,
+        rport,
     }
 }
 

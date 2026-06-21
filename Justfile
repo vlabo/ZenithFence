@@ -47,6 +47,13 @@ proptest: test-driver
 fuzz target time="60":
 	cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}
 
+# Coverage-guided fuzzing under ThreadSanitizer -- the deep data-race detector
+# for the multithreaded `callouts_mt` target (stresses one shared device from
+# many threads). Linux/WSL + nightly only. Example: `just fuzz-tsan callouts_mt 120`.
+[working-directory: './driver/fuzz']
+fuzz-tsan target="callouts_mt" time="60":
+	cargo +nightly fuzz run {{target}} --sanitizer thread -- -max_total_time={{time}}
+
 # Smoke-build every fuzz target so the harnesses don't bit-rot.
 [working-directory: './driver/fuzz']
 fuzz-build:

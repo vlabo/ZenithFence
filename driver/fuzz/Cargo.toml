@@ -48,3 +48,10 @@ path = "fuzz_targets/callouts.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "callouts_mt"
+path = "fuzz_targets/callouts_mt.rs"
+test = false
+doc = false
+bench = false

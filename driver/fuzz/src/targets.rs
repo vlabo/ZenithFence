@@ -4,12 +4,13 @@
 //! surfaces as a process abort.
 
 /// The set of valid target names (kept in sync with the functions below).
-pub const NAMES: &[&str] = &["callouts"];
+pub const NAMES: &[&str] = &["callouts", "callouts_mt"];
 
 /// Dispatch by name. Returns `false` for an unknown target.
 pub fn run(name: &str, data: &[u8]) -> bool {
     match name {
         "callouts" => callouts(data),
+        "callouts_mt" => callouts_mt(data),
         _ => return false,
     }
     true
@@ -59,6 +60,13 @@ impl<'a> Stream<'a> {
     }
 }
 
+// Map one length byte to a payload size. Wider than a single header (0..=510)
+// so the `raw` packet path stresses the in-callout parser with arbitrary,
+// larger packet data, and structured packets carry varied payloads.
+fn payload_len(b: u8) -> usize {
+    (b as usize) * 2
+}
+
 /// Stateful callout pipeline -- the main reason this harness exists. Decodes the
 /// input into a sequence of operations replayed against one persistent mock
 /// `Device`: ALE callouts pend flows, `Verdict`/`Update` commands resolve them,
@@ -69,10 +77,94 @@ impl<'a> Stream<'a> {
 ///   * Tier 3: for a structured TCP/UDP flow carrying a permanent verdict, the
 ///     packet-layer action matches that verdict.
 pub fn callouts(data: &[u8]) {
-    use driver::fuzz_api as api;
-
-    api::ensure_device();
+    driver::fuzz_api::ensure_device();
     let mut s = Stream::new(data);
+    drive_ops(&mut s, false);
+}
+
+/// Multithreaded callout stress -- one shared persistent `Device`, many worker
+/// threads driving the callouts at the same time, in all combinations.
+///
+/// Layout of `data`: byte 0 selects the worker count (2..=8); the rest is one
+/// op stream. Every worker runs the *whole* op stream, phase-shifted by a
+/// distinct rotation, so all workers hammer overlapping connection-pool slots
+/// concurrently with varied op orders -- maximizing contention on the same RCU
+/// ports / packet cache. Workers are released together by a barrier.
+///
+/// Oracles under concurrency are interleaving-independent:
+///   * Tier 1: no panic / no ASAN / no ThreadSanitizer report (the main one).
+///   * Tier 2 (per call): ALE + structured packet callouts always set an action.
+///   * Post-join quiesce: with no worker running, a `Shutdown` must fully drain
+///     the packet cache.
+/// The Tier-3 cross-layer verdict mapping and the mid-stream "Shutdown -> empty"
+/// assert are dropped here: another thread can change a verdict or pend a packet
+/// between the observation and the check, so they are not race-stable.
+pub fn callouts_mt(data: &[u8]) {
+    use driver::fuzz_api as api;
+    api::ensure_device();
+
+    if data.len() < 2 {
+        // Too short for a header + body; still run a single pass so the input
+        // isn't wasted (and the empty/short cases get exercised).
+        let mut s = Stream::new(data);
+        drive_ops(&mut s, true);
+        return;
+    }
+
+    let n_threads = 2 + (data[0] as usize % 7); // 2..=8 workers
+    let body: Vec<u8> = data[1..].to_vec();
+    let len = body.len();
+    if len == 0 {
+        return;
+    }
+    // Spread each worker's starting phase across the body.
+    let step = (len / n_threads).max(1);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(n_threads));
+    let mut handles = Vec::with_capacity(n_threads);
+    for i in 0..n_threads {
+        let mut chunk = body.clone();
+        let rot = (i * step) % len;
+        chunk.rotate_left(rot);
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            // Release all workers at once for maximum overlap.
+            barrier.wait();
+            let mut s = Stream::new(&chunk);
+            drive_ops(&mut s, true);
+        }));
+    }
+
+    // Join all workers; a worker panic (oracle violation) surfaces as a join
+    // error, which we re-raise on the main thread so libFuzzer records a crash.
+    // (Memory/race errors abort the whole process via the sanitizer directly.)
+    let mut panicked = false;
+    for h in handles {
+        if h.join().is_err() {
+            panicked = true;
+        }
+    }
+    if panicked {
+        panic!("callouts_mt: a worker thread panicked (oracle violation / crash)");
+    }
+
+    // Quiesce oracle: nothing is running now, so a shutdown must fully drain the
+    // packet cache regardless of how the threads interleaved.
+    api::device_shutdown();
+    assert_eq!(
+        api::packet_cache_len(),
+        0,
+        "packet cache not drained after MT quiesce + shutdown"
+    );
+}
+
+/// Decode and execute the op stream against the (already installed) global
+/// device. `concurrent` selects the oracle set: when other threads may be
+/// mutating the same device, race-sensitive checks (Tier-3 verdict mapping and
+/// the mid-stream shutdown-empties-cache assert) are skipped; everything else
+/// (no panic, per-call "an action was set") still holds.
+fn drive_ops(s: &mut Stream, concurrent: bool) {
+    use driver::fuzz_api as api;
 
     while !s.done() {
         // Keep persistent state bounded (see thresholds above).
@@ -91,7 +183,7 @@ pub fn callouts(data: &[u8]) {
                 let proto = s.u8();
                 let flags = s.u8();
                 let pid = s.u16() as u64;
-                let plen = (s.u8() % 64) as usize;
+                let plen = payload_len(s.u8());
                 let payload = s.take(plen);
                 let reauth = flags & 1 != 0;
                 let raw = flags & 2 != 0;
@@ -108,13 +200,17 @@ pub fn callouts(data: &[u8]) {
                 let conn = s.u8();
                 let proto = s.u8();
                 let flags = s.u8();
-                let plen = (s.u8() % 64) as usize;
+                let plen = payload_len(s.u8());
                 let payload = s.take(plen);
                 let raw = flags & 2 != 0;
                 let v4 = op == 4 || op == 5;
                 // Verdict the packet layer is about to act on (read before the op;
-                // a permanent verdict is not modified by the packet layer).
-                let verdict = if v4 {
+                // a permanent verdict is not modified by the packet layer). Only
+                // meaningful single-threaded -- under concurrency another thread
+                // could change it, so we don't read or assert on it.
+                let verdict = if concurrent {
+                    None
+                } else if v4 {
                     api::verdict_for_v4(conn, proto)
                 } else {
                     api::verdict_for_v6(conn, proto)
@@ -126,8 +222,7 @@ pub fn callouts(data: &[u8]) {
                     _ => api::run_packet_out_v6(conn, proto, payload, raw),
                 };
                 // A structured TCP/UDP packet always parses, so an action is set.
-                let tcp_udp = proto % 4 < 2;
-                if !raw && tcp_udp {
+                if !raw && api::proto_is_connectable(proto) {
                     assert!(r.action != 0, "packet callout {op} left no action set");
                     if let Some(v) = verdict {
                         check_perm_verdict(op, v, r);
@@ -197,11 +292,15 @@ pub fn callouts(data: &[u8]) {
             // ---- Shutdown: must leave the packet cache empty ----
             _ => {
                 api::device_shutdown();
-                assert_eq!(
-                    api::packet_cache_len(),
-                    0,
-                    "packet cache not drained by shutdown"
-                );
+                // Race-stable only when single-threaded: another worker may pend
+                // a packet right after the shutdown drains the cache.
+                if !concurrent {
+                    assert_eq!(
+                        api::packet_cache_len(),
+                        0,
+                        "packet cache not drained by shutdown"
+                    );
+                }
             }
         }
     }
