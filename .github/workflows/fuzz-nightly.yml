@@ -17,11 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - packet_key_v4
-          - packet_key_v6
-          - packet_redirect
-          - device_write
-          - protocol_command
+          - callouts
     steps:
       - uses: actions/checkout@v4
 

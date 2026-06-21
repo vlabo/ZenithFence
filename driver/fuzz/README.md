@@ -1,8 +1,8 @@
 # Fuzzing the ZenithFence driver
 
-Coverage-guided (libFuzzer) fuzz targets for the driver's packet-handling and
-user-space command paths. They link the driver against the host **mock_wdk**
-(via the driver's `mock` feature), so no kernel is involved.
+A coverage-guided (libFuzzer) fuzz target for the driver's stateful callout
+pipeline. It links the driver against the host **mock_wdk** (via the driver's
+`mock` feature), so no kernel is involved.
 
 ## Requirements
 
@@ -10,25 +10,28 @@ user-space command paths. They link the driver against the host **mock_wdk**
 - `cargo install cargo-fuzz`
 - Linux or WSL recommended (libFuzzer + AddressSanitizer are most reliable there)
 
-## Targets
+## Target
 
-| Target             | Under test                                                        |
-|--------------------|-------------------------------------------------------------------|
-| `packet_key_v4`    | `get_key_from_nbl_v4` + `get_ports` on arbitrary bytes            |
-| `packet_key_v6`    | `get_key_from_nbl_v6` + `get_ports` on arbitrary bytes            |
-| `packet_redirect`  | `redirect_outbound/inbound_packet`, `recalc_header_checksums`     |
-| `device_write`     | `Device::write` command channel (where the OOB bug lived)         |
-| `protocol_command` | `protocol::command` wire-format parsers                           |
+| Target     | Under test                                                                 |
+|------------|----------------------------------------------------------------------------|
+| `callouts` | The full ALE + packet-layer callout pipeline against one persistent device |
+
+The input is decoded into a sequence of operations replayed against a single
+persistent mock `Device`: ALE callouts pend flows, `Verdict`/`Update` commands
+resolve them, and packet-layer callouts then read the resulting verdict. Oracles
+range from "never panic / no OOB / no UB" up to "a permanent verdict fully
+determines the packet-layer action for a found TCP/UDP flow" (see the doc comment
+on `targets::callouts` in `src/targets.rs`).
 
 ## Run (coverage-guided, Linux)
 
 ```sh
 # from repo root
-just fuzz packet_redirect 120      # run target for 120s
-just fuzz-build                    # build all targets (CI smoke check)
+just fuzz callouts 120      # run target for 120s
+just fuzz-build            # build all targets (CI smoke check)
 
 # or directly
-cd driver/fuzz && cargo +nightly fuzz run device_write -- -max_total_time=60
+cd driver/fuzz && cargo +nightly fuzz run callouts -- -max_total_time=60
 ```
 
 ## Run on Windows (replay / smoke -- NOT coverage-guided)
@@ -43,13 +46,13 @@ logic (`src/targets.rs`):
 
 ```sh
 # from repo root
-just fuzz-replay device_write                 # random-input smoke loop
-just fuzz-replay protocol_command crash-abc   # replay a specific input file
+just fuzz-replay callouts                 # random-input smoke loop
+just fuzz-replay callouts crash-abc       # replay a specific input file
 
 # or directly
 cd driver/fuzz
-cargo run --bin replay -- packet_redirect           # random smoke (env: ITERS, SEED)
-cargo run --bin replay -- device_write artifacts/x  # reproduce a Linux crash on Windows
+cargo run --bin replay -- callouts            # random smoke (env: ITERS, SEED)
+cargo run --bin replay -- callouts artifacts/x  # reproduce a Linux crash on Windows
 ```
 
 `replay` is random/replay testing, not coverage-guided -- it complements the
@@ -58,12 +61,10 @@ reproduce a Linux fuzzer crash locally. Coverage-guided runs happen on Linux.
 
 ## Corpus & regressions
 
-`corpus/<target>/` is seeded already: minimal valid IPv4/IPv6 TCP/UDP packets
-for the packet targets, and command-stream seeds (incl. the committed
-`go_command_test.bin`) for the command targets. Add more by dropping real `.pcap`
-captures reduced to raw L3 bytes into `corpus/packet_key_*`.
+`corpus/callouts/` is seeded with operation-stream inputs that drive the pipeline
+through its main states.
 
-On a crash: `cargo +nightly fuzz tmin <target> <crash-file>`, then commit the
-minimized input under `corpus/<target>/` and add a deterministic `#[test]` in the
-driver/protocol crate so it also runs in the fast (non-fuzz) test job. You can
-reproduce any crash file on Windows with `just fuzz-replay <target> <file>`.
+On a crash: `cargo +nightly fuzz tmin callouts <crash-file>`, then commit the
+minimized input under `corpus/callouts/` and add a deterministic `#[test]` in the
+driver crate so it also runs in the fast (non-fuzz) test job. You can reproduce
+any crash file on Windows with `just fuzz-replay callouts <file>`.

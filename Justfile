@@ -42,7 +42,7 @@ proptest: test-driver
 
 # Coverage-guided fuzzing. Requires a nightly toolchain + `cargo install cargo-fuzz`,
 # and is most reliable on Linux/WSL (libFuzzer + AddressSanitizer). `target` is one
-# of the names under driver/fuzz/fuzz_targets/. Example: `just fuzz packet_redirect 120`.
+# of the names under driver/fuzz/fuzz_targets/. Example: `just fuzz callouts 120`.
 [working-directory: './driver/fuzz']
 fuzz target time="60":
 	cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}
@@ -54,8 +54,8 @@ fuzz-build:
 
 # Windows-runnable: random-input smoke loop, or replay specific input files.
 # Coverage-guided fuzzing needs Linux (`just fuzz`); this runs anywhere.
-#   just fuzz-replay device_write                  # random smoke loop (env ITERS, SEED)
-#   just fuzz-replay protocol_command crash-abc    # replay a crash/corpus file
+#   just fuzz-replay callouts                       # random smoke loop (env ITERS, SEED)
+#   just fuzz-replay callouts crash-abc             # replay a crash/corpus file
 [working-directory: './driver/fuzz']
 fuzz-replay target *files:
 	cargo run --bin replay -- {{target}} {{files}}

@@ -400,3 +400,4 @@ kext.sys
 release/build
 DriverCertificate.cer
 release/config.json
+driver/fuzz/corpus

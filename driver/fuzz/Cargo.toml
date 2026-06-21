@@ -23,9 +23,6 @@ path = "src/lib.rs"
 
 [dependencies]
 libfuzzer-sys = "0.4"
-arbitrary = { version = "1", features = ["derive"] }
-smoltcp = { version = "0.12", default-features = false, features = ["proto-ipv4", "proto-ipv6"] }
-protocol = { path = "../../protocol" }
 
 [dependencies.driver]
 path = ".."
@@ -41,41 +38,6 @@ debug = 1
 [[bin]]
 name = "replay"
 path = "src/bin/replay.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "packet_key_v4"
-path = "fuzz_targets/packet_key_v4.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "packet_key_v6"
-path = "fuzz_targets/packet_key_v6.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "packet_redirect"
-path = "fuzz_targets/packet_redirect.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "device_write"
-path = "fuzz_targets/device_write.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "protocol_command"
-path = "fuzz_targets/protocol_command.rs"
 test = false
 doc = false
 bench = false
