@@ -14,6 +14,7 @@ use wdk::{
     },
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
+    rw_spin_lock::Mutex,
 };
 
 use crate::{
@@ -34,7 +35,12 @@ pub enum Packet {
 
 // Device Context
 pub struct Device {
-    pub(crate) filter_engine: FilterEngine,
+    // Wrapped in the R/W spinlock `Mutex` so the device-facing API can be `&self`
+    // (see `get_device`): `reset_all_filters` and `ClassifyDefer::complete` are the
+    // only operations that need `&mut FilterEngine`. Every other field is already
+    // interior-mutable under `&self`, which lets producer (callout) and consumer
+    // (read) threads share one `&Device` soundly.
+    pub(crate) filter_engine: Mutex<FilterEngine>,
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) event_queue: IOQueue<Info>,
     pub(crate) packet_cache: IdCache,
@@ -46,7 +52,25 @@ pub struct Device {
 impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
     /// Make sure everything is initialized here.
+    ///
+    /// The event queue is non-blocking: this is the constructor the synchronous
+    /// fuzz harness uses, where reads are drained on the same thread that drives
+    /// the callouts (a blocking read there would hang). The real driver and the
+    /// full-driver simulation use [`Device::new_with_blocking_reads`] instead, so
+    /// this is only reachable from the host (mock) builds.
+    #[cfg_attr(not(feature = "mock"), allow(dead_code))]
     pub fn new(driver: &Driver) -> Result<Self, String> {
+        Self::new_with_blocking_reads(driver, false)
+    }
+
+    /// Like [`Device::new`] but selects whether `Device::read` blocks when the
+    /// event queue is empty. The real kernel queue always blocks, so under the
+    /// real `wdk` `blocking_reads` makes no difference; under the host mock it
+    /// chooses between the blocking and non-blocking `IOQueue`.
+    pub fn new_with_blocking_reads(
+        driver: &Driver,
+        blocking_reads: bool,
+    ) -> Result<Self, String> {
         let mut filter_engine =
             match FilterEngine::new(driver, 0xf19f6eef_9031_4339_b90a_613da727ee29) {
                 Ok(fe) => fe,
@@ -58,9 +82,13 @@ impl Device {
         }
 
         Ok(Self {
-            filter_engine,
+            filter_engine: Mutex::new(filter_engine),
             read_leftover: ArrayHolder::default(),
-            event_queue: IOQueue::new(),
+            event_queue: if blocking_reads {
+                IOQueue::new_blocking()
+            } else {
+                IOQueue::new()
+            },
             packet_cache: IdCache::new(),
             connection_cache: ConnectionCache::new(),
             injector: Injector::new(),
@@ -71,7 +99,7 @@ impl Device {
     /// Cleanup is called just before drop.
     // pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&mut self, read_request: &mut ReadRequest, info: Info) {
+    fn write_buffer(&self, read_request: &mut ReadRequest, info: Info) {
         let bytes = info.as_bytes();
         let count = read_request.write(bytes);
 
@@ -83,7 +111,7 @@ impl Device {
     }
 
     /// Called when handle. Read is called from user-space.
-    pub fn read(&mut self, read_request: &mut ReadRequest) {
+    pub fn read(&self, read_request: &mut ReadRequest) {
         if let Some(data) = self.read_leftover.load() {
             // There are leftovers from previous request.
             let count = read_request.write(&data);
@@ -128,7 +156,7 @@ impl Device {
     }
 
     // Called when handle.Write is called from user-space.
-    pub fn write(&mut self, write_request: &mut WriteRequest) {
+    pub fn write(&self, write_request: &mut WriteRequest) {
         // Try parsing the command.
         let mut buffer = write_request.get_buffer();
         let command = protocol::command::parse_type(buffer);
@@ -246,7 +274,7 @@ impl Device {
             CommandType::ClearCache => {
                 wdk::dbg!("ClearCache command");
                 self.connection_cache.clear();
-                if let Err(err) = self.filter_engine.reset_all_filters() {
+                if let Err(err) = self.filter_engine.write_lock().reset_all_filters() {
                     err!("failed to reset filters: {}", err);
                 }
             }
@@ -417,8 +445,6 @@ impl Device {
                     _ = self.event_queue.push(info);
                 }
 
-                conn_v4.clear();
-
                 // Process ended ipv6 connections
                 for conn in conn_v6.iter() {
                     let info = protocol::info::connection_end_event_v6_info(
@@ -436,12 +462,11 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
-                conn_v6.clear();
             }
         }
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         // End blocking operations from the queue. This will end pending read requests.
         self.event_queue.rundown();
 
@@ -458,7 +483,7 @@ impl Device {
         }
     }
 
-    pub fn inject_packet(&mut self, packet: Packet, blocked: bool) -> Result<(), String> {
+    pub fn inject_packet(&self, packet: Packet, blocked: bool) -> Result<(), String> {
         match packet {
             Packet::PacketLayer(nbl, inject_info) => {
                 if !blocked {
@@ -468,7 +493,8 @@ impl Device {
                 }
             }
             Packet::AleLayer(defer) => {
-                let packet_list = defer.complete(&mut self.filter_engine)?;
+                let mut filter_engine = self.filter_engine.write_lock();
+                let packet_list = defer.complete(&mut filter_engine)?;
                 if let Some(packet_list) = packet_list {
                     self.injector.inject_packet_list_transport(packet_list)?;
                 }

@@ -100,6 +100,14 @@ impl<T> IOQueue<T> {
         }
     }
 
+    /// Mirror of the host mock's blocking constructor. The kernel queue already
+    /// blocks in `wait_and_pop` (NULL timeout), so this is just an alias for
+    /// `new`; the parameter exists so `Device::new_with_blocking_reads` can name
+    /// one constructor across both builds.
+    pub fn new_blocking() -> Self {
+        Self::new()
+    }
+
     /// Pushes new entry of any type.
     pub fn push(&self, entry: T) -> Result<(), Status> {
         let kqueue = self.kernel_queue.get();

@@ -306,28 +306,61 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
 
     // Parse packet
     let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let (src_port, dst_port) = get_ports(
-        &headers[smoltcp::wire::IPV4_HEADER_LEN..],
-        ip_packet.next_header(),
-    );
+    let src_addr = ip_packet.src_addr();
+    let dst_addr = ip_packet.dst_addr();
+    let protocol = ip_packet.next_header();
+    let header_len = ip_packet.header_len() as usize;
+
+    // The transport header starts after the IPv4 header, which is variable
+    // length when IP options are present (IHL > 5). The base read above only
+    // reaches the ports for the common option-less header; otherwise re-read a
+    // bounded window and index the ports at the true header offset, so the key
+    // matches the (already option-resolved) ports the ALE layer reports.
+    let (src_port, dst_port) = if header_len <= smoltcp::wire::IPV4_HEADER_LEN {
+        get_ports(&headers[smoltcp::wire::IPV4_HEADER_LEN..], protocol)
+    } else {
+        resolve_ports_v4(nbl, protocol, header_len)
+    };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv4(ip_packet.src_addr()),
+            protocol,
+            local_address: IpAddress::Ipv4(src_addr),
             local_port: src_port,
-            remote_address: IpAddress::Ipv4(ip_packet.dst_addr()),
+            remote_address: IpAddress::Ipv4(dst_addr),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv4(ip_packet.dst_addr()),
+            protocol,
+            local_address: IpAddress::Ipv4(dst_addr),
             local_port: dst_port,
-            remote_address: IpAddress::Ipv4(ip_packet.src_addr()),
+            remote_address: IpAddress::Ipv4(src_addr),
             remote_port: src_port,
         }),
     }
+}
+
+/// Reads the TCP/UDP ports of an IPv4 packet whose header carries options
+/// (IHL > 5). Reads a bounded window from the NBL and indexes the ports at the
+/// true header offset. Returns `(0, 0)` when the protocol is not TCP/UDP or the
+/// transport header cannot be reached.
+fn resolve_ports_v4(nbl: &NetBufferList, protocol: IpProtocol, header_len: usize) -> (u16, u16) {
+    if !matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        return (0, 0);
+    }
+    // Max IPv4 header is 60 bytes (IHL = 15), plus 4 bytes for the ports.
+    const WINDOW: usize = 60 + 4;
+    let available = nbl.get_data_length() as usize;
+    let to_read = core::cmp::min(available, WINDOW);
+    if header_len + 4 > to_read {
+        return (0, 0);
+    }
+    let mut buf = [0u8; WINDOW];
+    if nbl.read_bytes(&mut buf[..to_read]).is_err() {
+        return (0, 0);
+    }
+    get_ports(&buf[header_len..], protocol)
 }
 
 /// This function extracts a key from a given IPv6 network buffer list (NBL).
@@ -350,27 +383,109 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
     };
     // Parse packet
     let ip_packet = Ipv6Packet::new_unchecked(&headers);
-    let (src_port, dst_port) = get_ports(
-        &headers[smoltcp::wire::IPV6_HEADER_LEN..],
-        ip_packet.next_header(),
-    );
+    let src_addr = ip_packet.src_addr();
+    let dst_addr = ip_packet.dst_addr();
+    let first_header = ip_packet.next_header();
+
+    // The base header's `next_header` is the transport protocol only when no
+    // extension headers are present. When it is an extension header, walk the
+    // chain so the resolved protocol/ports match what the ALE layer reports for
+    // the same flow -- otherwise the packet-layer key would never match the
+    // connection added at the ALE layer. The common (no extension header) case
+    // keeps the original fixed 44-byte read.
+    let (protocol, src_port, dst_port) = if is_ipv6_ext_header(first_header) {
+        resolve_transport_v6(nbl, first_header)
+    } else {
+        let (src_port, dst_port) =
+            get_ports(&headers[smoltcp::wire::IPV6_HEADER_LEN..], first_header);
+        (first_header, src_port, dst_port)
+    };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv6(ip_packet.src_addr()),
+            protocol,
+            local_address: IpAddress::Ipv6(src_addr),
             local_port: src_port,
-            remote_address: IpAddress::Ipv6(ip_packet.dst_addr()),
+            remote_address: IpAddress::Ipv6(dst_addr),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv6(ip_packet.dst_addr()),
+            protocol,
+            local_address: IpAddress::Ipv6(dst_addr),
             local_port: dst_port,
-            remote_address: IpAddress::Ipv6(ip_packet.src_addr()),
+            remote_address: IpAddress::Ipv6(src_addr),
             remote_port: src_port,
         }),
+    }
+}
+
+// IPv6 extension header types understood by `resolve_transport_v6`.
+fn is_ipv6_ext_header(protocol: IpProtocol) -> bool {
+    matches!(
+        protocol,
+        IpProtocol::HopByHop | IpProtocol::Ipv6Route | IpProtocol::Ipv6Frag | IpProtocol::Ipv6Opts
+    )
+}
+
+/// Walks past IPv6 extension headers to find the upper-layer protocol and its
+/// ports. Reads a bounded window from the NBL: a packet that carries extension
+/// headers is necessarily longer than the base 44 bytes, so a larger read is
+/// safe here. Returns `(protocol, src_port, dst_port)`; ports are `0` when the
+/// transport header cannot be reached (truncated chain, a non-first fragment, or
+/// a non-TCP/UDP upper-layer protocol).
+fn resolve_transport_v6(nbl: &NetBufferList, first_header: IpProtocol) -> (IpProtocol, u16, u16) {
+    const WINDOW: usize = smoltcp::wire::IPV6_HEADER_LEN + 64;
+    let available = nbl.get_data_length() as usize;
+    let to_read = core::cmp::min(available, WINDOW);
+    if to_read <= smoltcp::wire::IPV6_HEADER_LEN {
+        return (first_header, 0, 0);
+    }
+    let mut buf = [0u8; WINDOW];
+    if nbl.read_bytes(&mut buf[..to_read]).is_err() {
+        return (first_header, 0, 0);
+    }
+
+    let mut next = first_header;
+    let mut offset = smoltcp::wire::IPV6_HEADER_LEN;
+    // Bound the chain so a crafted packet cannot loop us.
+    for _ in 0..8 {
+        match next {
+            IpProtocol::HopByHop | IpProtocol::Ipv6Route | IpProtocol::Ipv6Opts => {
+                if offset + 2 > to_read {
+                    return (next, 0, 0);
+                }
+                // Generic extension header: [next: u8][hdr_ext_len: u8] where the
+                // total length is (hdr_ext_len + 1) * 8 octets.
+                let next_header = buf[offset];
+                let header_len = (buf[offset + 1] as usize + 1) * 8;
+                next = IpProtocol::from(next_header);
+                offset += header_len;
+            }
+            IpProtocol::Ipv6Frag => {
+                if offset + 8 > to_read {
+                    return (next, 0, 0);
+                }
+                // Fragment header is a fixed 8 octets. Only the first fragment
+                // (fragment offset 0) carries the transport header.
+                let fragment_offset = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) >> 3;
+                let next_header = buf[offset];
+                next = IpProtocol::from(next_header);
+                offset += 8;
+                if fragment_offset != 0 {
+                    return (next, 0, 0);
+                }
+            }
+            _ => break,
+        }
+    }
+
+    match next {
+        IpProtocol::Tcp | IpProtocol::Udp if offset + 4 <= to_read => {
+            let (src_port, dst_port) = get_ports(&buf[offset..], next);
+            (next, src_port, dst_port)
+        }
+        _ => (next, 0, 0),
     }
 }
 

@@ -197,10 +197,6 @@ pub struct ConnectionCache {
     tcp_v6: Box<PortArray<ConnectionV6>>,
     udp_v6: Box<PortArray<ConnectionV6>>,
 
-    // Holds ended connection that need to be send as an event to user space.
-    tmp_ended_connections_buffer_v4: Vec<Arc<ConnectionV4>>,
-    tmp_ended_connections_buffer_v6: Vec<Arc<ConnectionV6>>,
-
     // Holds unlinked connections arrays.
     unlinked_ports_v4: MpscQueue<ConnectionArray<ConnectionV4>>,
     unlinked_ports_v6: MpscQueue<ConnectionArray<ConnectionV6>>,
@@ -214,8 +210,6 @@ impl ConnectionCache {
             udp_v4: alloc_port_array(),
             tcp_v6: alloc_port_array(),
             udp_v6: alloc_port_array(),
-            tmp_ended_connections_buffer_v4: Vec::with_capacity(100),
-            tmp_ended_connections_buffer_v6: Vec::with_capacity(100),
             unlinked_ports_v4: MpscQueue::new(),
             unlinked_ports_v6: MpscQueue::new(),
         }
@@ -378,30 +372,31 @@ impl ConnectionCache {
     }
 
     // clean_ended_connections is not thread safe and should be called from one place only.
-    pub fn clean_ended_connections<'a>(
-        &'a mut self,
-    ) -> (
-        &'a mut Vec<Arc<ConnectionV4>>,
-        &'a mut Vec<Arc<ConnectionV6>>,
-    ) {
-        self.tmp_ended_connections_buffer_v4.clear();
-        self.tmp_ended_connections_buffer_v6.clear();
+    // Returns the connections that have ended, so they can be sent as events to
+    // user space. Takes `&self` (the port arrays are internally locked) so the
+    // whole `Device` API can stay `&self`; the result is freshly owned.
+    pub fn clean_ended_connections(
+        &self,
+    ) -> (Vec<Arc<ConnectionV4>>, Vec<Arc<ConnectionV6>>) {
+        // The capacity is load-bearing, not just an optimization: `ports_clean_ended`
+        // only evicts a stale (inactive) connection while `capacity() > len()`, which
+        // bounds the eviction/event work per call. Allocating with capacity 100
+        // preserves the original behaviour (this was a reused `with_capacity(100)` field).
+        let mut ended_v4 = Vec::with_capacity(100);
+        let mut ended_v6 = Vec::with_capacity(100);
         ports_clean_ended(
             &self.tcp_v4,
             &self.udp_v4,
-            &mut self.tmp_ended_connections_buffer_v4,
+            &mut ended_v4,
             &self.unlinked_ports_v4,
         );
         ports_clean_ended(
             &self.tcp_v6,
             &self.udp_v6,
-            &mut self.tmp_ended_connections_buffer_v6,
+            &mut ended_v6,
             &self.unlinked_ports_v6,
         );
-        return (
-            &mut self.tmp_ended_connections_buffer_v4,
-            &mut self.tmp_ended_connections_buffer_v6,
-        );
+        return (ended_v4, ended_v6);
     }
 
     pub fn get_verdict(&self, key: &Key) -> Option<Verdict> {
@@ -601,7 +596,7 @@ mod tests {
             let mut now: u64 = 1_000_000;
             wdk::utils::set_mock_time_ms(now);
 
-            let mut cache = ConnectionCache::new();
+            let cache = ConnectionCache::new();
             let mut model: [Option<ConnModel>; POOL] = [None; POOL];
 
             for op in ops {

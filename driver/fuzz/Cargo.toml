@@ -55,3 +55,10 @@ path = "fuzz_targets/callouts_mt.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "simulation"
+path = "fuzz_targets/simulation.rs"
+test = false
+doc = false
+bench = false

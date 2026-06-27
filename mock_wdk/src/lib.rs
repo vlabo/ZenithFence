@@ -4,11 +4,14 @@
 //! crate consumes, backed by ordinary host data structures (Vec, UnsafeCell,
 //! VecDeque) instead of kernel objects. No `windows_sys`, no FFI, no `#[link]`.
 
+pub mod connection;
 pub mod consts;
 pub mod driver;
 pub mod filter_engine;
+pub mod interface;
 pub mod ioqueue;
 pub mod irp_helpers;
+pub mod kernel_types;
 pub mod rw_spin_lock;
 pub mod utils;
 

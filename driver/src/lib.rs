@@ -35,6 +35,11 @@ mod packet_util;
 #[cfg(feature = "mock")]
 pub mod fuzz_api;
 
+// Full-driver simulation harness: loads the real driver over the mocked WDK and
+// drives it through the user-space channel with real producer/consumer threads.
+#[cfg(feature = "mock")]
+pub mod sim;
+
 #[cfg(not(any(test, feature = "mock")))]
 use wdk::allocator::WindowsAllocator;
 

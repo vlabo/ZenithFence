@@ -4,13 +4,14 @@
 //! surfaces as a process abort.
 
 /// The set of valid target names (kept in sync with the functions below).
-pub const NAMES: &[&str] = &["callouts", "callouts_mt"];
+pub const NAMES: &[&str] = &["callouts", "callouts_mt", "simulation"];
 
 /// Dispatch by name. Returns `false` for an unknown target.
 pub fn run(name: &str, data: &[u8]) -> bool {
     match name {
         "callouts" => callouts(data),
         "callouts_mt" => callouts_mt(data),
+        "simulation" => simulation(data),
         _ => return false,
     }
     true
@@ -156,6 +157,159 @@ pub fn callouts_mt(data: &[u8]) {
         0,
         "packet cache not drained after MT quiesce + shutdown"
     );
+}
+
+/// Full-driver simulation -- the highest-fidelity target. Loads the *real*
+/// driver via `DriverEntry` (over the mocked WDK), then runs the asynchronous
+/// channel pipeline with real OS threads:
+///   * a "kernel" producer (this thread) drives event-producing callouts from
+///     the op stream -- ALE/packet callouts pend flows and push events, endpoint
+///     closures and resource events fire;
+///   * a user-space consumer thread blocks on `DriverConnection::read`, parses
+///     the event stream, and writes `Verdict` commands back over the channel
+///     (the verdict bytes come from the fuzz input, so all verdict kinds --
+///     accept/block/drop/redirect and the permanent variants -- get explored).
+///
+/// This exercises the full lifecycle (load -> dispatch -> unload), the blocking
+/// event queue, the IRP read/write path, and the pend -> event -> verdict ->
+/// inject loop under genuine producer/consumer concurrency (so ThreadSanitizer
+/// sees real races if any exist).
+///
+/// Oracles (interleaving-independent):
+///   * Tier 1: no panic / no ASAN / no ThreadSanitizer report.
+///   * Tier 2 (per call): ALE + structured packet callouts always set an action.
+///   * Post-shutdown quiesce: once the producer is done and the driver is shut
+///     down, the packet cache is empty (every pended flow was resolved or drained).
+pub fn simulation(data: &[u8]) {
+    use driver::sim;
+
+    // Each input gets a fresh driver: full DriverEntry -> run -> unload lifecycle.
+    let Ok(simulation) = sim::Simulation::start() else {
+        return;
+    };
+
+    // User-space side: reply to each connection event with a fuzz-chosen verdict.
+    // `Device::write` pops the pended packet for any verdict byte (valid kinds
+    // inject, invalid ones just drop it), so the packet cache drains as events
+    // flow regardless of the bytes.
+    let verdict_seed: Vec<u8> = data.to_vec();
+    let mut vc: usize = 0;
+    let consumer = sim::spawn_consumer(
+        simulation.connect(),
+        move |_event| {
+            let verdict = if verdict_seed.is_empty() {
+                3 // PermanentAccept
+            } else {
+                let b = verdict_seed[vc % verdict_seed.len()];
+                vc = vc.wrapping_add(1);
+                b
+            };
+            Some(verdict)
+        },
+        None,
+    );
+
+    // "Kernel" side: drive the event-producing callouts from the op stream.
+    let mut s = Stream::new(data);
+    drive_producer(&mut s);
+
+    // Quiesce: resolve pending packets and run down the queue so the consumer's
+    // blocking read returns end-of-file, then wait for it to finish.
+    simulation.shutdown();
+    let stats = consumer.join_timeout(std::time::Duration::from_secs(60));
+    assert!(
+        stats.is_some(),
+        "simulation: consumer thread did not exit after shutdown (hang)"
+    );
+
+    // With the producer done and the driver shut down, nothing remains pended.
+    assert_eq!(
+        driver::fuzz_api::packet_cache_len(),
+        0,
+        "simulation: packet cache not drained after shutdown"
+    );
+
+    drop(simulation);
+}
+
+/// Number of producer (event-generating) op variants for the simulation target.
+const N_PRODUCER_OPS: u8 = 12;
+
+/// Decode and run only the event-*producing* callouts against the installed
+/// device. Unlike [`drive_ops`], this issues no `Verdict`/`Update`/`Shutdown`
+/// commands and never reads the event queue -- in the simulation those are the
+/// user-space consumer's job, over the channel -- so it never blocks on the
+/// (now blocking) event queue.
+fn drive_producer(s: &mut Stream) {
+    use driver::fuzz_api as api;
+
+    while !s.done() {
+        let op = s.u8() % N_PRODUCER_OPS;
+        match op {
+            // ---- ALE callouts: always set an action ----
+            0 | 1 | 2 | 3 => {
+                let conn = s.u8();
+                let proto = s.u8();
+                let flags = s.u8();
+                let pid = s.u16() as u64;
+                let plen = payload_len(s.u8());
+                let payload = s.take(plen);
+                let reauth = flags & 1 != 0;
+                let raw = flags & 2 != 0;
+                let r = match op {
+                    0 => api::run_ale_connect_v4(conn, proto, reauth, pid, payload, raw),
+                    1 => api::run_ale_accept_v4(conn, proto, reauth, pid, payload, raw),
+                    2 => api::run_ale_connect_v6(conn, proto, reauth, pid, payload, raw),
+                    _ => api::run_ale_accept_v6(conn, proto, reauth, pid, payload, raw),
+                };
+                assert!(r.action != 0, "ALE callout {op} left no action set");
+            }
+            // ---- Packet-layer callouts ----
+            4 | 5 | 6 | 7 => {
+                let conn = s.u8();
+                let proto = s.u8();
+                let flags = s.u8();
+                let plen = payload_len(s.u8());
+                let payload = s.take(plen);
+                let raw = flags & 2 != 0;
+                let r = match op {
+                    4 => api::run_packet_in_v4(conn, proto, payload, raw),
+                    5 => api::run_packet_out_v4(conn, proto, payload, raw),
+                    6 => api::run_packet_in_v6(conn, proto, payload, raw),
+                    _ => api::run_packet_out_v6(conn, proto, payload, raw),
+                };
+                if !raw && api::proto_is_connectable(proto) {
+                    assert!(r.action != 0, "packet callout {op} left no action set");
+                }
+            }
+            // ---- Endpoint closure (emits a connection-end event) ----
+            8 => {
+                let conn = s.u8();
+                let proto = s.u8();
+                let pid = s.u16() as u64;
+                api::run_endpoint_close_v4(conn, proto, pid);
+            }
+            9 => {
+                let conn = s.u8();
+                let proto = s.u8();
+                let pid = s.u16() as u64;
+                api::run_endpoint_close_v6(conn, proto, pid);
+            }
+            // ---- Resource monitor (port assignment-discard / release) ----
+            10 => {
+                let kind = s.u8();
+                let proto = s.u8();
+                let port = s.u16();
+                api::run_resource_v4(kind, proto, port);
+            }
+            _ => {
+                let kind = s.u8();
+                let proto = s.u8();
+                let port = s.u16();
+                api::run_resource_v6(kind, proto, port);
+            }
+        }
+    }
 }
 
 /// Decode and execute the op stream against the (already installed) global
