@@ -24,6 +24,14 @@ var protocols = map[int]string{
 }
 
 func main() {
+	// Real-world simulation mode: the same agent, but connected to a userspace
+	// fake driver over a named pipe instead of loading a kernel service. Switched
+	// purely by the environment, so the production binary is otherwise unchanged.
+	if pipeName := os.Getenv("ZF_SIM_PIPE"); pipeName != "" {
+		runSimulation(pipeName)
+		return
+	}
+
 	driverName := "ZenithFence"
 	sysPath := "C:\\Dev\\driver.sys"
 	kext, err := kext_interface.CreateKextService(driverName, sysPath)
@@ -63,66 +71,13 @@ func main() {
 	}()
 
 	go func() {
-		for true {
+		for {
 			info, err := kext_interface.RecvInfo(file)
 			if err != nil {
 				log.Printf("error reading from file %s", err)
 				return
 			}
-			switch info := info.(type) {
-			case *kext_interface.ConnectionV4:
-				{
-					// direction := "->"
-					if info.Direction == 1 {
-						// direction = "<-"
-						// kext_interface.WriteVerdictCommand(file, kext_interface.BuildVerdict(kext_interface.Verdict{Id: connection.Id, Verdict: uint8(VerdictBlock)}))
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
-					} else {
-						if info.RemoteIp == [4]byte{1, 1, 1, 1} {
-							kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentBlock)})
-							log.Printf("blocked packet: %d pid=%d %+v:%d %s %+v:%d %s\n", info.Id, info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
-						} else {
-							time.Sleep(200 * time.Millisecond)
-							kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
-						}
-					}
-
-					// log.Printf("infov4: %d pid=%d %+v:%d %s %+v:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
-				}
-			case *kext_interface.ConnectionV6:
-				{
-					// direction := "->"
-					if info.Direction == 1 {
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
-						// direction = "<-"
-					} else {
-						kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
-					}
-					// log.Printf("infov6: %d pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.Id, conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
-				}
-			case *kext_interface.ConnectionEndV4:
-				{
-					// conn := info.ConnectionEndV4
-					// direction := "->"
-					// if conn.Direction == 1 {
-					// direction = "<-"
-					// }
-					// log.Printf("conn end v4: pid=%d %+v:%d %s %+v:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
-				}
-			case *kext_interface.ConnectionEndV6:
-				{
-					// conn := info.ConnectionEndV6
-					// direction := "->"
-					// if conn.Direction == 1 {
-					// 	direction = "<-"
-					// }
-					// log.Printf("conn end v6: pid=%d [%+v]:%d %s [%+v]:%d %s\n", conn.ProcessId, net.IP(conn.LocalIp[:]), conn.LocalPort, direction, net.IP(conn.RemoteIp[:]), conn.RemotePort, protocols[int(conn.Protocol)])
-				}
-			case *kext_interface.LogLine:
-				{
-					log.Println(info.Line)
-				}
-			}
+			handleInfo(file, info)
 		}
 	}()
 
@@ -130,4 +85,52 @@ func main() {
 	input := bufio.NewScanner(os.Stdin)
 	input.Scan()
 	kext_interface.SendShutdownCommand(file)
+}
+
+// runSimulation drives the same read/verdict loop as production, but over a
+// named-pipe connection to a userspace fake driver. It runs on the main
+// goroutine and returns when the pipe closes (the daemon shut the driver down).
+func runSimulation(pipeName string) {
+	log.Printf("sim: connecting to fake driver \\\\.\\pipe\\%s", pipeName)
+	file, err := kext_interface.OpenPipe(pipeName, 1024)
+	if err != nil {
+		log.Panicf("sim: failed to open pipe: %s", err)
+	}
+	defer file.Close()
+
+	log.Printf("sim: agent interface version %d.%d.%d.%d",
+		kext_interface.InterfaceVersion[0], kext_interface.InterfaceVersion[1],
+		kext_interface.InterfaceVersion[2], kext_interface.InterfaceVersion[3])
+
+	for {
+		info, err := kext_interface.RecvInfo(file)
+		if err != nil {
+			log.Printf("sim: connection closed: %s", err)
+			return
+		}
+		handleInfo(file, info)
+	}
+}
+
+// handleInfo applies the agent's verdict policy to one event. Shared by the
+// production and simulation paths so the decision logic is identical.
+func handleInfo(file *kext_interface.KextFile, info kext_interface.Info) {
+	switch info := info.(type) {
+	case *kext_interface.ConnectionV4:
+		if info.Direction == 1 {
+			kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
+		} else {
+			if info.RemoteIp == [4]byte{1, 1, 1, 1} {
+				kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentBlock)})
+				log.Printf("blocked packet: %d pid=%d %+v:%d %s %+v:%d %s\n", info.Id, info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
+			} else {
+				time.Sleep(200 * time.Millisecond)
+				kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
+			}
+		}
+	case *kext_interface.ConnectionV6:
+		kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
+	case *kext_interface.LogLine:
+		log.Println(info.Line)
+	}
 }

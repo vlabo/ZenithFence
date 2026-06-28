@@ -11,6 +11,21 @@ type KextFile struct {
 	handle     windows.Handle
 	buffer     []byte
 	read_slice []byte
+	// synchronous is set for handles opened WITHOUT FILE_FLAG_OVERLAPPED (e.g.
+	// the simulation named pipe). Such handles require a NULL lpOverlapped so
+	// ReadFile/WriteFile block to completion; passing an OVERLAPPED to a
+	// synchronous handle does not wait for data that arrives later. The kernel
+	// device is opened overlapped, so it leaves this false.
+	synchronous bool
+}
+
+// overlapped returns the lpOverlapped to pass to ReadFile/WriteFile: nil for a
+// synchronous handle, a fresh OVERLAPPED otherwise.
+func (f *KextFile) overlapped() *windows.Overlapped {
+	if f.synchronous {
+		return nil
+	}
+	return &windows.Overlapped{}
 }
 
 func (f *KextFile) Read(buffer []byte) (int, error) {
@@ -41,8 +56,7 @@ func (f *KextFile) Read(buffer []byte) (int, error) {
 
 func (f *KextFile) refill_read_buffer() error {
 	var count uint32 = 0
-	overlapped := &windows.Overlapped{}
-	err := windows.ReadFile(f.handle, f.buffer[:], &count, overlapped)
+	err := windows.ReadFile(f.handle, f.buffer[:], &count, f.overlapped())
 	if err != nil {
 		return err
 	}
@@ -53,8 +67,7 @@ func (f *KextFile) refill_read_buffer() error {
 
 func (f *KextFile) Write(buffer []byte) (int, error) {
 	var count uint32 = 0
-	overlapped := &windows.Overlapped{}
-	err := windows.WriteFile(f.handle, buffer, &count, overlapped)
+	err := windows.WriteFile(f.handle, buffer, &count, f.overlapped())
 	return int(count), err
 }
 

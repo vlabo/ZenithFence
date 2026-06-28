@@ -1,0 +1,24 @@
+[package]
+name = "nexufend-sim"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Real-world userspace simulation harness. A host binary that loads the *real*
+# driver over `mock_wdk` (via `driver::sim::Simulation`) and exposes it on a
+# Windows named pipe so the real Go agent can connect to it exactly as it would
+# to the kernel device. Windows-only by design (named pipes + the agent's
+# Windows transport). The libFuzzer targets under driver/fuzz remain the
+# cross-platform coverage path and are untouched.
+
+[[bin]]
+name = "zf-sim"
+path = "src/main.rs"
+
+[dependencies]
+# The driver, built against the host mock WDK (same as driver/fuzz).
+driver = { path = "../driver", default-features = false, features = ["mock"] }
+# For the user-space connection's status constants (STATUS_SUCCESS / EOF). This
+# resolves to the same `mock_wdk` instance the driver links, so the
+# `DriverConnection` returned by `Simulation::connect` is the matching type.
+mock_wdk = { path = "../mock_wdk" }

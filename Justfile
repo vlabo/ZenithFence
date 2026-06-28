@@ -68,3 +68,32 @@ fuzz-replay target *files:
 	cargo run --bin replay -- {{target}} {{files}}
 
 test: kext-interface-gen test-protocol test-kext-interface test-driver
+
+# ---------------------------------------------------------------------------
+# Real-world userspace simulation (see sim/).
+#
+# The fake-driver daemon (Rust, runs the real driver over mock_wdk) exposes the
+# driver on a Windows named pipe; the *real* Go agent (kext_tester) connects to
+# it exactly as it would to the kernel device, only the loading differs. Fake OS
+# network events are injected by the daemon. Windows-only.
+# ---------------------------------------------------------------------------
+
+# Build the fake-driver daemon and the Go agent. The repo-root go.work makes the
+# agent build against the local kext_interface (incl. pipe_connection.go).
+sim-build:
+	cargo build --manifest-path ./sim/Cargo.toml
+	go build -C ./kext_tester -o ../kext_tester.exe
+
+# Run the simulation: start the fake driver, then the agent. The daemon drives
+# fake events, waits for the agent's verdicts, shuts down, and exits non-zero on
+# any invariant failure (e.g. unresolved pended packets). The recipe surfaces the
+# daemon's exit code as pass/fail.
+
+mock-run: sim-build
+	#!pwsh.exe -File
+	./sim/target/debug/zf-sim.exe
+
+sim-run: sim-build
+	#!pwsh.exe -File
+	$env:ZF_SIM_PIPE = "ZenithFence"
+	& "./kext_tester.exe"
