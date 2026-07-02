@@ -595,7 +595,6 @@ mod tests {
     use crate::device::Device;
     use crate::entry::{clear_device, get_device, set_device};
     use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address};
-    use std::sync::Mutex;
     use wdk::driver::Driver;
     use wdk::filter_engine::callout_data::{CalloutData, Value};
     use wdk::filter_engine::classify::{ClassifyOut, FWP_ACTION_BLOCK, FWP_ACTION_PERMIT};
@@ -604,8 +603,10 @@ mod tests {
     use wdk::irp_helpers::WriteRequest;
 
     // Callouts reach the device through the global `static mut DEVICE`, so tests
-    // that install a device must not run concurrently.
-    static DEVICE_LOCK: Mutex<()> = Mutex::new(());
+    // that install a device must not run concurrently -- with each other or with
+    // the global-slot tests in other modules (entry, fuzz_api, sim), hence the
+    // shared process-wide lock.
+    use crate::entry::DEVICE_TEST_LOCK as DEVICE_LOCK;
 
     fn install_device() {
         let device = Box::new(Device::new(&Driver::mock()).expect("mock device"));

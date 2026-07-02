@@ -38,7 +38,7 @@ pub enum ValueType {
     FwpDataTypeMax = 0xff + 4,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Layer {
     InboundIppacketV4,
     InboundIppacketV4Discard,

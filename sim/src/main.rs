@@ -20,21 +20,28 @@
 
 mod pipe;
 mod producer;
+mod rng;
+mod scenarios;
 
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use driver::fuzz_api::packet_cache_len;
+use driver::fuzz_api::{filter_engine_snapshot, packet_cache_len, Layer};
 use driver::sim::Simulation;
 use mock_wdk::kernel_types::{STATUS_END_OF_FILE, STATUS_SUCCESS};
 
 use pipe::PipeServer;
 
 const PIPE_NAME: &str = r"\\.\pipe\ZenithFence";
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn main() -> std::process::ExitCode {
+    let cfg = producer::Config::from_env();
+    println!(
+        "[sim] seed=0x{:016x} flows={} threads={} (ZF_SIM_SEED / ZF_SIM_FLOWS / ZF_SIM_THREADS)",
+        cfg.seed, cfg.random_flows, cfg.threads
+    );
+
     println!("[sim] loading driver over mock_wdk ...");
     let sim = match Simulation::start() {
         Ok(sim) => sim,
@@ -43,6 +50,14 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+
+    // Loading-fidelity oracle: the driver must have committed the filter engine
+    // with the production callout set, like a real kernel load would.
+    if let Err(err) = check_registration() {
+        eprintln!("[sim] FAIL: {err}");
+        return std::process::ExitCode::FAILURE;
+    }
+    println!("[sim] filter engine committed; all callouts registered");
 
     println!("[sim] creating pipe {PIPE_NAME}");
     let server = match PipeServer::create(PIPE_NAME) {
@@ -101,22 +116,17 @@ fn main() -> std::process::ExitCode {
         commands
     });
 
-    // Producer: fake OS network events.
-    println!("[sim] producing fake network events ...");
-    let produced = producer::drive();
-    println!("[sim] pended {produced} flows; waiting for verdicts ...");
+    // Producer: fake OS network traffic (scenarios + seeded random flows).
+    // `drive` returns once every flow ran, the agent's verdicts resolved every
+    // pended packet, and the reinjector replayed every injected packet.
+    println!("[sim] producing fake network traffic ...");
+    let summary = producer::drive(&cfg);
+    summary.print();
 
-    // Wait for the agent's verdicts to drain the pended packets.
-    let drained = wait_until(DRAIN_TIMEOUT, || packet_cache_len() == 0);
-    println!(
-        "[sim] verdicts drained={drained} (packet cache len={})",
-        packet_cache_len()
-    );
-
-    // The outcome is already known (the agent's verdicts drained every pended
-    // packet), so decide pass/fail now and let a watchdog enforce it even if the
-    // best-effort clean teardown below stalls on a blocked pipe read.
-    let pass = drained && packet_cache_len() == 0;
+    // The outcome is already known, so decide pass/fail now and let a watchdog
+    // enforce it even if the best-effort clean teardown below stalls on a
+    // blocked pipe read.
+    let pass = summary.is_ok() && packet_cache_len() == 0;
     let exit_code = if pass { 0 } else { 1 };
     spawn_exit_watchdog(Duration::from_secs(10), exit_code);
 
@@ -139,9 +149,40 @@ fn main() -> std::process::ExitCode {
         println!("[sim] PASS");
         std::process::ExitCode::SUCCESS
     } else {
-        eprintln!("[sim] FAIL: verdicts did not drain / packet cache not empty after shutdown");
+        eprintln!("[sim] FAIL: traffic invariants violated (see failures above)");
         std::process::ExitCode::FAILURE
     }
+}
+
+/// Assert the driver's load registered exactly the production callout set, on
+/// the expected layers, inside a committed filter-engine transaction.
+fn check_registration() -> Result<(), String> {
+    let snapshot = filter_engine_snapshot().ok_or("no device installed after driver_entry")?;
+    if !snapshot.committed {
+        return Err("filter engine transaction not committed".into());
+    }
+    let expected = [
+        Layer::AleAuthConnectV4,
+        Layer::AleAuthRecvAcceptV4,
+        Layer::AleAuthConnectV6,
+        Layer::AleAuthRecvAcceptV6,
+        Layer::AleEndpointClosureV4,
+        Layer::AleEndpointClosureV6,
+        Layer::AleResourceReleaseV4,
+        Layer::AleResourceReleaseV6,
+        Layer::OutboundIppacketV4,
+        Layer::InboundIppacketV4,
+        Layer::OutboundIppacketV6,
+        Layer::InboundIppacketV6,
+    ];
+    let layers: Vec<Layer> = snapshot.callouts.iter().map(|(_, layer, _)| *layer).collect();
+    if layers != expected {
+        return Err(format!("registered callout layers mismatch: {layers:?}"));
+    }
+    if snapshot.callouts.iter().any(|(_, _, filter_id)| *filter_id == 0) {
+        return Err("a callout has no registered filter".into());
+    }
+    Ok(())
 }
 
 /// Backstop so the harness can never hang: if clean teardown does not finish
@@ -154,16 +195,3 @@ fn spawn_exit_watchdog(after: Duration, code: i32) {
     });
 }
 
-/// Poll `cond` until it is true or `timeout` elapses.
-fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let start = Instant::now();
-    loop {
-        if cond() {
-            return true;
-        }
-        if start.elapsed() >= timeout {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}

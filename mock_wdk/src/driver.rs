@@ -6,10 +6,12 @@
 //! real `DriverEntry` runs unchanged and a `DriverConnection` can read the
 //! handlers back from the `DRIVER_OBJECT` and dispatch like the I/O manager.
 //!
-//! `Driver::mock()` (carrying null objects) keeps the older
+//! `Driver::mock()` (carrying a null driver object) keeps the older
 //! `Device::new(&Driver::mock())` fuzz/test path working: with no driver object,
 //! the `set_*_fn` registrations are no-ops, which is fine because that path never
-//! dispatches through the registered handlers.
+//! dispatches through the registered handlers. It does carry a (static, zero
+//! sized) device object, because the mock filter engine — like the kernel's
+//! `FwpsCalloutRegister` — refuses callout registration without one.
 
 use core::ptr::null_mut;
 
@@ -27,21 +29,28 @@ unsafe impl Sync for Driver {}
 unsafe impl Send for Driver {}
 
 impl Driver {
-    /// Construct a driver with no backing objects, for tests / fuzz harnesses
-    /// that build a `Device` directly without going through `DriverEntry`.
+    /// Construct a driver with no backing driver object, for tests / fuzz
+    /// harnesses that build a `Device` directly without going through
+    /// `DriverEntry`. The device object is a process-wide stateless ZST so the
+    /// filter engine's registration check passes.
     pub fn mock() -> Self {
+        static MOCK_DEVICE_OBJECT: DEVICE_OBJECT = DEVICE_OBJECT;
         Driver {
             driver_object: null_mut(),
-            device_object: null_mut(),
+            device_object: core::ptr::addr_of!(MOCK_DEVICE_OBJECT) as *mut DEVICE_OBJECT,
         }
     }
 
     /// Bind a driver to a caller-owned `DRIVER_OBJECT` (used by
-    /// `interface::init_driver_object`). Handler registration writes into it.
+    /// `interface::init_driver_object`). Handler registration writes into it;
+    /// the device object is the one driver init created in it, if any.
     pub(crate) fn from_driver_object(driver_object: *mut DRIVER_OBJECT) -> Self {
+        let device_object = unsafe { driver_object.as_ref() }
+            .map(|object| object.DeviceObject)
+            .unwrap_or(null_mut());
         Driver {
             driver_object,
-            device_object: null_mut(),
+            device_object,
         }
     }
 

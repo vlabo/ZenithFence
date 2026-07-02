@@ -28,6 +28,9 @@ const N_OPS: u8 = 18;
 // are only a backstop and are rarely hit in practice.
 const PACKET_CACHE_LIMIT: usize = 8192;
 const CONN_CACHE_LIMIT: usize = 8192;
+// The mock injector records every injected packet (so harnesses can replay
+// them); with one persistent device that queue would grow without bound too.
+const INJECTED_LIMIT: usize = 8192;
 
 /// Minimal byte-stream reader for the op grammar. Reads past the end yield
 /// `0`/empty; the loop stops once the cursor passes the end, so a truncated
@@ -327,6 +330,9 @@ fn drive_ops(s: &mut Stream, concurrent: bool) {
         }
         if api::active_conn_count() > CONN_CACHE_LIMIT {
             api::device_clear_cache();
+        }
+        if api::injected_len() > INJECTED_LIMIT {
+            let _ = api::drain_injected();
         }
 
         let op = s.u8() % N_OPS;

@@ -61,9 +61,15 @@ pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1b;
 /// pointers into `MajorFunction[IRP_MJ_*]` / `DriverUnload`; the mock `Driver`
 /// does the same so a `DriverConnection` can read them back and dispatch exactly
 /// like the kernel I/O manager.
+///
+/// `DeviceObject` models the WDM field of the same name: null until driver init
+/// creates a device (`interface::init_driver_object` here, IoCreateDevice in the
+/// kernel). The mock filter engine refuses callout registration without one,
+/// like `FwpsCalloutRegister` does. Owned: freed on drop.
 pub struct DRIVER_OBJECT {
     pub MajorFunction: [Option<MjFnType>; IRP_MJ_MAXIMUM_FUNCTION + 1],
     pub DriverUnload: Option<UnloadFnType>,
+    pub DeviceObject: *mut DEVICE_OBJECT,
 }
 
 impl DRIVER_OBJECT {
@@ -71,6 +77,22 @@ impl DRIVER_OBJECT {
         Self {
             MajorFunction: [None; IRP_MJ_MAXIMUM_FUNCTION + 1],
             DriverUnload: None,
+            DeviceObject: core::ptr::null_mut(),
+        }
+    }
+}
+
+// The raw `DeviceObject` pointer suppresses the auto impls the struct had before
+// it existed. It is written once during init and freed on drop; `DEVICE_OBJECT`
+// is a stateless ZST, so cross-thread moves of the owner stay sound.
+unsafe impl Send for DRIVER_OBJECT {}
+unsafe impl Sync for DRIVER_OBJECT {}
+
+impl Drop for DRIVER_OBJECT {
+    fn drop(&mut self) {
+        if !self.DeviceObject.is_null() {
+            unsafe { drop(Box::from_raw(self.DeviceObject)) };
+            self.DeviceObject = core::ptr::null_mut();
         }
     }
 }

@@ -9,6 +9,11 @@ pub struct NET_BUFFER_LIST {
     pub data: Vec<u8>,
     pub data_offset: usize,
     pub next: *mut NET_BUFFER_LIST,
+    /// Mock of the FWPS per-NBL injection state: `Some(ipv6)` marks the packet
+    /// as injected by the driver through the network handle of that family.
+    /// The kernel tracks this per injection handle; the family here models the
+    /// v4-vs-v6 handle split (see `Injector::was_network_packet_injected_by_self`).
+    pub injected_by_self: Option<bool>,
 }
 
 impl NET_BUFFER_LIST {
@@ -21,7 +26,17 @@ impl NET_BUFFER_LIST {
             data,
             data_offset,
             next: core::ptr::null_mut(),
+            injected_by_self: None,
         })
+    }
+
+    /// Like [`new_box`](Self::new_box), but carrying the injected-by-self mark
+    /// for the given family — a packet re-entering the stack after the driver
+    /// injected it through the v4 (`ipv6 = false`) or v6 network handle.
+    pub fn new_box_injected(data: Vec<u8>, data_offset: usize, ipv6: bool) -> Box<NET_BUFFER_LIST> {
+        let mut nbl = Self::new_box(data, data_offset);
+        nbl.injected_by_self = Some(ipv6);
+        nbl
     }
 }
 

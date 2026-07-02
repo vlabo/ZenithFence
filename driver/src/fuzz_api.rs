@@ -15,7 +15,8 @@ use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use protocol::command::CommandType;
 use wdk::filter_engine::callout_data::{CalloutData, Value};
 use wdk::filter_engine::classify::ClassifyOut;
-use wdk::filter_engine::layer::{self, Layer};
+pub use wdk::filter_engine::layer::{self, Layer};
+pub use wdk::filter_engine::packet::InjectedPacket;
 use wdk::irp_helpers::{ReadRequest, WriteRequest};
 
 pub use crate::connection::{Direction, Key, Verdict};
@@ -147,6 +148,52 @@ struct TupleV6 {
     lport: u16,
     remote: Ipv6Address,
     rport: u16,
+}
+
+/// An explicit IPv4 5-tuple for the `*_tuple` entry points, so harnesses (the
+/// sim traffic producer) are not limited to the fixed fuzz pool. `protocol` is
+/// the raw IP protocol number (6 TCP, 17 UDP, 1 ICMP, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TupleSpecV4 {
+    pub protocol: u8,
+    pub local: [u8; 4],
+    pub local_port: u16,
+    pub remote: [u8; 4],
+    pub remote_port: u16,
+}
+
+/// An explicit IPv6 5-tuple, see [`TupleSpecV4`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TupleSpecV6 {
+    pub protocol: u8,
+    pub local: [u8; 16],
+    pub local_port: u16,
+    pub remote: [u8; 16],
+    pub remote_port: u16,
+}
+
+impl TupleV4 {
+    fn from_spec(spec: &TupleSpecV4) -> Self {
+        TupleV4 {
+            proto: IpProtocol::from(spec.protocol),
+            local: Ipv4Address::from_octets(spec.local),
+            lport: spec.local_port,
+            remote: Ipv4Address::from_octets(spec.remote),
+            rport: spec.remote_port,
+        }
+    }
+}
+
+impl TupleV6 {
+    fn from_spec(spec: &TupleSpecV6) -> Self {
+        TupleV6 {
+            proto: IpProtocol::from(spec.protocol),
+            local: Ipv6Address::from_octets(spec.local),
+            lport: spec.local_port,
+            remote: Ipv6Address::from_octets(spec.remote),
+            rport: spec.remote_port,
+        }
+    }
 }
 
 /// Deterministic 32-bit mix (splitmix-style), used to spread slot indices over
@@ -362,7 +409,32 @@ fn drive<F>(
 where
     F: FnOnce(CalloutData),
 {
-    let mut nbl = NET_BUFFER_LIST::new_box(packet, data_offset);
+    let nbl = NET_BUFFER_LIST::new_box(packet, data_offset);
+    drive_nbl(
+        layer,
+        values,
+        process_id,
+        nbl,
+        ip_header_size,
+        transport_header_size,
+        callout,
+    )
+}
+
+// Like `drive`, but over a caller-built NBL (used to replay injected packets
+// carrying the injected-by-self mark).
+fn drive_nbl<F>(
+    layer: Layer,
+    values: Vec<Value>,
+    process_id: Option<u64>,
+    mut nbl: Box<NET_BUFFER_LIST>,
+    ip_header_size: u32,
+    transport_header_size: u32,
+    callout: F,
+) -> CalloutResult
+where
+    F: FnOnce(CalloutData),
+{
     let mut classify_out = ClassifyOut::new();
     {
         let data = CalloutData::mock(
@@ -438,6 +510,64 @@ pub fn verdict_for_v6(conn: u8, proto_sel: u8) -> Option<u8> {
         .map(|verdict| verdict as u8)
 }
 
+/// The connection cache's verdict for an explicit tuple, if any. This is how a
+/// harness observes the agent's (asynchronous) verdict landing, like the OS
+/// observes the ALE re-authorization outcome.
+pub fn verdict_for_key_v4(spec: TupleSpecV4) -> Option<u8> {
+    let key = key_v4(&TupleV4::from_spec(&spec));
+    crate::entry::get_device()?
+        .connection_cache
+        .get_verdict(&key)
+        .map(|verdict| verdict as u8)
+}
+
+/// See [`verdict_for_key_v4`]; v6 flavor.
+pub fn verdict_for_key_v6(spec: TupleSpecV6) -> Option<u8> {
+    let key = key_v6(&TupleV6::from_spec(&spec));
+    crate::entry::get_device()?
+        .connection_cache
+        .get_verdict(&key)
+        .map(|verdict| verdict as u8)
+}
+
+/// Take every packet the driver injected since the last drain (the mock
+/// injector records instead of injecting). A harness feeds these back through
+/// the packet-layer callouts to model the OS re-presenting injected packets.
+pub fn drain_injected() -> Vec<InjectedPacket> {
+    crate::entry::get_device()
+        .map(|device| device.injector.drain_injected())
+        .unwrap_or_default()
+}
+
+/// Number of injected packets not yet drained.
+pub fn injected_len() -> usize {
+    crate::entry::get_device()
+        .map(|device| device.injector.injected_len())
+        .unwrap_or(0)
+}
+
+/// Snapshot of the filter engine's registration state, for asserting the
+/// driver loaded like the kernel would see it (sublayer committed, expected
+/// callouts on expected layers, live filter ids).
+pub struct FilterEngineSnapshot {
+    pub committed: bool,
+    /// `(name, layer, filter_id)` per registered callout, in registration order.
+    pub callouts: Vec<(String, Layer, u64)>,
+}
+
+pub fn filter_engine_snapshot() -> Option<FilterEngineSnapshot> {
+    let device = crate::entry::get_device()?;
+    let filter_engine = device.filter_engine.read_lock();
+    Some(FilterEngineSnapshot {
+        committed: filter_engine.is_committed(),
+        callouts: filter_engine
+            .registrations()
+            .iter()
+            .map(|reg| (reg.name.clone(), reg.layer, reg.filter_id))
+            .collect(),
+    })
+}
+
 // ---- ALE callouts ---------------------------------------------------------
 
 pub fn run_ale_connect_v4(
@@ -448,8 +578,27 @@ pub fn run_ale_connect_v4(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
+    ale_connect_v4_with(pool_v4(conn, proto_sel), reauthorize, process_id, payload, raw)
+}
+
+/// ALE outbound-connect against an explicit tuple (see [`TupleSpecV4`]).
+pub fn run_ale_connect_v4_tuple(
+    spec: TupleSpecV4,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+) -> CalloutResult {
+    ale_connect_v4_with(TupleV4::from_spec(&spec), reauthorize, process_id, payload, false)
+}
+
+fn ale_connect_v4_with(
+    t: TupleV4,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+    raw: bool,
+) -> CalloutResult {
     use layer::FieldsAleAuthConnectV4 as F;
-    let t = pool_v4(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     v[F::IpLocalAddress as usize] = Value::U32(u32::from_be_bytes(t.local.octets()));
@@ -478,8 +627,27 @@ pub fn run_ale_accept_v4(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
+    ale_accept_v4_with(pool_v4(conn, proto_sel), reauthorize, process_id, payload, raw)
+}
+
+/// ALE inbound-accept against an explicit tuple (see [`TupleSpecV4`]).
+pub fn run_ale_accept_v4_tuple(
+    spec: TupleSpecV4,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+) -> CalloutResult {
+    ale_accept_v4_with(TupleV4::from_spec(&spec), reauthorize, process_id, payload, false)
+}
+
+fn ale_accept_v4_with(
+    t: TupleV4,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+    raw: bool,
+) -> CalloutResult {
     use layer::FieldsAleAuthRecvAcceptV4 as F;
-    let t = pool_v4(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     v[F::IpLocalAddress as usize] = Value::U32(u32::from_be_bytes(t.local.octets()));
@@ -510,8 +678,27 @@ pub fn run_ale_connect_v6(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
+    ale_connect_v6_with(pool_v6(conn, proto_sel), reauthorize, process_id, payload, raw)
+}
+
+/// ALE outbound-connect against an explicit tuple (see [`TupleSpecV6`]).
+pub fn run_ale_connect_v6_tuple(
+    spec: TupleSpecV6,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+) -> CalloutResult {
+    ale_connect_v6_with(TupleV6::from_spec(&spec), reauthorize, process_id, payload, false)
+}
+
+fn ale_connect_v6_with(
+    t: TupleV6,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+    raw: bool,
+) -> CalloutResult {
     use layer::FieldsAleAuthConnectV6 as F;
-    let t = pool_v6(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     v[F::IpLocalAddress as usize] = Value::Bytes16(t.local.octets());
@@ -540,8 +727,27 @@ pub fn run_ale_accept_v6(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
+    ale_accept_v6_with(pool_v6(conn, proto_sel), reauthorize, process_id, payload, raw)
+}
+
+/// ALE inbound-accept against an explicit tuple (see [`TupleSpecV6`]).
+pub fn run_ale_accept_v6_tuple(
+    spec: TupleSpecV6,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+) -> CalloutResult {
+    ale_accept_v6_with(TupleV6::from_spec(&spec), reauthorize, process_id, payload, false)
+}
+
+fn ale_accept_v6_with(
+    t: TupleV6,
+    reauthorize: bool,
+    process_id: u64,
+    payload: &[u8],
+    raw: bool,
+) -> CalloutResult {
     use layer::FieldsAleAuthRecvAcceptV6 as F;
-    let t = pool_v6(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     v[F::IpLocalAddress as usize] = Value::Bytes16(t.local.octets());
@@ -565,8 +771,11 @@ pub fn run_ale_accept_v6(
 // ---- Packet-layer callouts ------------------------------------------------
 
 pub fn run_packet_in_v4(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> CalloutResult {
+    packet_in_v4_with(pool_v4(conn, proto_sel), payload, raw)
+}
+
+fn packet_in_v4_with(t: TupleV4, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsInboundIppacketV4 as F;
-    let t = pool_v4(conn, proto_sel);
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v4(&t, Direction::Inbound, payload, raw);
     drive(
@@ -582,8 +791,21 @@ pub fn run_packet_in_v4(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> C
 }
 
 pub fn run_packet_out_v4(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> CalloutResult {
+    packet_out_v4_with(pool_v4(conn, proto_sel), payload, raw)
+}
+
+/// Packet-layer classify for an explicit tuple, in either direction, with a
+/// structured packet built around `payload`.
+pub fn run_packet_v4_tuple(spec: TupleSpecV4, direction: Direction, payload: &[u8]) -> CalloutResult {
+    let t = TupleV4::from_spec(&spec);
+    match direction {
+        Direction::Inbound => packet_in_v4_with(t, payload, false),
+        Direction::Outbound => packet_out_v4_with(t, payload, false),
+    }
+}
+
+fn packet_out_v4_with(t: TupleV4, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsOutboundIppacketV4 as F;
-    let t = pool_v4(conn, proto_sel);
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v4(&t, Direction::Outbound, payload, raw);
     drive(
@@ -599,8 +821,11 @@ pub fn run_packet_out_v4(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> 
 }
 
 pub fn run_packet_in_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> CalloutResult {
+    packet_in_v6_with(pool_v6(conn, proto_sel), payload, raw)
+}
+
+fn packet_in_v6_with(t: TupleV6, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsInboundIppacketV6 as F;
-    let t = pool_v6(conn, proto_sel);
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v6(&t, Direction::Inbound, payload, raw);
     drive(
@@ -616,8 +841,102 @@ pub fn run_packet_in_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> C
 }
 
 pub fn run_packet_out_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> CalloutResult {
+    packet_out_v6_with(pool_v6(conn, proto_sel), payload, raw)
+}
+
+/// Packet-layer classify for an explicit tuple, see [`run_packet_v4_tuple`].
+pub fn run_packet_v6_tuple(spec: TupleSpecV6, direction: Direction, payload: &[u8]) -> CalloutResult {
+    let t = TupleV6::from_spec(&spec);
+    match direction {
+        Direction::Inbound => packet_in_v6_with(t, payload, false),
+        Direction::Outbound => packet_out_v6_with(t, payload, false),
+    }
+}
+
+/// Run the v4 packet-layer callout on an already-built packet buffer, as the
+/// OS re-presents a packet: `injected_by_self` marks it as network-injected by
+/// the driver (the FWPS injection state), so the callout's self-inject permit
+/// branch runs. `bytes` must start at the IP header.
+pub fn run_packet_bytes_v4(bytes: &[u8], direction: Direction, injected_by_self: bool) -> CalloutResult {
+    let (data_offset, ipv6) = match direction {
+        // Inbound packet-layer NBLs start past the IP header; the callout retreats.
+        Direction::Inbound => (IP4_HDR as usize, false),
+        Direction::Outbound => (0, false),
+    };
+    let nbl = if injected_by_self {
+        NET_BUFFER_LIST::new_box_injected(bytes.to_vec(), data_offset, ipv6)
+    } else {
+        NET_BUFFER_LIST::new_box(bytes.to_vec(), data_offset)
+    };
+    match direction {
+        Direction::Inbound => {
+            use layer::FieldsInboundIppacketV4 as F;
+            drive_nbl(
+                Layer::InboundIppacketV4,
+                alloc::vec![Value::U32(0); F::Max as usize],
+                None,
+                nbl,
+                0,
+                0,
+                |d| crate::packet_callouts::ip_packet_layer_inbound_v4(d),
+            )
+        }
+        Direction::Outbound => {
+            use layer::FieldsOutboundIppacketV4 as F;
+            drive_nbl(
+                Layer::OutboundIppacketV4,
+                alloc::vec![Value::U32(0); F::Max as usize],
+                None,
+                nbl,
+                0,
+                0,
+                |d| crate::packet_callouts::ip_packet_layer_outbound_v4(d),
+            )
+        }
+    }
+}
+
+/// See [`run_packet_bytes_v4`]; v6 flavor.
+pub fn run_packet_bytes_v6(bytes: &[u8], direction: Direction, injected_by_self: bool) -> CalloutResult {
+    let data_offset = match direction {
+        Direction::Inbound => IP6_HDR as usize,
+        Direction::Outbound => 0,
+    };
+    let nbl = if injected_by_self {
+        NET_BUFFER_LIST::new_box_injected(bytes.to_vec(), data_offset, true)
+    } else {
+        NET_BUFFER_LIST::new_box(bytes.to_vec(), data_offset)
+    };
+    match direction {
+        Direction::Inbound => {
+            use layer::FieldsInboundIppacketV6 as F;
+            drive_nbl(
+                Layer::InboundIppacketV6,
+                alloc::vec![Value::U32(0); F::Max as usize],
+                None,
+                nbl,
+                0,
+                0,
+                |d| crate::packet_callouts::ip_packet_layer_inbound_v6(d),
+            )
+        }
+        Direction::Outbound => {
+            use layer::FieldsOutboundIppacketV6 as F;
+            drive_nbl(
+                Layer::OutboundIppacketV6,
+                alloc::vec![Value::U32(0); F::Max as usize],
+                None,
+                nbl,
+                0,
+                0,
+                |d| crate::packet_callouts::ip_packet_layer_outbound_v6(d),
+            )
+        }
+    }
+}
+
+fn packet_out_v6_with(t: TupleV6, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsOutboundIppacketV6 as F;
-    let t = pool_v6(conn, proto_sel);
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v6(&t, Direction::Outbound, payload, raw);
     drive(
@@ -635,8 +954,16 @@ pub fn run_packet_out_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> 
 // ---- Teardown callouts (no classify action expected) ----------------------
 
 pub fn run_endpoint_close_v4(conn: u8, proto_sel: u8, process_id: u64) {
+    endpoint_close_v4_with(pool_v4(conn, proto_sel), process_id)
+}
+
+/// Endpoint closure for an explicit tuple (see [`TupleSpecV4`]).
+pub fn run_endpoint_close_v4_tuple(spec: TupleSpecV4, process_id: u64) {
+    endpoint_close_v4_with(TupleV4::from_spec(&spec), process_id)
+}
+
+fn endpoint_close_v4_with(t: TupleV4, process_id: u64) {
     use layer::FieldsAleEndpointClosureV4 as F;
-    let t = pool_v4(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     // Must be FwpUint32-typed or the callout treats it as an invalid address.
@@ -657,8 +984,16 @@ pub fn run_endpoint_close_v4(conn: u8, proto_sel: u8, process_id: u64) {
 }
 
 pub fn run_endpoint_close_v6(conn: u8, proto_sel: u8, process_id: u64) {
+    endpoint_close_v6_with(pool_v6(conn, proto_sel), process_id)
+}
+
+/// Endpoint closure for an explicit tuple (see [`TupleSpecV6`]).
+pub fn run_endpoint_close_v6_tuple(spec: TupleSpecV6, process_id: u64) {
+    endpoint_close_v6_with(TupleV6::from_spec(&spec), process_id)
+}
+
+fn endpoint_close_v6_with(t: TupleV6, process_id: u64) {
     use layer::FieldsAleEndpointClosureV6 as F;
-    let t = pool_v6(conn, proto_sel);
     let mut v = alloc::vec![Value::U32(0); F::Max as usize];
     v[F::IpProtocol as usize] = Value::U8(u8::from(t.proto));
     // Both local and remote must be FwpByteArray16-typed for the v6 callout.
@@ -749,6 +1084,43 @@ pub fn run_resource_v6(kind: u8, proto_sel: u8, port: u16) {
     }
 }
 
+/// Resource release for a raw protocol number and port (unlike
+/// [`run_resource_v4`], which maps through the fuzz `proto_sel` distribution).
+pub fn run_resource_release_v4_port(protocol: u8, port: u16) {
+    use layer::FieldsAleResourceReleaseV4 as F;
+    let mut v = alloc::vec![Value::U32(0); F::Max as usize];
+    v[F::IpProtocol as usize] = Value::U8(protocol);
+    v[F::IpLocalPort as usize] = Value::U16(port);
+    let _ = drive(
+        Layer::AleResourceReleaseV4,
+        v,
+        Some(0),
+        Vec::new(),
+        0,
+        0,
+        0,
+        |d| crate::ale_callouts::ale_resource_monitor(d),
+    );
+}
+
+/// See [`run_resource_release_v4_port`]; v6 flavor.
+pub fn run_resource_release_v6_port(protocol: u8, port: u16) {
+    use layer::FieldsAleResourceReleaseV6 as F;
+    let mut v = alloc::vec![Value::U32(0); F::Max as usize];
+    v[F::IpProtocol as usize] = Value::U8(protocol);
+    v[F::IpLocalPort as usize] = Value::U16(port);
+    let _ = drive(
+        Layer::AleResourceReleaseV6,
+        v,
+        Some(0),
+        Vec::new(),
+        0,
+        0,
+        0,
+        |d| crate::ale_callouts::ale_resource_monitor(d),
+    );
+}
+
 // ---- User-space command channel (the verdict side of the pipeline) --------
 
 fn write_global(bytes: &[u8]) {
@@ -812,5 +1184,157 @@ pub fn drain_events(max: u8) {
     for _ in 0..max {
         let mut request = ReadRequest::from_buffer(&mut buffer);
         device.read(&mut request);
+    }
+}
+
+#[cfg(all(test, feature = "mock"))]
+mod tests {
+    use super::*;
+    use crate::entry::DEVICE_TEST_LOCK;
+
+    // Install a fresh device in the global slot for the duration of `test`,
+    // serialized against every other global-slot test.
+    fn with_fresh_device(test: impl FnOnce()) {
+        let _guard = DEVICE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let stale = crate::entry::clear_device();
+        if !stale.is_null() {
+            unsafe { drop(Box::from_raw(stale)) };
+        }
+        ensure_device();
+        test();
+        let device = crate::entry::clear_device();
+        if !device.is_null() {
+            unsafe { drop(Box::from_raw(device)) };
+        }
+    }
+
+    // Loading fidelity: the real driver_entry, run over the mock, must commit
+    // the filter engine with exactly the production callout set on the expected
+    // layers -- a registration regression in callouts.rs fails here (and fails
+    // the sim daemon at load, which does the same assertion).
+    #[test]
+    fn driver_entry_registers_expected_callouts() {
+        let simulation = crate::sim::Simulation::start().expect("driver entry");
+        let snapshot = filter_engine_snapshot().expect("device installed");
+        assert!(snapshot.committed);
+
+        let layers: Vec<Layer> = snapshot.callouts.iter().map(|(_, layer, _)| *layer).collect();
+        assert_eq!(
+            layers,
+            alloc::vec![
+                Layer::AleAuthConnectV4,
+                Layer::AleAuthRecvAcceptV4,
+                Layer::AleAuthConnectV6,
+                Layer::AleAuthRecvAcceptV6,
+                Layer::AleEndpointClosureV4,
+                Layer::AleEndpointClosureV6,
+                Layer::AleResourceReleaseV4,
+                Layer::AleResourceReleaseV6,
+                Layer::OutboundIppacketV4,
+                Layer::InboundIppacketV4,
+                Layer::OutboundIppacketV6,
+                Layer::InboundIppacketV6,
+            ]
+        );
+
+        let mut filter_ids: Vec<u64> = snapshot.callouts.iter().map(|(_, _, id)| *id).collect();
+        filter_ids.sort_unstable();
+        filter_ids.dedup();
+        assert_eq!(filter_ids.len(), 12, "filter ids must be distinct");
+        assert!(!filter_ids.contains(&0), "0 means unregistered");
+
+        drop(simulation);
+    }
+
+    // Injection loopback: a pended packet released by a verdict is recorded by
+    // the mock injector; replayed at the packet layer with the injected-by-self
+    // mark it must hit the self-inject permit branch, and without the mark it
+    // must pend again (the mark, not the bytes, drives the branch).
+    #[test]
+    fn injected_packet_loops_back_and_is_permitted() {
+        with_fresh_device(|| {
+            let _ = drain_injected();
+            let spec = TupleSpecV4 {
+                protocol: 1, // ICMP: not connection-tracked, pends per-packet
+                local: [10, 0, 0, 9],
+                local_port: 0,
+                remote: [10, 0, 0, 10],
+                remote_port: 0,
+            };
+
+            let result = run_packet_v4_tuple(spec, Direction::Outbound, &[8, 0, 0, 0]);
+            assert!(result.absorb, "ICMP packet must pend for a per-packet verdict");
+            let ids = live_ids();
+            assert_eq!(ids.len(), 1);
+
+            device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
+            assert_eq!(packet_cache_len(), 0);
+            let injected = drain_injected();
+            assert_eq!(injected.len(), 1, "accept verdict must inject the clone");
+            let packet = &injected[0];
+            assert!(!packet.transport);
+            assert!(!packet.inbound);
+            assert!(!packet.ipv6);
+
+            let direction = if packet.inbound { Direction::Inbound } else { Direction::Outbound };
+            let replay = run_packet_bytes_v4(&packet.data, direction, true);
+            assert_eq!(replay.action, FWP_ACTION_PERMIT, "self-injected packet must be permitted");
+            assert_eq!(packet_cache_len(), 0, "self-injected packet must not pend again");
+
+            let replay = run_packet_bytes_v4(&packet.data, direction, false);
+            assert!(replay.absorb, "unmarked packet must go through the normal path");
+            assert_eq!(packet_cache_len(), 1, "and pend for a fresh verdict");
+        });
+    }
+
+    // Tuple pipeline: an arbitrary (non-pool) tuple flows ALE pend -> verdict ->
+    // packet-layer permit; an inbound accept carrying payload records a
+    // transport inject when its verdict releases the defer.
+    #[test]
+    fn tuple_pipeline_links_ale_verdict_and_packet_layer() {
+        with_fresh_device(|| {
+            let _ = drain_injected();
+            let spec = TupleSpecV4 {
+                protocol: 6,
+                local: [10, 1, 2, 3],
+                local_port: 34567,
+                remote: [52, 10, 20, 30],
+                remote_port: 443,
+            };
+
+            let result = run_ale_connect_v4_tuple(spec, false, 4242, &[]);
+            assert!(result.absorb, "new connection must pend");
+            assert_eq!(verdict_for_key_v4(spec), Some(Verdict::Undecided as u8));
+
+            let ids = live_ids();
+            assert_eq!(ids.len(), 1);
+            device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
+            assert_eq!(verdict_for_key_v4(spec), Some(Verdict::PermanentAccept as u8));
+            // An outbound TCP connect defer carries no packet data, so nothing
+            // is recorded by the injector.
+            assert_eq!(injected_len(), 0);
+
+            let result = run_packet_v4_tuple(spec, Direction::Outbound, b"data");
+            assert_eq!(result.action, FWP_ACTION_PERMIT);
+
+            // Inbound accept with payload: the verdict completes the ALE defer
+            // and the pended first packet is transport-injected.
+            let spec_in = TupleSpecV4 {
+                protocol: 6,
+                local: [10, 1, 2, 3],
+                local_port: 8080,
+                remote: [52, 10, 20, 31],
+                remote_port: 51000,
+            };
+            let result = run_ale_accept_v4_tuple(spec_in, false, 4243, &[1, 2, 3, 4]);
+            assert!(result.absorb);
+            let ids = live_ids();
+            assert_eq!(ids.len(), 1);
+            device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
+            let injected = drain_injected();
+            assert_eq!(injected.len(), 1);
+            assert!(injected[0].transport);
+            assert!(injected[0].inbound);
+        });
     }
 }
