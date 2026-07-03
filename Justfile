@@ -84,10 +84,10 @@ sim-build:
 	cargo build --manifest-path ./sim/Cargo.toml
 	go build -C ./kext_tester -o ../kext_tester.exe
 
-# Run the simulation: start the fake driver, then the agent. The daemon drives
-# fake events, waits for the agent's verdicts, shuts down, and exits non-zero on
-# any invariant failure (e.g. unresolved pended packets). The recipe surfaces the
-# daemon's exit code as pass/fail.
+# Run the simulation (fake driver side): generate random network traffic forever,
+# exiting non-zero the moment a driver invariant breaks. Runs until you stop it
+# (Ctrl+C); the seed is fixed, so any failure reproduces on the next run. Start
+# the agent alongside it with `just sim-run`.
 
 mock-run: sim-build
 	#!pwsh.exe -File

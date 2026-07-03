@@ -47,6 +47,8 @@ extern "system" {
         security_attributes: *mut c_void,
     ) -> Handle;
     fn ConnectNamedPipe(pipe: Handle, overlapped: *mut Overlapped) -> Bool;
+    // Only used by the (currently unused) `disconnect` graceful-stop primitive.
+    #[allow(dead_code)]
     fn DisconnectNamedPipe(pipe: Handle) -> Bool;
     fn ReadFile(
         file: Handle,
@@ -169,7 +171,9 @@ impl PipeServer {
     }
 
     /// Force the connection closed: completes both a pending server `ReadFile`
-    /// and the agent's `ReadFile` with an error, so each side's loop ends.
+    /// and the agent's `ReadFile` with an error, so each side's loop ends. Unused
+    /// while the producer runs forever; kept for a future graceful-stop path.
+    #[allow(dead_code)]
     pub fn disconnect(&self) {
         unsafe {
             DisconnectNamedPipe(self.handle);

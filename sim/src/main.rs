@@ -13,10 +13,10 @@
 //!   - event pump: blocks on `DriverConnection::read`, ships bytes to the pipe
 //!   - command pump: reads command messages from the pipe, applies them
 //!
-//! Teardown order is load-bearing: drain → `shutdown` (runs down the event queue
-//! so the blocked event pump wakes with end-of-file) → join event pump →
-//! `disconnect` (so the agent exits and the command pump's blocked read errors)
-//! → join command pump.
+//! The producer runs forever, so there is no clean-teardown phase: a healthy run
+//! ends when the user stops it (Ctrl+C), and a broken invariant ends it via the
+//! monitor thread's non-zero `process::exit`. Either way the OS reclaims the
+//! driver, the pumps, and the pipe.
 
 mod pipe;
 mod producer;
@@ -25,9 +25,8 @@ mod scenarios;
 
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
-use driver::fuzz_api::{filter_engine_snapshot, packet_cache_len, Layer};
+use driver::fuzz_api::{filter_engine_snapshot, Layer};
 use driver::sim::Simulation;
 use mock_wdk::kernel_types::{STATUS_END_OF_FILE, STATUS_SUCCESS};
 
@@ -36,12 +35,6 @@ use pipe::PipeServer;
 const PIPE_NAME: &str = r"\\.\pipe\ZenithFence";
 
 fn main() -> std::process::ExitCode {
-    let cfg = producer::Config::from_env();
-    println!(
-        "[sim] seed=0x{:016x} flows={} threads={} (ZF_SIM_SEED / ZF_SIM_FLOWS / ZF_SIM_THREADS)",
-        cfg.seed, cfg.random_flows, cfg.threads
-    );
-
     println!("[sim] loading driver over mock_wdk ...");
     let sim = match Simulation::start() {
         Ok(sim) => sim,
@@ -78,7 +71,7 @@ fn main() -> std::process::ExitCode {
     // Event pump: driver events -> pipe. Its own connection, blocking reads.
     let mut evt_conn = sim.connect();
     let evt_pipe = Arc::clone(&server);
-    let evt_thread = thread::spawn(move || {
+    let _evt_pump = thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let mut reads = 0u64;
         loop {
@@ -100,7 +93,7 @@ fn main() -> std::process::ExitCode {
     // Command pump: pipe -> driver. One command message per read.
     let mut cmd_conn = sim.connect();
     let cmd_pipe = Arc::clone(&server);
-    let cmd_thread = thread::spawn(move || {
+    let _cmd_pump = thread::spawn(move || {
         let mut buf = [0u8; 512];
         let mut commands = 0u64;
         loop {
@@ -116,42 +109,16 @@ fn main() -> std::process::ExitCode {
         commands
     });
 
-    // Producer: fake OS network traffic (scenarios + seeded random flows).
-    // `drive` returns once every flow ran, the agent's verdicts resolved every
-    // pended packet, and the reinjector replayed every injected packet.
+    // Producer: fake OS network traffic (seeded random flows), forever. `drive`
+    // never returns -- the monitor thread exits the process non-zero the moment
+    // an invariant breaks, and Ctrl+C stops a healthy run. `sim` and the pumps
+    // stay alive for the whole run because `main` never returns past this call.
     println!("[sim] producing fake network traffic ...");
-    let summary = producer::drive(&cfg);
-    summary.print();
+    producer::drive();
 
-    // The outcome is already known, so decide pass/fail now and let a watchdog
-    // enforce it even if the best-effort clean teardown below stalls on a
-    // blocked pipe read.
-    let pass = summary.is_ok() && packet_cache_len() == 0;
-    let exit_code = if pass { 0 } else { 1 };
-    spawn_exit_watchdog(Duration::from_secs(10), exit_code);
-
-    // Teardown (best effort): run down the event queue so the event pump wakes
-    // with EOF; join it; force the connection closed so the agent exits and the
-    // command pump's blocked read returns an error; join it.
-    sim.shutdown();
-    let reads = evt_thread.join().unwrap_or(0);
-    server.disconnect();
-    let commands = cmd_thread.join().unwrap_or(0);
-    println!(
-        "[sim] done: {reads} event reads, {commands} commands applied, cache={}",
-        packet_cache_len()
-    );
-
-    // `sim` drops here, unloading the driver. Threads are already joined.
-    drop(sim);
-
-    if pass {
-        println!("[sim] PASS");
-        std::process::ExitCode::SUCCESS
-    } else {
-        eprintln!("[sim] FAIL: traffic invariants violated (see failures above)");
-        std::process::ExitCode::FAILURE
-    }
+    // Unreachable in practice (`drive` loops forever); kept so `main` returns an
+    // `ExitCode` on every path.
+    std::process::ExitCode::SUCCESS
 }
 
 /// Assert the driver's load registered exactly the production callout set, on
@@ -183,15 +150,5 @@ fn check_registration() -> Result<(), String> {
         return Err("a callout has no registered filter".into());
     }
     Ok(())
-}
-
-/// Backstop so the harness can never hang: if clean teardown does not finish
-/// within `after`, terminate the process with the already-decided exit code.
-fn spawn_exit_watchdog(after: Duration, code: i32) {
-    thread::spawn(move || {
-        thread::sleep(after);
-        eprintln!("[sim] watchdog: teardown stalled after {after:?}; forcing exit {code}");
-        std::process::exit(code);
-    });
 }
 

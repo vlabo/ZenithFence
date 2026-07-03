@@ -31,65 +31,10 @@ pub use wdk::filter_engine::net_buffer::{NetBufferList, NET_BUFFER_LIST};
 // the verdict an action produced without depending on `wdk`/`mock_wdk` directly.
 pub use wdk::filter_engine::classify::{FWP_ACTION_BLOCK, FWP_ACTION_PERMIT};
 
-/// Fuzz `get_ports` directly on an arbitrary transport-header slice.
-pub fn fuzz_get_ports(packet: &[u8], protocol: IpProtocol) -> (u16, u16) {
-    crate::packet_util::get_ports(packet, protocol)
-}
-
-/// Fuzz the outbound redirect path on an arbitrary packet buffer (in place).
-pub fn fuzz_redirect_outbound(
-    packet: &mut [u8],
-    remote_address: IpAddress,
-    remote_port: u16,
-    unify: bool,
-) {
-    crate::packet_util::redirect_outbound_packet(packet, remote_address, remote_port, unify);
-}
-
-/// Fuzz the inbound redirect path on an arbitrary packet buffer (in place).
-pub fn fuzz_redirect_inbound(
-    packet: &mut [u8],
-    local_address: IpAddress,
-    original_remote_address: IpAddress,
-    original_remote_port: u16,
-) {
-    crate::packet_util::redirect_inbound_packet(
-        packet,
-        local_address,
-        original_remote_address,
-        original_remote_port,
-    );
-}
-
-/// Build an owned mock `NetBufferList` from raw bytes and extract the IPv4 key.
-pub fn fuzz_key_from_bytes_v4(bytes: &[u8], direction: Direction) -> Result<Key, String> {
-    let nbl = NetBufferList::owned_from_bytes(bytes.to_vec());
-    get_key_from_nbl_v4(&nbl, direction)
-}
-
-/// Build an owned mock `NetBufferList` from raw bytes and extract the IPv6 key.
-pub fn fuzz_key_from_bytes_v6(bytes: &[u8], direction: Direction) -> Result<Key, String> {
-    let nbl = NetBufferList::owned_from_bytes(bytes.to_vec());
-    get_key_from_nbl_v6(&nbl, direction)
-}
-
 /// Construct a mock `Device` for end-to-end harnesses (command channel / callouts).
 pub fn new_mock_device() -> Result<Device, String> {
     let driver = Driver::mock();
     Device::new(&driver)
-}
-
-/// Feed an arbitrary byte buffer into the user-space command channel
-/// (`Device::write`). Mirrors what a `handle.Write` from user space does.
-pub fn fuzz_device_write(device: &mut Device, command_bytes: &[u8]) {
-    let mut write_request = wdk::irp_helpers::WriteRequest::from_bytes(command_bytes);
-    device.write(&mut write_request);
-}
-
-/// Convenience: collect a `Vec<u8>` packet into an owned NBL (for redirect tests
-/// that go through the `Redirect for Packet` trait).
-pub fn owned_nbl(bytes: Vec<u8>) -> NetBufferList {
-    NetBufferList::owned_from_bytes(bytes)
 }
 
 // ============================================================================
@@ -253,17 +198,60 @@ fn pool_v4(conn: u8, proto_sel: u8) -> TupleV4 {
     // slots, loopback always last. Slots 0/1 stay clean+distinct (the native
     // pipeline test relies on them). Ports apply only to TCP/UDP (see ports_for).
     let (local, remote, lport, rport) = match c {
-        0 => (Ipv4Address::new(10, 0, 0, 1), Ipv4Address::new(93, 184, 216, 34), 1000, 8000),
-        1 => (Ipv4Address::new(10, 0, 0, 2), Ipv4Address::new(8, 8, 8, 8), 1001, 8001),
-        2 => (Ipv4Address::new(192, 168, 1, 5), Ipv4Address::new(1, 1, 1, 1), 53, 53),
-        3 => (Ipv4Address::new(172, 16, 0, 9), Ipv4Address::new(140, 82, 121, 4), 443, 50000),
-        4 => (Ipv4Address::new(169, 254, 0, 7), Ipv4Address::new(169, 254, 0, 8), 5353, 5353),
-        5 => (Ipv4Address::new(100, 64, 0, 1), Ipv4Address::new(203, 0, 113, 9), 717, 1),
-        6 => (Ipv4Address::new(0, 0, 0, 0), Ipv4Address::new(255, 255, 255, 255), 0, 65535),
-        7 => (Ipv4Address::new(10, 0, 0, 3), Ipv4Address::new(224, 0, 0, 251), 5353, 5353),
-        _ if c == POOL_SIZE - 1 => {
-            (Ipv4Address::new(127, 0, 0, 1), Ipv4Address::new(127, 0, 0, 2), 1000, 8000)
-        }
+        0 => (
+            Ipv4Address::new(10, 0, 0, 1),
+            Ipv4Address::new(93, 184, 216, 34),
+            1000,
+            8000,
+        ),
+        1 => (
+            Ipv4Address::new(10, 0, 0, 2),
+            Ipv4Address::new(8, 8, 8, 8),
+            1001,
+            8001,
+        ),
+        2 => (
+            Ipv4Address::new(192, 168, 1, 5),
+            Ipv4Address::new(1, 1, 1, 1),
+            53,
+            53,
+        ),
+        3 => (
+            Ipv4Address::new(172, 16, 0, 9),
+            Ipv4Address::new(140, 82, 121, 4),
+            443,
+            50000,
+        ),
+        4 => (
+            Ipv4Address::new(169, 254, 0, 7),
+            Ipv4Address::new(169, 254, 0, 8),
+            5353,
+            5353,
+        ),
+        5 => (
+            Ipv4Address::new(100, 64, 0, 1),
+            Ipv4Address::new(203, 0, 113, 9),
+            717,
+            1,
+        ),
+        6 => (
+            Ipv4Address::new(0, 0, 0, 0),
+            Ipv4Address::new(255, 255, 255, 255),
+            0,
+            65535,
+        ),
+        7 => (
+            Ipv4Address::new(10, 0, 0, 3),
+            Ipv4Address::new(224, 0, 0, 251),
+            5353,
+            5353,
+        ),
+        _ if c == POOL_SIZE - 1 => (
+            Ipv4Address::new(127, 0, 0, 1),
+            Ipv4Address::new(127, 0, 0, 2),
+            1000,
+            8000,
+        ),
         _ => {
             let a = mix32(c as u32 * 2);
             let b = mix32(c as u32 * 2 + 1);
@@ -287,15 +275,43 @@ fn pool_v4(conn: u8, proto_sel: u8) -> TupleV4 {
 fn pool_v6(conn: u8, proto_sel: u8) -> TupleV6 {
     let c = conn % POOL_SIZE;
     let (local, remote, lport, rport) = match c {
-        0 => (v6_prefix(0x20, 0x01, 1), v6_prefix(0x20, 0x01, 0x80), 1000, 8000),
-        1 => (v6_prefix(0x20, 0x01, 2), v6_prefix(0x20, 0x01, 0x88), 1001, 8001),
+        0 => (
+            v6_prefix(0x20, 0x01, 1),
+            v6_prefix(0x20, 0x01, 0x80),
+            1000,
+            8000,
+        ),
+        1 => (
+            v6_prefix(0x20, 0x01, 2),
+            v6_prefix(0x20, 0x01, 0x88),
+            1001,
+            8001,
+        ),
         2 => (v6_prefix(0xfe, 0x80, 1), v6_prefix(0xfe, 0x80, 2), 53, 53), // link-local
-        3 => (v6_prefix(0xfc, 0x00, 1), v6_prefix(0x20, 0x01, 0x90), 443, 50000), // ULA
-        4 => (v6_prefix(0xff, 0x02, 1), v6_prefix(0x20, 0x01, 0x91), 5353, 5353), // multicast
-        5 => (Ipv6Address::from_octets([0u8; 16]), v6_prefix(0x20, 0x01, 0x92), 0, 65535),
-        _ if c == POOL_SIZE - 1 => {
-            (Ipv6Address::LOCALHOST, v6_prefix(0x20, 0x01, 0x88), 1000, 8000)
-        }
+        3 => (
+            v6_prefix(0xfc, 0x00, 1),
+            v6_prefix(0x20, 0x01, 0x90),
+            443,
+            50000,
+        ), // ULA
+        4 => (
+            v6_prefix(0xff, 0x02, 1),
+            v6_prefix(0x20, 0x01, 0x91),
+            5353,
+            5353,
+        ), // multicast
+        5 => (
+            Ipv6Address::from_octets([0u8; 16]),
+            v6_prefix(0x20, 0x01, 0x92),
+            0,
+            65535,
+        ),
+        _ if c == POOL_SIZE - 1 => (
+            Ipv6Address::LOCALHOST,
+            v6_prefix(0x20, 0x01, 0x88),
+            1000,
+            8000,
+        ),
         _ => {
             let a = mix32(c as u32 * 2 + 0x6000);
             let b = mix32(c as u32 * 2 + 0x6001);
@@ -578,7 +594,13 @@ pub fn run_ale_connect_v4(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
-    ale_connect_v4_with(pool_v4(conn, proto_sel), reauthorize, process_id, payload, raw)
+    ale_connect_v4_with(
+        pool_v4(conn, proto_sel),
+        reauthorize,
+        process_id,
+        payload,
+        raw,
+    )
 }
 
 /// ALE outbound-connect against an explicit tuple (see [`TupleSpecV4`]).
@@ -588,7 +610,13 @@ pub fn run_ale_connect_v4_tuple(
     process_id: u64,
     payload: &[u8],
 ) -> CalloutResult {
-    ale_connect_v4_with(TupleV4::from_spec(&spec), reauthorize, process_id, payload, false)
+    ale_connect_v4_with(
+        TupleV4::from_spec(&spec),
+        reauthorize,
+        process_id,
+        payload,
+        false,
+    )
 }
 
 fn ale_connect_v4_with(
@@ -627,7 +655,13 @@ pub fn run_ale_accept_v4(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
-    ale_accept_v4_with(pool_v4(conn, proto_sel), reauthorize, process_id, payload, raw)
+    ale_accept_v4_with(
+        pool_v4(conn, proto_sel),
+        reauthorize,
+        process_id,
+        payload,
+        raw,
+    )
 }
 
 /// ALE inbound-accept against an explicit tuple (see [`TupleSpecV4`]).
@@ -637,7 +671,13 @@ pub fn run_ale_accept_v4_tuple(
     process_id: u64,
     payload: &[u8],
 ) -> CalloutResult {
-    ale_accept_v4_with(TupleV4::from_spec(&spec), reauthorize, process_id, payload, false)
+    ale_accept_v4_with(
+        TupleV4::from_spec(&spec),
+        reauthorize,
+        process_id,
+        payload,
+        false,
+    )
 }
 
 fn ale_accept_v4_with(
@@ -678,7 +718,13 @@ pub fn run_ale_connect_v6(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
-    ale_connect_v6_with(pool_v6(conn, proto_sel), reauthorize, process_id, payload, raw)
+    ale_connect_v6_with(
+        pool_v6(conn, proto_sel),
+        reauthorize,
+        process_id,
+        payload,
+        raw,
+    )
 }
 
 /// ALE outbound-connect against an explicit tuple (see [`TupleSpecV6`]).
@@ -688,7 +734,13 @@ pub fn run_ale_connect_v6_tuple(
     process_id: u64,
     payload: &[u8],
 ) -> CalloutResult {
-    ale_connect_v6_with(TupleV6::from_spec(&spec), reauthorize, process_id, payload, false)
+    ale_connect_v6_with(
+        TupleV6::from_spec(&spec),
+        reauthorize,
+        process_id,
+        payload,
+        false,
+    )
 }
 
 fn ale_connect_v6_with(
@@ -727,7 +779,13 @@ pub fn run_ale_accept_v6(
     payload: &[u8],
     raw: bool,
 ) -> CalloutResult {
-    ale_accept_v6_with(pool_v6(conn, proto_sel), reauthorize, process_id, payload, raw)
+    ale_accept_v6_with(
+        pool_v6(conn, proto_sel),
+        reauthorize,
+        process_id,
+        payload,
+        raw,
+    )
 }
 
 /// ALE inbound-accept against an explicit tuple (see [`TupleSpecV6`]).
@@ -737,7 +795,13 @@ pub fn run_ale_accept_v6_tuple(
     process_id: u64,
     payload: &[u8],
 ) -> CalloutResult {
-    ale_accept_v6_with(TupleV6::from_spec(&spec), reauthorize, process_id, payload, false)
+    ale_accept_v6_with(
+        TupleV6::from_spec(&spec),
+        reauthorize,
+        process_id,
+        payload,
+        false,
+    )
 }
 
 fn ale_accept_v6_with(
@@ -796,7 +860,11 @@ pub fn run_packet_out_v4(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> 
 
 /// Packet-layer classify for an explicit tuple, in either direction, with a
 /// structured packet built around `payload`.
-pub fn run_packet_v4_tuple(spec: TupleSpecV4, direction: Direction, payload: &[u8]) -> CalloutResult {
+pub fn run_packet_v4_tuple(
+    spec: TupleSpecV4,
+    direction: Direction,
+    payload: &[u8],
+) -> CalloutResult {
     let t = TupleV4::from_spec(&spec);
     match direction {
         Direction::Inbound => packet_in_v4_with(t, payload, false),
@@ -808,16 +876,9 @@ fn packet_out_v4_with(t: TupleV4, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsOutboundIppacketV4 as F;
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v4(&t, Direction::Outbound, payload, raw);
-    drive(
-        Layer::OutboundIppacketV4,
-        v,
-        None,
-        packet,
-        0,
-        0,
-        0,
-        |d| crate::packet_callouts::ip_packet_layer_outbound_v4(d),
-    )
+    drive(Layer::OutboundIppacketV4, v, None, packet, 0, 0, 0, |d| {
+        crate::packet_callouts::ip_packet_layer_outbound_v4(d)
+    })
 }
 
 pub fn run_packet_in_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> CalloutResult {
@@ -845,7 +906,11 @@ pub fn run_packet_out_v6(conn: u8, proto_sel: u8, payload: &[u8], raw: bool) -> 
 }
 
 /// Packet-layer classify for an explicit tuple, see [`run_packet_v4_tuple`].
-pub fn run_packet_v6_tuple(spec: TupleSpecV6, direction: Direction, payload: &[u8]) -> CalloutResult {
+pub fn run_packet_v6_tuple(
+    spec: TupleSpecV6,
+    direction: Direction,
+    payload: &[u8],
+) -> CalloutResult {
     let t = TupleV6::from_spec(&spec);
     match direction {
         Direction::Inbound => packet_in_v6_with(t, payload, false),
@@ -857,7 +922,11 @@ pub fn run_packet_v6_tuple(spec: TupleSpecV6, direction: Direction, payload: &[u
 /// OS re-presents a packet: `injected_by_self` marks it as network-injected by
 /// the driver (the FWPS injection state), so the callout's self-inject permit
 /// branch runs. `bytes` must start at the IP header.
-pub fn run_packet_bytes_v4(bytes: &[u8], direction: Direction, injected_by_self: bool) -> CalloutResult {
+pub fn run_packet_bytes_v4(
+    bytes: &[u8],
+    direction: Direction,
+    injected_by_self: bool,
+) -> CalloutResult {
     let (data_offset, ipv6) = match direction {
         // Inbound packet-layer NBLs start past the IP header; the callout retreats.
         Direction::Inbound => (IP4_HDR as usize, false),
@@ -897,7 +966,11 @@ pub fn run_packet_bytes_v4(bytes: &[u8], direction: Direction, injected_by_self:
 }
 
 /// See [`run_packet_bytes_v4`]; v6 flavor.
-pub fn run_packet_bytes_v6(bytes: &[u8], direction: Direction, injected_by_self: bool) -> CalloutResult {
+pub fn run_packet_bytes_v6(
+    bytes: &[u8],
+    direction: Direction,
+    injected_by_self: bool,
+) -> CalloutResult {
     let data_offset = match direction {
         Direction::Inbound => IP6_HDR as usize,
         Direction::Outbound => 0,
@@ -939,16 +1012,9 @@ fn packet_out_v6_with(t: TupleV6, payload: &[u8], raw: bool) -> CalloutResult {
     use layer::FieldsOutboundIppacketV6 as F;
     let v = alloc::vec![Value::U32(0); F::Max as usize];
     let packet = build_packet_v6(&t, Direction::Outbound, payload, raw);
-    drive(
-        Layer::OutboundIppacketV6,
-        v,
-        None,
-        packet,
-        0,
-        0,
-        0,
-        |d| crate::packet_callouts::ip_packet_layer_outbound_v6(d),
-    )
+    drive(Layer::OutboundIppacketV6, v, None, packet, 0, 0, 0, |d| {
+        crate::packet_callouts::ip_packet_layer_outbound_v6(d)
+    })
 }
 
 // ---- Teardown callouts (no classify action expected) ----------------------
@@ -1218,7 +1284,11 @@ mod tests {
         let snapshot = filter_engine_snapshot().expect("device installed");
         assert!(snapshot.committed);
 
-        let layers: Vec<Layer> = snapshot.callouts.iter().map(|(_, layer, _)| *layer).collect();
+        let layers: Vec<Layer> = snapshot
+            .callouts
+            .iter()
+            .map(|(_, layer, _)| *layer)
+            .collect();
         assert_eq!(
             layers,
             alloc::vec![
@@ -1263,7 +1333,10 @@ mod tests {
             };
 
             let result = run_packet_v4_tuple(spec, Direction::Outbound, &[8, 0, 0, 0]);
-            assert!(result.absorb, "ICMP packet must pend for a per-packet verdict");
+            assert!(
+                result.absorb,
+                "ICMP packet must pend for a per-packet verdict"
+            );
             let ids = live_ids();
             assert_eq!(ids.len(), 1);
 
@@ -1276,13 +1349,27 @@ mod tests {
             assert!(!packet.inbound);
             assert!(!packet.ipv6);
 
-            let direction = if packet.inbound { Direction::Inbound } else { Direction::Outbound };
+            let direction = if packet.inbound {
+                Direction::Inbound
+            } else {
+                Direction::Outbound
+            };
             let replay = run_packet_bytes_v4(&packet.data, direction, true);
-            assert_eq!(replay.action, FWP_ACTION_PERMIT, "self-injected packet must be permitted");
-            assert_eq!(packet_cache_len(), 0, "self-injected packet must not pend again");
+            assert_eq!(
+                replay.action, FWP_ACTION_PERMIT,
+                "self-injected packet must be permitted"
+            );
+            assert_eq!(
+                packet_cache_len(),
+                0,
+                "self-injected packet must not pend again"
+            );
 
             let replay = run_packet_bytes_v4(&packet.data, direction, false);
-            assert!(replay.absorb, "unmarked packet must go through the normal path");
+            assert!(
+                replay.absorb,
+                "unmarked packet must go through the normal path"
+            );
             assert_eq!(packet_cache_len(), 1, "and pend for a fresh verdict");
         });
     }
@@ -1309,7 +1396,10 @@ mod tests {
             let ids = live_ids();
             assert_eq!(ids.len(), 1);
             device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
-            assert_eq!(verdict_for_key_v4(spec), Some(Verdict::PermanentAccept as u8));
+            assert_eq!(
+                verdict_for_key_v4(spec),
+                Some(Verdict::PermanentAccept as u8)
+            );
             // An outbound TCP connect defer carries no packet data, so nothing
             // is recorded by the injector.
             assert_eq!(injected_len(), 0);

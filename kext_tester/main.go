@@ -132,7 +132,14 @@ func handleInfo(file *kext_interface.KextFile, info kext_interface.Info) {
 		}
 	case *kext_interface.ConnectionV6:
 		kext_interface.SendVerdictCommand(file, kext_interface.Verdict{Id: info.Id, Verdict: uint8(kext_interface.VerdictPermanentAccept)})
+		log.Printf("handling packet packet: %d pid=%d %+v:%d %s %+v:%d %s\n", info.Id, info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
 	case *kext_interface.LogLine:
 		log.Println(info.Line)
+	case *kext_interface.ConnectionEndV4:
+		log.Printf("ending connection: pid=%d %+v:%d %s %+v:%d %s\n", info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
+	case *kext_interface.ConnectionEndV6:
+		log.Printf("ending connection: pid=%d %+v:%d %s %+v:%d %s\n", info.ProcessId, net.IP(info.LocalIp[:]), info.LocalPort, "->", net.IP(info.RemoteIp[:]), info.RemotePort, protocols[int(info.Protocol)])
+	default:
+		panic(fmt.Sprintf("unexpected kext_interface.Info: %#v", info))
 	}
 }

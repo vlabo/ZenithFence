@@ -3,8 +3,8 @@
 //! Drives semi-realistic flows through the real driver callout entry points,
 //! the way the OS does: ALE authorization first (which pends and emits an event
 //! the agent answers over the pipe), then data packets through the IP packet
-//! layer, then endpoint closure and resource release. A deterministic scenario
-//! set always runs; N seeded random flows run on top ([`crate::scenarios`]).
+//! layer, then endpoint closure and resource release. The default run generates
+//! seeded random flows ([`crate::scenarios::random_flow`]) forever.
 //!
 //! Concurrency mirrors the kernel: several producer workers classify flows at
 //! the same time (WFP classify callbacks fire on many threads), and one
@@ -13,13 +13,14 @@
 //! outbound transport injects descend the stack unmarked; inbound transport
 //! injects re-indicate upward and never pass the network layer again).
 //!
-//! Everything is reproducible from the printed seed (`ZF_SIM_SEED`).
+//! Everything is reproducible from the fixed [`SEED`]: just rerun.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use driver::fuzz_api::{
     self as api, CalloutResult, Direction, Verdict, FWP_ACTION_BLOCK, FWP_ACTION_PERMIT,
@@ -31,64 +32,30 @@ use crate::scenarios::{self, Expect, FlowPlan, Tuple};
 const VERDICT_POLL: Duration = Duration::from_millis(5);
 const REINJECT_POLL: Duration = Duration::from_millis(2);
 
-// ---- Config -----------------------------------------------------------------
+// ---- Hardcoded run parameters ------------------------------------------------
 
-pub struct Config {
-    pub seed: u64,
-    pub random_flows: u32,
-    pub threads: usize,
-    /// Soft cap: workers start no new flows after this much wall time.
-    pub duration: Option<Duration>,
-}
+/// Fixed run seed. The traffic is fully reproducible across runs -- rerun to
+/// reproduce a failure. The RNG stream is infinite, so one seed still yields
+/// endless distinct flows.
+const SEED: u64 = 0x0BAD_C0DE_5EED_1234;
 
-impl Config {
-    pub fn from_env() -> Config {
-        let seed = std::env::var("ZF_SIM_SEED")
-            .ok()
-            .and_then(|s| parse_u64(&s))
-            .unwrap_or_else(|| {
-                mix(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0x5EED))
-            });
-        let random_flows = std::env::var("ZF_SIM_FLOWS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(24);
-        let threads = std::env::var("ZF_SIM_THREADS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .filter(|&n: &usize| n >= 1)
-            .unwrap_or(4);
-        let duration = std::env::var("ZF_SIM_DURATION")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .map(Duration::from_secs);
-        Config {
-            seed,
-            random_flows,
-            threads,
-            duration,
-        }
-    }
-}
+/// Producer worker threads (WFP classify fires on many threads at once). Kept
+/// small so each worker's disjoint local-port window -- 2048 ports starting at
+/// `20000 + worker * 2048` -- stays inside a u16.
+const THREADS: usize = 4;
 
-fn parse_u64(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).ok()
-    } else {
-        s.parse().ok()
-    }
-}
+/// Per-flow budget for the agent's verdict and any mid-burst upgrades before the
+/// flow is counted as a timeout/failure.
+const FLOW_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How often the monitor thread prints a liveness line and checks invariants.
+const HEARTBEAT: Duration = Duration::from_secs(5);
 
 // ---- Summary ------------------------------------------------------------------
 
 #[derive(Default)]
 pub struct Summary {
     pub flows_ok: AtomicU64,
-    pub flows_skipped: AtomicU64,
     pub packets: AtomicU64,
     pub bytes: AtomicU64,
     /// Network-injected packets that re-entered the packet layer marked
@@ -103,6 +70,14 @@ pub struct Summary {
 
 impl Summary {
     fn fail(&self, msg: String) {
+        // Attach a stack trace when RUST_BACKTRACE is set (`Backtrace::capture`
+        // is a no-op otherwise), so `RUST_BACKTRACE=1` pinpoints the failing site.
+        let backtrace = std::backtrace::Backtrace::capture();
+        let msg = if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+            format!("{msg}\n  stack:\n{backtrace}")
+        } else {
+            msg
+        };
         if let Ok(mut failures) = self.failures.lock() {
             // Cap the list; one broken invariant tends to repeat per flow.
             if failures.len() < 64 {
@@ -122,11 +97,24 @@ impl Summary {
             && self.failures.lock().map(|f| f.is_empty()).unwrap_or(false)
     }
 
+    /// Compact one-line liveness snapshot for the periodic monitor.
+    pub fn heartbeat(&self) {
+        println!(
+            "[sim] alive: flows ok={} | packets={} bytes={} | self-inject={} transport={} | pended={} timeouts={}",
+            self.flows_ok.load(Ordering::Relaxed),
+            self.packets.load(Ordering::Relaxed),
+            self.bytes.load(Ordering::Relaxed),
+            self.loopback_permits.load(Ordering::Relaxed),
+            self.transport_replays.load(Ordering::Relaxed),
+            api::packet_cache_len(),
+            self.verdict_timeouts.load(Ordering::Relaxed),
+        );
+    }
+
     pub fn print(&self) {
         println!(
-            "[sim] flows ok={} skipped={} | packets={} bytes={} | self-inject permits={} transport replays={} | verdict timeouts={}",
+            "[sim] flows ok={} | packets={} bytes={} | self-inject permits={} transport replays={} | verdict timeouts={}",
             self.flows_ok.load(Ordering::Relaxed),
-            self.flows_skipped.load(Ordering::Relaxed),
             self.packets.load(Ordering::Relaxed),
             self.bytes.load(Ordering::Relaxed),
             self.loopback_permits.load(Ordering::Relaxed),
@@ -147,73 +135,69 @@ impl Summary {
 
 // ---- Driving ---------------------------------------------------------------------
 
-/// Run the whole traffic plan. Returns once every flow ran, the agent's
-/// verdicts resolved every pended packet, and the reinjector drained every
-/// injected packet (or the deadline passed, which is recorded as a failure).
-pub fn drive(cfg: &Config) -> Summary {
-    let mut plans = scenarios::deterministic();
-    let mut rng = SplitMix64::new(cfg.seed);
-    for seq in 0..cfg.random_flows {
-        let worker = (seq as usize) % cfg.threads;
-        plans.push(scenarios::random_flow(&mut rng, worker, seq as u16));
-    }
-
-    // The agent handles events on one goroutine and sleeps 200 ms per accepted
-    // outbound-v4 event, so the wait budget is global and scales with the plan.
-    let deadline = Instant::now()
-        + Duration::from_millis(250 * plans.len() as u64)
-        + Duration::from_secs(15);
-    let soft_stop = cfg.duration.map(|d| Instant::now() + d);
+/// Generate random flows forever across [`THREADS`] workers. Never returns: a
+/// healthy run ends when the user stops it, and a broken invariant ends it via
+/// the monitor's non-zero `process::exit`. Each worker owns a disjoint IP/port
+/// window and a private RNG stream, and runs one flow fully -- ALE authorization,
+/// the agent's verdict, data bursts, closure, release -- before starting the
+/// next, so a worker can never outpace the agent it waits on.
+pub fn drive() {
+    println!(
+        "[sim] producer: seed=0x{SEED:016x} threads={THREADS}; generating random flows forever (Ctrl+C to stop)"
+    );
 
     let summary = Arc::new(Summary::default());
-    let stop_reinjector = Arc::new(AtomicBool::new(false));
 
-    let reinjector = {
+    // Reinjector: models the OS re-presenting driver-injected packets.
+    {
         let summary = Arc::clone(&summary);
-        let stop = Arc::clone(&stop_reinjector);
-        thread::spawn(move || reinject_loop(&summary, &stop))
-    };
-
-    // Round-robin whole flows to workers; each worker runs its flows in order.
-    let mut buckets: Vec<Vec<FlowPlan>> = (0..cfg.threads).map(|_| Vec::new()).collect();
-    for (i, plan) in plans.into_iter().enumerate() {
-        buckets[i % cfg.threads].push(plan);
+        thread::spawn(move || reinject_loop(&summary));
     }
-    let workers: Vec<_> = buckets
-        .into_iter()
-        .map(|bucket| {
+
+    // Monitor: periodic liveness line + fail-fast on the first broken invariant.
+    {
+        let summary = Arc::clone(&summary);
+        thread::spawn(move || monitor_loop(&summary));
+    }
+
+    let workers: Vec<_> = (0..THREADS)
+        .map(|worker| {
             let summary = Arc::clone(&summary);
             thread::spawn(move || {
-                for plan in bucket {
-                    if soft_stop.is_some_and(|t| Instant::now() > t) {
-                        summary.flows_skipped.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
+                let mut rng = SplitMix64::new(mix(SEED ^ worker as u64));
+                let mut counter: u64 = 0;
+                loop {
+                    // Keep the sequence inside the worker's 2048-port window; a
+                    // flow closes and releases its port before that port recurs,
+                    // so the reuse is always safe.
+                    let seq = (counter % 2048) as u16;
+                    let plan = scenarios::random_flow(&mut rng, worker, seq);
+                    let deadline = Instant::now() + FLOW_TIMEOUT;
                     run_flow(&plan, &summary, deadline);
+                    counter = counter.wrapping_add(1);
                 }
             })
         })
         .collect();
+
+    // Blocks forever: the workers never return.
     for worker in workers {
         let _ = worker.join();
     }
+}
 
-    // Quiesce: every pended packet answered, every injected packet replayed.
-    while (api::packet_cache_len() > 0 || api::injected_len() > 0) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    if api::packet_cache_len() > 0 {
-        summary.fail(format!(
-            "{} packets still pended after the verdict deadline",
-            api::packet_cache_len()
-        ));
-    }
-
-    stop_reinjector.store(true, Ordering::Relaxed);
-    let _ = reinjector.join();
-    match Arc::try_unwrap(summary) {
-        Ok(summary) => summary,
-        Err(_) => unreachable!("all summary holders joined"),
+/// Print a liveness line every [`HEARTBEAT`]; the moment an invariant breaks,
+/// dump the full summary and exit non-zero. The seed is fixed, so a failing run
+/// reproduces exactly on the next launch.
+fn monitor_loop(summary: &Summary) -> ! {
+    loop {
+        thread::sleep(HEARTBEAT);
+        summary.heartbeat();
+        if !summary.is_ok() {
+            summary.print();
+            eprintln!("[sim] FAIL: traffic invariant violated (seed=0x{SEED:016x}); exiting");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -229,7 +213,7 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
             // Inbound loopback: ALE itself accepts, nothing pends.
             let permitted = result.action == FWP_ACTION_PERMIT;
             if !permitted {
-                summary.fail(format!("{}: inbound loopback not permitted at ALE", plan.name));
+                summary.fail(format!("{}: inbound loopback not permitted at ALE", plan.describe()));
             }
             permitted
         }
@@ -238,7 +222,7 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
             // New TCP/UDP connection: the original classify is absorbed and the
             // flow pends until the agent's verdict.
             if !result.absorb {
-                summary.fail(format!("{}: new connection did not pend at ALE", plan.name));
+                summary.fail(format!("{}: new connection did not pend at ALE", plan.describe()));
             }
             result.absorb
         }
@@ -253,16 +237,16 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
                 let accept_ish =
                     verdict == Verdict::Accept as u8 || verdict == Verdict::PermanentAccept as u8;
                 if expected_block && !got_block {
-                    summary.fail(format!("{}: expected block, got verdict {verdict}", plan.name));
+                    summary.fail(format!("{}: expected block, got verdict {verdict}", plan.describe()));
                     ok = false;
                 } else if !expected_block && !accept_ish {
-                    summary.fail(format!("{}: expected accept, got verdict {verdict}", plan.name));
+                    summary.fail(format!("{}: expected accept, got verdict {verdict}", plan.describe()));
                     ok = false;
                 }
             }
             None => {
                 summary.verdict_timeouts.fetch_add(1, Ordering::Relaxed);
-                summary.fail(format!("{}: verdict timed out", plan.name));
+                summary.fail(format!("{}: verdict timed out", plan.describe()));
                 return;
             }
         }
@@ -279,7 +263,7 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
                     if result.action != FWP_ACTION_BLOCK || result.absorb {
                         summary.fail(format!(
                             "{}: blocked flow's packet not hard-blocked (action={:#x} absorb={})",
-                            plan.name, result.action, result.absorb
+                            plan.describe(), result.action, result.absorb
                         ));
                         ok = false;
                     }
@@ -291,7 +275,7 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
                 for burst in &plan.bursts {
                     let result = run_packet(plan, burst.direction, &burst.payload);
                     if !result.absorb {
-                        summary.fail(format!("{}: ICMP packet did not pend", plan.name));
+                        summary.fail(format!("{}: ICMP packet did not pend", plan.describe()));
                         ok = false;
                         break;
                     }
@@ -338,7 +322,7 @@ fn run_bursts(plan: &FlowPlan, summary: &Summary, deadline: Instant) -> bool {
             if result.action != FWP_ACTION_PERMIT {
                 summary.fail(format!(
                     "{}: burst {i} not permitted under PermanentAccept (action={:#x})",
-                    plan.name, result.action
+                    plan.describe(), result.action
                 ));
                 return false;
             }
@@ -352,13 +336,13 @@ fn run_bursts(plan: &FlowPlan, summary: &Summary, deadline: Instant) -> bool {
             .is_none()
             {
                 summary.verdict_timeouts.fetch_add(1, Ordering::Relaxed);
-                summary.fail(format!("{}: burst {i} verdict timed out", plan.name));
+                summary.fail(format!("{}: burst {i} verdict timed out", plan.describe()));
                 return false;
             }
         } else if result.action != FWP_ACTION_PERMIT {
             summary.fail(format!(
                 "{}: burst {i} neither permitted nor pended (action={:#x})",
-                plan.name, result.action
+                plan.describe(), result.action
             ));
             return false;
         }
@@ -374,7 +358,7 @@ fn reauthorize(plan: &FlowPlan, summary: &Summary) -> bool {
     if result.action != FWP_ACTION_PERMIT {
         summary.fail(format!(
             "{}: reauthorization of an accepted flow not permitted (action={:#x})",
-            plan.name, result.action
+            plan.describe(), result.action
         ));
         return false;
     }
@@ -462,13 +446,10 @@ fn count_packet(summary: &Summary, payload: &[u8]) {
 //   * inbound transport injects re-indicate upward from the transport layer and
 //     never traverse the network layer again.
 
-fn reinject_loop(summary: &Summary, stop: &AtomicBool) {
+fn reinject_loop(summary: &Summary) -> ! {
     loop {
         let injected = api::drain_injected();
         if injected.is_empty() {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
             thread::sleep(REINJECT_POLL);
             continue;
         }
@@ -488,8 +469,10 @@ fn reinject_loop(summary: &Summary, stop: &AtomicBool) {
                     summary.transport_replays.fetch_add(1, Ordering::Relaxed);
                 } else {
                     summary.fail(format!(
-                        "transport re-inject not permitted (action={:#x} absorb={})",
-                        result.action, result.absorb
+                        "transport re-inject not permitted: {} (action={:#x} absorb={})",
+                        describe_injected(&packet),
+                        result.action,
+                        result.absorb
                     ));
                 }
             } else {
@@ -503,11 +486,77 @@ fn reinject_loop(summary: &Summary, stop: &AtomicBool) {
                     summary.loopback_permits.fetch_add(1, Ordering::Relaxed);
                 } else {
                     summary.fail(format!(
-                        "self-injected packet not permitted (action={:#x} absorb={})",
-                        result.action, result.absorb
+                        "self-injected packet not permitted: {} (action={:#x} absorb={})",
+                        describe_injected(&packet),
+                        result.action,
+                        result.absorb
                     ));
                 }
             }
         }
     }
+}
+
+/// Best-effort one-line identity for a drained injected packet: parses the IP
+/// header for the 5-tuple, falling back to flags + length when the bytes are not
+/// a parsable IP packet (e.g. a raw transport segment).
+fn describe_injected(packet: &api::InjectedPacket) -> String {
+    let kind = if packet.transport { "transport" } else { "network" };
+    let dir = if packet.inbound { "inbound" } else { "outbound" };
+    let loopback = if packet.loopback { " loopback" } else { "" };
+    match describe_ip_packet(&packet.data, packet.ipv6) {
+        Some(tuple) => format!("{tuple} [{kind} {dir}{loopback} len={}]", packet.data.len()),
+        None => format!(
+            "<unparsable {} packet> [{kind} {dir}{loopback} len={}]",
+            if packet.ipv6 { "v6" } else { "v4" },
+            packet.data.len(),
+        ),
+    }
+}
+
+/// Pull "PROTO src=addr:port dst=addr:port" out of a raw IP packet, or `None` if
+/// the header is too short or its version nibble does not match `ipv6`.
+fn describe_ip_packet(data: &[u8], ipv6: bool) -> Option<String> {
+    if ipv6 {
+        if data.len() < 40 || data[0] >> 4 != 6 {
+            return None;
+        }
+        let proto = data[6];
+        let src = Ipv6Addr::from(<[u8; 16]>::try_from(&data[8..24]).ok()?);
+        let dst = Ipv6Addr::from(<[u8; 16]>::try_from(&data[24..40]).ok()?);
+        Some(match ports_at(data, 40, proto) {
+            Some((s, d)) => {
+                format!("{} src=[{src}]:{s} dst=[{dst}]:{d}", scenarios::proto_label(proto))
+            }
+            None => format!("{} src=[{src}] dst=[{dst}]", scenarios::proto_label(proto)),
+        })
+    } else {
+        if data.len() < 20 || data[0] >> 4 != 4 {
+            return None;
+        }
+        let ihl = (data[0] & 0x0f) as usize * 4;
+        if ihl < 20 {
+            return None;
+        }
+        let proto = data[9];
+        let src = Ipv4Addr::new(data[12], data[13], data[14], data[15]);
+        let dst = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
+        Some(match ports_at(data, ihl, proto) {
+            Some((s, d)) => format!("{} src={src}:{s} dst={dst}:{d}", scenarios::proto_label(proto)),
+            None => format!("{} src={src} dst={dst}", scenarios::proto_label(proto)),
+        })
+    }
+}
+
+/// The source/destination ports at `offset` for TCP/UDP, if the bytes are there.
+fn ports_at(data: &[u8], offset: usize, proto: u8) -> Option<(u16, u16)> {
+    if !matches!(proto, 6 | 17) {
+        return None;
+    }
+    let src = data.get(offset..offset + 2)?;
+    let dst = data.get(offset + 2..offset + 4)?;
+    Some((
+        u16::from_be_bytes([src[0], src[1]]),
+        u16::from_be_bytes([dst[0], dst[1]]),
+    ))
 }
