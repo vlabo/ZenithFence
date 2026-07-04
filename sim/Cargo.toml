@@ -22,3 +22,14 @@ driver = { path = "../driver", default-features = false, features = ["mock"] }
 # resolves to the same `mock_wdk` instance the driver links, so the
 # `DriverConnection` returned by `Simulation::connect` is the matching type.
 mock_wdk = { path = "../mock_wdk" }
+
+# --- Scenario-file executor (see src/scenario.rs) --------------------------
+# A scenario is a CBOR sequence (`.cbor`) or JSON Lines (`.json`, one object per
+# line, for debugging) of per-command records; it is decoded as a lazy stream and
+# replayed against the driver by a worker pool. All pure host crates -- the mock
+# build stays windows-sys-free.
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+crossbeam-channel = "0.5"

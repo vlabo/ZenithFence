@@ -73,9 +73,11 @@ test: kext-interface-gen test-protocol test-kext-interface test-driver
 # Real-world userspace simulation (see sim/).
 #
 # The fake-driver daemon (Rust, runs the real driver over mock_wdk) exposes the
-# driver on a Windows named pipe; the *real* Go agent (kext_tester) connects to
-# it exactly as it would to the kernel device, only the loading differs. Fake OS
-# network events are injected by the daemon. Windows-only.
+# driver on a Windows named pipe; the *real* Go agent (kext_tester) drives it
+# exactly as it would the kernel device. By default the agent *loads and starts
+# the mock driver itself* -- it spawns the daemon (ZF_SIM_DAEMON), mirroring how
+# production loads and starts the kernel driver -- so a single command runs the
+# whole thing. Fake OS network events are injected by the daemon. Windows-only.
 # ---------------------------------------------------------------------------
 
 # Build the fake-driver daemon and the Go agent. The repo-root go.work makes the
@@ -84,16 +86,53 @@ sim-build:
 	cargo build --manifest-path ./sim/Cargo.toml
 	go build -C ./kext_tester -o ../kext_tester.exe
 
-# Run the simulation (fake driver side): generate random network traffic forever,
-# exiting non-zero the moment a driver invariant breaks. Runs until you stop it
-# (Ctrl+C); the seed is fixed, so any failure reproduces on the next run. Start
-# the agent alongside it with `just sim-run`.
-
+# Run the fake driver daemon STANDALONE (no agent): generate random network
+# traffic forever, exiting non-zero the moment a driver invariant breaks. Rarely
+# needed now that `just sim-run` starts the daemon itself; use it to run the
+# daemon under a debugger, then attach the agent with `just sim-attach`.
 mock-run: sim-build
 	#!pwsh.exe -File
 	./sim/target/debug/zf-sim.exe
 
+# Run the whole simulation with ONE command: the agent loads and starts the mock
+# driver (spawns the daemon), then reads events and answers verdicts. The daemon
+# generates random traffic forever, exiting non-zero the moment a driver
+# invariant breaks; the seed is fixed, so any failure reproduces. Ctrl+C stops
+# both.
 sim-run: sim-build
 	#!pwsh.exe -File
 	$env:ZF_SIM_PIPE = "ZenithFence"
+	$env:ZF_SIM_DAEMON = (Resolve-Path ./sim/target/debug/zf-sim.exe).Path
 	& "./kext_tester.exe"
+
+# Attach the agent to a daemon started separately (`just mock-run`), leaving
+# ZF_SIM_DAEMON unset so the agent does NOT start one. For debugging the daemon.
+sim-attach: sim-build
+	#!pwsh.exe -File
+	$env:ZF_SIM_PIPE = "ZenithFence"
+	& "./kext_tester.exe"
+
+# Regenerate the reference CBOR scenario files under sim/scenarios/. Writes the
+# fixtures only -- no driver load. Run after changing the sample builders.
+sim-emit-samples: sim-build
+	#!pwsh.exe -File
+	./sim/target/debug/zf-sim.exe --emit-samples ./sim/scenarios
+
+# Replay an authored CBOR scenario file (deterministic, multi-threaded) instead
+# of random traffic, in ONE command: the agent loads and starts the mock driver,
+# which replays the scenario and exits with a pass/fail code the agent
+# propagates. The scenario path rides to the daemon via inherited environment.
+#   just sim-scenario ./sim/scenarios/mixed_v4v6_parallel.cbor
+# ZF_SIM_THREADS sets the worker-pool size (default 4).
+sim-scenario file: sim-build
+	#!pwsh.exe -File
+	$env:ZF_SIM_PIPE = "ZenithFence"
+	$env:ZF_SIM_DAEMON = (Resolve-Path ./sim/target/debug/zf-sim.exe).Path
+	# just args are positional; tolerate a stray `file=` prefix either way.
+	$env:ZF_SIM_SCENARIO = ("{{file}}" -replace '^file=', '')
+	& "./kext_tester.exe"
+
+# Host unit tests for the sim crate (scenario format round-trip, delta logic,
+# tuple validation). No driver device required.
+sim-test:
+	cargo test --manifest-path ./sim/Cargo.toml

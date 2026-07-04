@@ -13,14 +13,17 @@
 //!   - event pump: blocks on `DriverConnection::read`, ships bytes to the pipe
 //!   - command pump: reads command messages from the pipe, applies them
 //!
-//! The producer runs forever, so there is no clean-teardown phase: a healthy run
-//! ends when the user stops it (Ctrl+C), and a broken invariant ends it via the
-//! monitor thread's non-zero `process::exit`. Either way the OS reclaims the
-//! driver, the pumps, and the pipe.
+//! With no scenario file the producer runs forever: a healthy run ends when the
+//! user stops it (Ctrl+C), and a broken invariant ends it via the monitor
+//! thread's non-zero `process::exit`. Given a scenario file (positional arg or
+//! `ZF_SIM_SCENARIO`, see [`scenario`]) the daemon instead replays that file on a
+//! worker pool and exits when it finishes. Either way the OS reclaims the driver,
+//! the pumps, and the pipe.
 
 mod pipe;
 mod producer;
 mod rng;
+mod scenario;
 mod scenarios;
 
 use std::sync::Arc;
@@ -35,6 +38,28 @@ use pipe::PipeServer;
 const PIPE_NAME: &str = r"\\.\pipe\ZenithFence";
 
 fn main() -> std::process::ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+
+    // `zf-sim --emit-samples [dir]` writes the reference scenario files and exits
+    // without loading the driver -- handy for authoring / regenerating fixtures.
+    if args.get(1).map(String::as_str) == Some("--emit-samples") {
+        let dir = args.get(2).map(String::as_str).unwrap_or("./sim/scenarios");
+        return match scenario::emit_samples(dir) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("[sim] --emit-samples failed: {err}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
+    // A scenario file (positional arg or ZF_SIM_SCENARIO) switches the traffic
+    // source from seeded-random to deterministic file replay. Verdicts still come
+    // from the Go agent over the pipe -- only the injection source changes.
+    let scenario_path = std::env::var("ZF_SIM_SCENARIO")
+        .ok()
+        .or_else(|| args.get(1).filter(|a| !a.starts_with("--")).cloned());
+
     println!("[sim] loading driver over mock_wdk ...");
     let sim = match Simulation::start() {
         Ok(sim) => sim,
@@ -109,16 +134,29 @@ fn main() -> std::process::ExitCode {
         commands
     });
 
-    // Producer: fake OS network traffic (seeded random flows), forever. `drive`
-    // never returns -- the monitor thread exits the process non-zero the moment
-    // an invariant breaks, and Ctrl+C stops a healthy run. `sim` and the pumps
-    // stay alive for the whole run because `main` never returns past this call.
-    println!("[sim] producing fake network traffic ...");
-    producer::drive();
-
-    // Unreachable in practice (`drive` loops forever); kept so `main` returns an
-    // `ExitCode` on every path.
-    std::process::ExitCode::SUCCESS
+    // Traffic source. A scenario file replays deterministically on a worker pool
+    // (verdicts still come from the agent over the pipe); with no scenario, the
+    // seeded-random producer runs forever -- Ctrl+C to stop, or the monitor exits
+    // non-zero on a broken invariant. `sim` and the pumps stay alive across the
+    // call because `main` does not return until it finishes.
+    match scenario_path {
+        Some(path) => {
+            println!("[sim] replaying scenario `{path}` ...");
+            let summary = scenario::run(&path);
+            summary.print();
+            sim.shutdown();
+            if summary.ok() {
+                std::process::ExitCode::SUCCESS
+            } else {
+                std::process::ExitCode::FAILURE
+            }
+        }
+        None => {
+            println!("[sim] producing fake network traffic ...");
+            producer::drive();
+            std::process::ExitCode::SUCCESS
+        }
+    }
 }
 
 /// Assert the driver's load registered exactly the production callout set, on
