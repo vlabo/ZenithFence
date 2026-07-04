@@ -562,6 +562,20 @@ pub fn injected_len() -> usize {
         .unwrap_or(0)
 }
 
+/// Reset the device's transient per-flow state to a clean slate: drop every
+/// tracked connection and any still-pended packet, and discard recorded injects.
+/// An independent replay then sees every connection as new again instead of
+/// inheriting the previous run's cached verdicts, and a long soak does not grow
+/// the injector without bound. Callout registration and the filter engine are
+/// left intact -- only transient state resets. No-op if no device is installed.
+pub fn reset_device_state() {
+    if let Some(device) = crate::entry::get_device() {
+        device.connection_cache.clear();
+        device.packet_cache.pop_all();
+        device.injector.drain_injected();
+    }
+}
+
 /// Snapshot of the filter engine's registration state, for asserting the
 /// driver loaded like the kernel would see it (sublayer committed, expected
 /// callouts on expected layers, live filter ids).
@@ -1425,6 +1439,43 @@ mod tests {
             assert_eq!(injected.len(), 1);
             assert!(injected[0].transport);
             assert!(injected[0].inbound);
+        });
+    }
+
+    // Loop-mode reset: after a connection is decided and cached, a repeat classify
+    // rides the cache without pending; `reset_device_state` wipes that, so the
+    // very same connection pends fresh again -- each replay is independent.
+    #[test]
+    fn reset_device_state_makes_the_next_replay_fresh() {
+        with_fresh_device(|| {
+            let spec = TupleSpecV4 {
+                protocol: 6,
+                local: [10, 5, 6, 7],
+                local_port: 51000,
+                remote: [93, 184, 216, 34],
+                remote_port: 443,
+            };
+            // First classify on a new key pends; a verdict then caches the flow.
+            assert!(
+                run_ale_connect_v4_tuple(spec, false, 100, &[]).absorb,
+                "new connection pends"
+            );
+            let ids = live_ids();
+            device_write_verdict(ids[0], Verdict::PermanentAccept as u8);
+            assert!(active_conn_count() > 0);
+            // A repeat of the same key now hits the cache and does not pend.
+            assert!(
+                !run_ale_connect_v4_tuple(spec, false, 100, &[]).absorb,
+                "cached connection does not pend"
+            );
+
+            reset_device_state();
+
+            assert_eq!(active_conn_count(), 0, "reset clears the connection cache");
+            assert!(
+                run_ale_connect_v4_tuple(spec, false, 100, &[]).absorb,
+                "after reset the same connection pends fresh again"
+            );
         });
     }
 }

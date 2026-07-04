@@ -20,6 +20,7 @@
 //! worker pool and exits when it finishes. Either way the OS reclaims the driver,
 //! the pumps, and the pipe.
 
+mod dns;
 mod pipe;
 mod producer;
 mod rng;
@@ -53,12 +54,19 @@ fn main() -> std::process::ExitCode {
         };
     }
 
-    // A scenario file (positional arg or ZF_SIM_SCENARIO) switches the traffic
+    // A scenario file (first non-flag arg or ZF_SIM_SCENARIO) switches the traffic
     // source from seeded-random to deterministic file replay. Verdicts still come
-    // from the Go agent over the pipe -- only the injection source changes.
+    // from the Go agent over the pipe -- only the injection source changes. Finding
+    // the first non-flag arg lets the path sit before or after flags like --loop.
     let scenario_path = std::env::var("ZF_SIM_SCENARIO")
         .ok()
-        .or_else(|| args.get(1).filter(|a| !a.starts_with("--")).cloned());
+        .or_else(|| args.iter().skip(1).find(|a| !a.starts_with("--")).cloned());
+
+    // --loop / ZF_SIM_LOOP replays the scenario on repeat, restarting from the top
+    // each time it finishes, until the process is stopped (Ctrl+C). The env var is
+    // how the agent-spawned daemon receives it (like ZF_SIM_SCENARIO); the flag is
+    // for running the daemon directly.
+    let looping = args.iter().any(|a| a == "--loop") || std::env::var_os("ZF_SIM_LOOP").is_some();
 
     println!("[sim] loading driver over mock_wdk ...");
     let sim = match Simulation::start() {
@@ -135,11 +143,20 @@ fn main() -> std::process::ExitCode {
     });
 
     // Traffic source. A scenario file replays deterministically on a worker pool
-    // (verdicts still come from the agent over the pipe); with no scenario, the
+    // (verdicts still come from the agent over the pipe), once or -- with --loop /
+    // ZF_SIM_LOOP -- restarting from the top until stopped. With no scenario, the
     // seeded-random producer runs forever -- Ctrl+C to stop, or the monitor exits
     // non-zero on a broken invariant. `sim` and the pumps stay alive across the
     // call because `main` does not return until it finishes.
     match scenario_path {
+        // Loop until the user stops the process, resetting the driver between
+        // passes so each is an independent scenario. Diverges: `run_loop` prints
+        // the accumulated totals on Ctrl+C and exits; the OS reclaims `sim` and
+        // the pumps.
+        Some(path) if looping => {
+            println!("[sim] looping scenario `{path}` until stopped (Ctrl+C) ...");
+            scenario::run_loop(&path);
+        }
         Some(path) => {
             println!("[sim] replaying scenario `{path}` ...");
             let summary = scenario::run(&path);

@@ -132,6 +132,21 @@ sim-scenario file: sim-build
 	$env:ZF_SIM_SCENARIO = ("{{file}}" -replace '^file=', '')
 	& "./kext_tester.exe"
 
+# Like `sim-scenario`, but loop the file forever: when the daemon reaches the end
+# it restarts from the top and keeps going until you Ctrl+C (which stops both the
+# agent and the daemon). A soak/stress replay -- the driver's global state (the
+# connection/packet caches) persists across iterations. Same args as
+# `sim-scenario`; ZF_SIM_THREADS sets the worker-pool size.
+#   just sim-scenario-loop ./sim/scenarios/dns_and_connect.cbor
+sim-scenario-loop file: sim-build
+	#!pwsh.exe -File
+	$env:ZF_SIM_PIPE = "ZenithFence"
+	$env:ZF_SIM_DAEMON = (Resolve-Path ./sim/target/debug/zf-sim.exe).Path
+	# just args are positional; tolerate a stray `file=` prefix either way.
+	$env:ZF_SIM_SCENARIO = ("{{file}}" -replace '^file=', '')
+	$env:ZF_SIM_LOOP = "1"
+	& "./kext_tester.exe"
+
 # Host unit tests for the sim crate (scenario format round-trip, delta logic,
 # tuple validation). No driver device required.
 sim-test:

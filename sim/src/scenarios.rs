@@ -182,28 +182,122 @@ fn v6(protocol: u8, local16: u8, lport: u16, remote16: u8, rport: u16) -> Tuple 
 
 // ---- Application payloads ---------------------------------------------------
 
-/// A real-shaped DNS query: header + QD for `example.com` A IN.
-pub fn dns_query(id: u16) -> Vec<u8> {
-    let mut p = Vec::with_capacity(29);
+/// Encode a domain as a DNS QNAME: each dot-separated label prefixed by its
+/// length byte, terminated by a zero (root) byte. Labels are clamped to the
+/// 63-byte label limit and empty labels (e.g. a trailing dot) are dropped.
+fn encode_qname(domain: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(domain.len() + 2);
+    for label in domain.split('.').filter(|l| !l.is_empty()) {
+        let bytes = label.as_bytes();
+        let len = bytes.len().min(63);
+        out.push(len as u8);
+        out.extend_from_slice(&bytes[..len]);
+    }
+    out.push(0); // root label terminates the name
+    out
+}
+
+/// A real-shaped DNS query for `domain`: a standard recursion-desired query with
+/// one question, type A (`v6` false) or AAAA (`v6` true) in class IN.
+pub fn dns_query_for(id: u16, domain: &str, v6: bool) -> Vec<u8> {
+    let qname = encode_qname(domain);
+    let qtype: u16 = if v6 { 28 } else { 1 }; // AAAA / A
+    let mut p = Vec::with_capacity(12 + qname.len() + 4);
     p.extend_from_slice(&id.to_be_bytes());
-    p.extend_from_slice(&[0x01, 0x00]); // RD
-    p.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]); // QD=1
-    p.extend_from_slice(b"\x07example\x03com\x00");
-    p.extend_from_slice(&[0, 1, 0, 1]); // A IN
+    p.extend_from_slice(&[0x01, 0x00]); // flags: RD
+    p.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]); // QD=1, AN/NS/AR=0
+    p.extend_from_slice(&qname);
+    p.extend_from_slice(&qtype.to_be_bytes());
+    p.extend_from_slice(&[0, 1]); // class IN
     p
 }
 
-/// A matching DNS response: query echo + one A answer.
-pub fn dns_response(id: u16) -> Vec<u8> {
-    let mut p = dns_query(id);
+/// A matching DNS response for `domain`: the question echoed back plus one
+/// answer carrying `ip` -- a 4-byte A record or a 16-byte AAAA record (the
+/// record type follows `ip`'s width).
+pub fn dns_response_for(id: u16, domain: &str, ip: &[u8]) -> Vec<u8> {
+    let v6 = ip.len() == 16;
+    let mut p = dns_query_for(id, domain, v6);
     p[2] = 0x81; // QR + RD
     p[3] = 0x80; // RA
     p[7] = 1; // AN=1
-    p.extend_from_slice(&[0xC0, 0x0C]); // name pointer
-    p.extend_from_slice(&[0, 1, 0, 1]); // A IN
-    p.extend_from_slice(&[0, 0, 0, 0x3C]); // TTL 60
-    p.extend_from_slice(&[0, 4, 93, 184, 216, 34]); // RDATA
+    p.extend_from_slice(&[0xC0, 0x0C]); // answer name: pointer to the question
+    let qtype: u16 = if v6 { 28 } else { 1 };
+    p.extend_from_slice(&qtype.to_be_bytes());
+    p.extend_from_slice(&[0, 1]); // class IN
+    p.extend_from_slice(&[0, 0, 0, 0x3C]); // TTL 60s
+    p.extend_from_slice(&(ip.len() as u16).to_be_bytes()); // RDLENGTH
+    p.extend_from_slice(ip); // RDATA
     p
+}
+
+/// A real-shaped DNS query: header + QD for `example.com` A IN.
+pub fn dns_query(id: u16) -> Vec<u8> {
+    dns_query_for(id, "example.com", false)
+}
+
+/// A matching DNS response: query echo + one A answer (93.184.216.34).
+pub fn dns_response(id: u16) -> Vec<u8> {
+    dns_response_for(id, "example.com", &[93, 184, 216, 34])
+}
+
+/// Read the first answer of the requested family out of a DNS response: the A
+/// record (`want_v6 == false`, 4 bytes) or AAAA (`want_v6 == true`, 16 bytes).
+/// Walks the real message -- header counts, the question section, then each
+/// answer -- following/skipping name compression, so it copes with CNAME chains
+/// and multi-record replies from a live resolver, not just our own fabricated
+/// ones. Returns `None` if no answer of that family is present or the buffer is
+/// malformed. This is how a resolved address flows from the response into a
+/// follow-on connection, the way a client reads the answer and dials it.
+pub fn dns_answer_ip(response: &[u8], want_v6: bool) -> Option<Vec<u8>> {
+    if response.len() < 12 {
+        return None;
+    }
+    let qdcount = u16::from_be_bytes([response[4], response[5]]) as usize;
+    let ancount = u16::from_be_bytes([response[6], response[7]]) as usize;
+
+    let mut i = 12; // past the fixed header
+    for _ in 0..qdcount {
+        i = skip_name(response, i)?;
+        i = i.checked_add(4)?; // QTYPE (2) + QCLASS (2)
+    }
+
+    let (want_type, want_len) = if want_v6 { (28u16, 16usize) } else { (1u16, 4usize) };
+    for _ in 0..ancount {
+        i = skip_name(response, i)?;
+        let rtype = u16::from_be_bytes([*response.get(i)?, *response.get(i + 1)?]);
+        // After the name: TYPE (2) + CLASS (2) + TTL (4), then RDLENGTH (2), RDATA.
+        let rdlen = u16::from_be_bytes([*response.get(i + 8)?, *response.get(i + 9)?]) as usize;
+        let rdata = i.checked_add(10)?;
+        if rtype == want_type && rdlen == want_len {
+            return Some(response.get(rdata..rdata.checked_add(rdlen)?)?.to_vec());
+        }
+        i = rdata.checked_add(rdlen)?;
+    }
+    None
+}
+
+/// Advance past a DNS name starting at `i`, returning the index just after it.
+/// Handles the three label forms: the zero root label ends the name, a `0xC0`
+/// compression pointer is two bytes and also ends it, and a normal label is a
+/// length byte plus that many octets. `None` on a truncated or reserved name.
+fn skip_name(msg: &[u8], mut i: usize) -> Option<usize> {
+    loop {
+        let len = *msg.get(i)?;
+        match len & 0xC0 {
+            0x00 => {
+                if len == 0 {
+                    return Some(i + 1);
+                }
+                i = i.checked_add(1 + len as usize)?;
+            }
+            0xC0 => {
+                msg.get(i + 1)?; // the pointer's second byte must exist
+                return Some(i + 2);
+            }
+            _ => return None, // 0x40 / 0x80 are reserved label types
+        }
+    }
 }
 
 /// The first bytes of a TLS 1.2/1.3 ClientHello record, truncated to fit the
@@ -659,5 +753,48 @@ pub fn random_flow(rng: &mut SplitMix64, worker: usize, seq: u16) -> FlowPlan {
             release_port: false,
             follow_up_reuse: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answer_ip_reads_a_and_aaaa() {
+        let a = dns_response_for(0x1234, "example.com", &[93, 184, 216, 34]);
+        assert_eq!(dns_answer_ip(&a, false), Some(vec![93, 184, 216, 34]));
+        assert_eq!(dns_answer_ip(&a, true), None); // no AAAA in an A reply
+
+        let v6 = [0x26, 0x06, 0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64];
+        let aaaa = dns_response_for(0x1234, "example.com", &v6);
+        assert_eq!(dns_answer_ip(&aaaa, true), Some(v6.to_vec()));
+        assert_eq!(dns_answer_ip(&aaaa, false), None);
+    }
+
+    #[test]
+    fn answer_ip_skips_cname_and_follows_compression() {
+        // A real-shaped reply for www.example.com: a CNAME answer, then the A.
+        // The question qname sits at offset 12, so a pointer to the "example.com"
+        // suffix is 0xC010 and to the full name 0xC00C.
+        let mut m = Vec::new();
+        m.extend_from_slice(&0xABCDu16.to_be_bytes()); // id
+        m.extend_from_slice(&[0x81, 0x80]); // response, RD+RA
+        m.extend_from_slice(&[0, 1, 0, 2, 0, 0, 0, 0]); // QD=1, AN=2
+        m.extend_from_slice(b"\x03www\x07example\x03com\x00"); // qname @ offset 12
+        m.extend_from_slice(&[0, 1, 0, 1]); // A, IN
+        // Answer 1: CNAME www.example.com -> example.com (rdata is a pointer).
+        m.extend_from_slice(&[0xC0, 0x0C, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xC0, 0x10]);
+        // Answer 2: A example.com -> 1.2.3.4.
+        m.extend_from_slice(&[0xC0, 0x10, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4]);
+
+        assert_eq!(dns_answer_ip(&m, false), Some(vec![1, 2, 3, 4]));
+        assert_eq!(dns_answer_ip(&m, true), None);
+    }
+
+    #[test]
+    fn answer_ip_rejects_malformed() {
+        assert_eq!(dns_answer_ip(&[], false), None);
+        assert_eq!(dns_answer_ip(&[0; 8], false), None); // shorter than a header
     }
 }
