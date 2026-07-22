@@ -53,7 +53,8 @@ The next steps depend of the direction of the packet and the verdict
 
 Fallowing specifics apply to the ALE layer:
 1. Connections with flag `reauthorize == false` are special. When the flag is `false` that means that a applications is calling a function `connect()` or `accept()` for a connection. This is a special case because we control the result of the function, telling the application that it's allowed or not allowed to continue with the connection. Since we are making request to User sace we need to take longer time. This is done with pending the packet. This allows the kernel extension to pause the event and continue when it has the verdict. See `ale_callouts.rs -> save_packet()` function.
-2. If packet payload is present it is from the transport layer.
+2. Outgoing connections with flag `reauthorize == true` are never pended. During reauthorization there is no completion handle, so the connection cannot be paused; the only previous fallback was to reset all filters once the verdict arrived, which opens a WFP write transaction and races other resets into `STATUS_FWP_TXN_IN_PROGRESS`. For these the ALE layer only records the process id, sends an info-only event to User space (with a missing packet id, like inbound loopback) and permits. The real packet is then handled by the packet layer, which sends it to User space and reinjects it after the verdict.
+3. If packet payload is present it is from the transport layer.
 
 
 ## Packet layer

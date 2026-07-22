@@ -186,25 +186,41 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         match verdict {
             // No verdict yet
             Verdict::Undecided => {
-                crate::dbg!("saving packet: {}", key);
-                // Connection is already pended. Save packet and wait for verdict.
-                match save_packet(device, &mut data, &ale_data, false) {
-                    Ok(packet) => {
-                        let info = device.packet_cache.push(
-                            (key, packet),
-                            ale_data.process_id,
-                            ale_data.direction,
-                            true,
-                        );
-                        if let Some(info) = info {
-                            let _ = device.event_queue.push(info);
+                if let Direction::Outbound = ale_data.direction {
+                    // An Undecided verdict means no decision has been made yet and user space
+                    // may not know about this connection at all (this is the case for
+                    // connections that already existed before the driver was loaded). Outbound
+                    // connections are never pended in the ALE layer, so send an info-only event
+                    // that carries the process id (missing packet id, nothing to reinject) and
+                    // permit. The packet layer then sends a separate event with the real packet
+                    // that applies the actual verdict and is reinjected after user space decides.
+                    if let Some(info) =
+                        id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
+                    {
+                        let _ = device.event_queue.push(info);
+                    }
+                    data.action_permit();
+                } else {
+                    crate::dbg!("saving packet: {}", key);
+                    // Connection is already pended. Save packet and wait for verdict.
+                    match save_packet(device, &mut data, &ale_data, false) {
+                        Ok(packet) => {
+                            let info = device.packet_cache.push(
+                                (key, packet),
+                                ale_data.process_id,
+                                ale_data.direction,
+                                true,
+                            );
+                            if let Some(info) = info {
+                                let _ = device.event_queue.push(info);
+                            }
                         }
-                    }
-                    Err(err) => {
-                        crate::err!("failed to pend packet: {}", err);
-                    }
-                };
-                data.block_and_absorb();
+                        Err(err) => {
+                            crate::err!("failed to pend packet: {}", err);
+                        }
+                    };
+                    data.block_and_absorb();
+                }
             }
             // There is a verdict
             Verdict::PermanentAccept
@@ -266,7 +282,40 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             }
 
             if let Some(info) =
-                id_cache::build_loopback_info(&key, ale_data.process_id, ale_data.direction)
+                id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
+            {
+                let _ = device.event_queue.push(info);
+            }
+
+            data.action_permit();
+            return;
+        }
+
+        // Outbound connections that are being reauthorized cannot be pended. There is no
+        // completion handle during reauthorization, so the only previous way to defer them was
+        // to reset all filters when the verdict arrived. That reset opens a WFP write
+        // transaction and races other resets into STATUS_FWP_TXN_IN_PROGRESS (see device.rs
+        // inject_packet). The ALE layer has no benefit here other than knowing the process id,
+        // so just save the PID, inform user space with a missing packet id (like loopback) and
+        // permit. The packet layer will send the real packet and reinject it after the verdict.
+        if ale_data.reauthorize && matches!(ale_data.direction, Direction::Outbound) {
+            crate::dbg!(
+                "reauthorized outbound connection: {} PID: {}",
+                key,
+                ale_data.process_id
+            );
+            if ale_data.is_ipv6 {
+                let conn =
+                    ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+                device.connection_cache.add_v6(conn);
+            } else {
+                let conn =
+                    ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
+                device.connection_cache.add_v4(conn);
+            }
+
+            if let Some(info) =
+                id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
             {
                 let _ = device.event_queue.push(info);
             }
