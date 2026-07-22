@@ -20,15 +20,18 @@ pub fn get_callout_vec() -> Vec<Callout> {
             FilterType::Resettable,
             ale_callouts::ale_layer_connect_v4,
         ),
-        Callout::new(
-            "AleLayerInboundV4",
-            "ALE layer for inbound connections for ipv4",
-            0xf27704a5_172f_4306_9a49_dcfefe6aa236,
-            Layer::AleAuthRecvAcceptV4,
-            consts::FWP_ACTION_CALLOUT_TERMINATING,
-            FilterType::Resettable,
-            ale_callouts::ale_layer_accept_v4,
-        ),
+        // Inbound ALE layer is disabled: inbound connections are handled entirely by the packet
+        // layer (see packet_callouts.rs). The callout function is kept in ale_callouts.rs so this
+        // can be re-enabled without rewriting it.
+        // Callout::new(
+        //     "AleLayerInboundV4",
+        //     "ALE layer for inbound connections for ipv4",
+        //     0xf27704a5_172f_4306_9a49_dcfefe6aa236,
+        //     Layer::AleAuthRecvAcceptV4,
+        //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+        //     FilterType::Resettable,
+        //     ale_callouts::ale_layer_accept_v4,
+        // ),
         Callout::new(
             "AleLayerOutboundV6",
             "ALE layer for outbound connections for ipv6",
@@ -38,15 +41,16 @@ pub fn get_callout_vec() -> Vec<Callout> {
             FilterType::Resettable,
             ale_callouts::ale_layer_connect_v6,
         ),
-        Callout::new(
-            "AleLayerInboundV6",
-            "ALE layer for inbound connections for ipv6",
-            0x56874651_3785_4dc9_b134_4849a54de6d0,
-            Layer::AleAuthRecvAcceptV6,
-            consts::FWP_ACTION_CALLOUT_TERMINATING,
-            FilterType::Resettable,
-            ale_callouts::ale_layer_accept_v6,
-        ),
+        // Inbound ALE layer disabled (see the AleLayerInboundV4 note above).
+        // Callout::new(
+        //     "AleLayerInboundV6",
+        //     "ALE layer for inbound connections for ipv6",
+        //     0x56874651_3785_4dc9_b134_4849a54de6d0,
+        //     Layer::AleAuthRecvAcceptV6,
+        //     consts::FWP_ACTION_CALLOUT_TERMINATING,
+        //     FilterType::Resettable,
+        //     ale_callouts::ale_layer_accept_v6,
+        // ),
         // -----------------------------------------
         // ALE connection end layers
         Callout::new(

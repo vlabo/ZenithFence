@@ -25,13 +25,14 @@ For outgoing connections this logic fallows:
     3. Create a cache entry.
   - If Packet is not TCP/UDP forward to packet layer
 
-For incoming connection this logic fallow:
-  - Packet enter in one of the Packet layer, if packet is TCP or UDP it will be forwarded to ALE layer. From there:
-    1. Save packet and absorb.
-    2. Send an event to User space.
-    3. Create a cache entry.
+For incoming connections the ALE layer is not used (the inbound ALE callouts are disabled). Everything is handled by the packet layer:
+  - Packet enters in one of the inbound Packet layers.
+  - Packet is TCP or UDP with no cache entry:
+    1. Create a cache entry. The process id is not available at this layer and is left unset; User space resolves the process from the connection tuple.
+    2. Absorb the packet.
+    3. Send an event to User space.
     4. Wait for User space decision.
-  - If Packet is not TCP/UDP. It will be handled only by the packet layer.
+  - If Packet is not TCP/UDP it is handled as a temporary verdict (no cache entry, every packet sent to User space).
 
 
 If more packets arrive before User space returns a decision, packet will be absorbed and another event will be sent.
@@ -49,7 +50,7 @@ The next steps depend of the direction of the packet and the verdict
   - Always Allow - this connections are solely handled by the packet layer. (This is true only for outgoing connections)
 
 * Permanent or Temporary Verdict / Incoming connection
-  - Allow / Block / Drop directly in the ALE layer. They always go through the packet layer first no need to do anything special
+  - Applied in the packet layer. Every inbound packet passes through the packet layer, which applies the cached verdict directly: permanent verdicts are enforced without asking again, temporary verdicts are sent to User space.
 
 Fallowing specifics apply to the ALE layer:
 1. Connections with flag `reauthorize == false` are special. When the flag is `false` that means that a applications is calling a function `connect()` or `accept()` for a connection. This is a special case because we control the result of the function, telling the application that it's allowed or not allowed to continue with the connection. Since we are making request to User sace we need to take longer time. This is done with pending the packet. This allows the kernel extension to pause the event and continue when it has the verdict. See `ale_callouts.rs -> save_packet()` function.
@@ -63,9 +64,9 @@ The logic for the packet is split in two:
 
 ### TCP or UDP protocols
 
-The packet layer will not process packets that miss a cache entry:
-- Incoming packet: it will forward it to the ALE layer.
-- Outgoing packet: this is treated as invalid state since ALE should be the entry for the packets. If it happens the packet layer will create a request to User space for it.
+Packets that miss a cache entry:
+- Incoming packet: the packet layer creates a cache entry (process id unset, resolved by User space), absorbs the packet and sends a request to User space. Inbound connections are handled entirely here; they are not forwarded to an ALE layer.
+- Outgoing packet: this is treated as an invalid state since the outbound ALE layer should be the entry for these packets. In practice it means the connection is already closed and these are leftover packets, so the packet is blocked and absorbed.
 
 For packets with a cache entry:
 - Permanent Verdict: apply the verdict.
