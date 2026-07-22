@@ -5,7 +5,10 @@ use protocol::info::Info;
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
 
-use crate::{connection::{Direction, Key}, device::Packet};
+use crate::{
+    connection::{Direction, Key},
+    device::Packet,
+};
 
 pub const PACKET_MISSING_ID: u64 = u64::MAX;
 
@@ -34,9 +37,9 @@ impl IdCache {
         direction: Direction,
         ale_layer: bool,
     ) -> Option<Info> {
+        let mut values = self.values.write_lock();
         let id = self.next_id;
         let info = build_info(&value.0, id, process_id, direction, &value.1, ale_layer);
-        let mut values = self.values.write_lock();
         values.push_back(Entry { value, id });
         self.next_id = self.next_id.wrapping_add(1); // Assuming this will not overflow.
 
