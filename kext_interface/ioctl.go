@@ -27,7 +27,7 @@ var (
 
 func ReadVersion(file *KextFile) ([]uint8, error) {
 	data := make([]uint8, 4)
-	_, err := file.deviceIOControl(IOCTL_VERSION, nil, data)
+	err := file.deviceIOControl(IOCTL_VERSION, nil, data)
 
 	if err != nil {
 		return nil, err
