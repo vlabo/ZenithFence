@@ -1,0 +1,88 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-driver:
+    name: Build & link driver
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up MSVC dev environment
+        # Puts link.exe on PATH and sets LIB/INCLUDE for the x64 toolchain.
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            driver/target
+          key: cargo-driver-${{ runner.os }}-${{ hashFiles('driver/Cargo.lock') }}
+          restore-keys: cargo-driver-${{ runner.os }}-
+
+      # crate-type = "staticlib": `cargo build` compiles driver.lib and surfaces
+      # any compilation errors.
+      - name: Build driver
+        working-directory: ./driver
+        run: cargo build
+
+      # Link driver.lib into the .sys, mirroring the Justfile `link` recipe.
+      # The WDK / c_helper static libs referenced via #[link(kind="static")]
+      # live in the repo; pass their dirs as /LIBPATH so link.exe resolves them
+      # on the runner (the absolute search paths baked in by cargo don't exist
+      # here). Signing is omitted: it needs the DriverCertificate private key,
+      # which is not in the repo.
+      - name: Link driver (driver.sys)
+        shell: pwsh
+        run: |
+          Copy-Item ./driver/target/x86_64-pc-windows-msvc/debug/driver.lib .
+          link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT `
+            /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO `
+            /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 `
+            /ENTRY:FxDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" `
+            /MERGE:.rustc=.data /INTEGRITYCHECK `
+            /LIBPATH:libs/x64 /LIBPATH:c_helper/x64 driver.lib
+
+      - name: Upload driver artifact (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver
+          path: |
+            driver.sys
+            driver.pdb
+          if-no-files-found: error
+
+  check-kext-interface:
+    name: Check kext_interface (compile only)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: kext_interface/go.mod
+          cache-dependency-path: kext_interface/go.sum
+
+      # go:build windows constrained package — compile-check only, no tests run.
+      - name: Build kext_interface
+        working-directory: ./kext_interface
+        run: go build ./...
+
+      - name: Vet kext_interface
+        working-directory: ./kext_interface
+        run: go vet ./...
