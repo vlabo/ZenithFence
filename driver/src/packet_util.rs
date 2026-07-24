@@ -1,6 +1,7 @@
 use alloc::string::{String, ToString};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
+    IPV6_HEADER_LEN,
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 
@@ -330,8 +331,44 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
     }
 }
 
+// NOTE: The IPv6 extension-header parsing below is duplicated in the Linux eBPF
+// parser (`get_key_skb` in cmds/ebpf-firewall/modules/headers/key.h). Keep the
+// two implementations in sync.
+
+// IPv6 extension-header protocol numbers.
+const IPPROTO_HOPOPTS: u8 = 0;
+const IPPROTO_ROUTING: u8 = 43;
+const IPPROTO_FRAGMENT: u8 = 44;
+const IPPROTO_DSTOPT: u8 = 60;
+
+/// Bounds the extension-header walk. This is the chain depth (headers stacked in
+/// one packet), not the number of header types; a real-world packet almost never
+/// stacks more than 2-3.
+const MAX_IPV6_EXT_HEADERS: usize = 4;
+
+/// Upper bound on a single extension header's length; anything larger is treated
+/// as malformed.
+const MAX_IPV6_EXT_HEADER_LEN: usize = 256;
+
+/// Reads the first `len` bytes of the net buffer into `buffer[..len]`.
+///
+/// `NetBufferList::read_bytes` always reads from the start of the buffer and
+/// fails if the requested length exceeds the packet, so extension headers are
+/// reached by reading successively larger prefixes and indexing into them.
+fn read_prefix(nbl: &NetBufferList, buffer: &mut [u8], len: usize) -> Result<(), ()> {
+    if len > buffer.len() {
+        return Err(());
+    }
+    nbl.read_bytes(&mut buffer[..len])
+}
+
 /// This function extracts a key from a given IPv6 network buffer list (NBL).
 /// The key contains the protocol, local and remote addresses and ports.
+///
+/// IPv6 packets may carry a chain of extension headers (Hop-by-Hop, Routing,
+/// Fragment, Destination Options) between the fixed header and the transport
+/// header. The chain is walked so the key reflects the real transport protocol
+/// and ports rather than the first extension header.
 ///
 /// # Arguments
 ///
@@ -341,34 +378,90 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
 /// # Returns
 ///
 /// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
-/// * `Err(String)` - An error message if the function fails to get net_buffer data.
+/// * `Err(String)` - An error message if the function fails to get net_buffer data
+///   or the packet carries a malformed extension-header chain.
 pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
-    // Get ip header + 4 bytes for src and dst port
-    let mut headers = [0; smoltcp::wire::IPV6_HEADER_LEN + 4];
-    let Ok(()) = nbl.read_bytes(&mut headers) else {
+    // Buffer large enough for the fixed IPv6 header, the bounded extension-header
+    // chain, and the first 4 transport bytes (source + destination ports).
+    let mut headers = [0u8; IPV6_HEADER_LEN + MAX_IPV6_EXT_HEADERS * MAX_IPV6_EXT_HEADER_LEN + 4];
+
+    // Read the fixed IPv6 header to get the addresses and the first Next Header.
+    if read_prefix(nbl, &mut headers, IPV6_HEADER_LEN).is_err() {
         return Err("failed to get net_buffer data".to_string());
+    }
+    let (src_addr, dst_addr, mut nexthdr) = {
+        let ip_packet = Ipv6Packet::new_unchecked(&headers[..IPV6_HEADER_LEN]);
+        (
+            ip_packet.src_addr(),
+            ip_packet.dst_addr(),
+            u8::from(ip_packet.next_header()),
+        )
     };
-    // Parse packet
-    let ip_packet = Ipv6Packet::new_unchecked(&headers);
-    let (src_port, dst_port) = get_ports(
-        &headers[smoltcp::wire::IPV6_HEADER_LEN..],
-        ip_packet.next_header(),
-    );
+
+    // l4_offset starts right after the fixed 40-byte IPv6 header.
+    let mut l4_offset = IPV6_HEADER_LEN;
+
+    // Walk the extension-header chain until the Next Header is an L4 protocol.
+    for _ in 0..MAX_IPV6_EXT_HEADERS {
+        // Stop once the current Next Header is not a known extension header; it
+        // is then the L4 protocol.
+        if nexthdr != IPPROTO_HOPOPTS
+            && nexthdr != IPPROTO_ROUTING
+            && nexthdr != IPPROTO_FRAGMENT
+            && nexthdr != IPPROTO_DSTOPT
+        {
+            break;
+        }
+
+        // Each extension header starts with [next_header:u8][hdr_ext_len:u8].
+        if read_prefix(nbl, &mut headers, l4_offset + 2).is_err() {
+            return Err("failed to read ipv6 extension header".to_string());
+        }
+        let ext_next_header = headers[l4_offset];
+        let ext_hdr_len_units = headers[l4_offset + 1];
+
+        // Extension-header length is given in 8-octet units, not counting the
+        // first 8 octets, so the total length is (hdrlen + 1) * 8.
+        let ext_hdr_len = (ext_hdr_len_units as usize + 1) * 8;
+
+        // Reject ridiculously large / malformed headers.
+        if ext_hdr_len > MAX_IPV6_EXT_HEADER_LEN {
+            return Err("ipv6 extension header too large".to_string());
+        }
+
+        // Move past this extension header; its Next Header drives the next step.
+        l4_offset += ext_hdr_len;
+        nexthdr = ext_next_header;
+    }
+
+    // nexthdr now holds the L4 protocol number and l4_offset points at the L4 header.
+    let protocol = IpProtocol::from(nexthdr);
+
+    // Parse the layer-4 ports for TCP and UDP.
+    let (src_port, dst_port) = if matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        let needed = l4_offset + 4;
+        if read_prefix(nbl, &mut headers, needed).is_err() {
+            return Err("failed to read ipv6 transport header".to_string());
+        }
+        get_ports(&headers[l4_offset..needed], protocol)
+    } else {
+        (0, 0)
+    };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv6(ip_packet.src_addr()),
+            protocol,
+            local_address: IpAddress::Ipv6(src_addr),
             local_port: src_port,
-            remote_address: IpAddress::Ipv6(ip_packet.dst_addr()),
+            remote_address: IpAddress::Ipv6(dst_addr),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv6(ip_packet.dst_addr()),
+            protocol,
+            local_address: IpAddress::Ipv6(dst_addr),
             local_port: dst_port,
-            remote_address: IpAddress::Ipv6(ip_packet.src_addr()),
+            remote_address: IpAddress::Ipv6(src_addr),
             remote_port: src_port,
         }),
     }
