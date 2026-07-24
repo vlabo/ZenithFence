@@ -16,7 +16,7 @@ var errFileClosed = errors.New("kext file is closed")
 type KextFile struct {
 	// mutex guards handle/closed and serializes the transition to the closed
 	// state against operations trying to start.
-	mutex  sync.Mutex
+	mutex  sync.RWMutex
 	handle windows.Handle
 	closed bool
 	// inflight counts operations that currently own an OVERLAPPED/buffer the
@@ -101,13 +101,16 @@ func (f *KextFile) deviceIOControl(code uint32, inData []byte, outData []byte) e
 	return err
 }
 
+// isClosed checks if the file is closed or has an invalid handle.
+func (f *KextFile) isClosed() bool {
+	return f.closed || f.handle == winInvalidHandleValue
+}
+
 // beginIO registers the start of an overlapped operation. It returns the handle
 // to use, or a false ok if the file has been closed and no new I/O may start.
 // Every successful beginIO must be paired with an endIO.
 func (f *KextFile) beginIO() (windows.Handle, bool) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	if f.closed || f.handle == winInvalidHandleValue {
+	if f.isClosed() {
 		return winInvalidHandleValue, false
 	}
 	f.inflight.Add(1)
@@ -124,6 +127,9 @@ func (f *KextFile) endIO() {
 // operation is cancelled (via Cancel or Close) it returns once the kernel has
 // released the buffer, with err == ERROR_OPERATION_ABORTED.
 func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *windows.Overlapped, done *uint32) error) (uint32, error) {
+	f.mutex.RLock()
+	defer f.mutex.RUnlock()
+
 	handle, ok := f.beginIO()
 	if !ok {
 		return 0, errFileClosed
@@ -139,6 +145,7 @@ func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *w
 
 	overlapped := &windows.Overlapped{HEvent: event}
 	var done uint32
+
 	err = issue(handle, overlapped, &done)
 	if errors.Is(err, windows.ERROR_IO_PENDING) {
 		// The driver kept the request pending. Block until it finishes, which
@@ -203,7 +210,7 @@ func (f *KextFile) Close() error {
 }
 
 func (f *KextFile) GetHandle() windows.Handle {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
+	f.mutex.RLock()
+	defer f.mutex.RUnlock()
 	return f.handle
 }
