@@ -258,11 +258,17 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
 // Adds a new connection to the cache for the given key.
 fn add_connection(device: &Device, key: &Key, ale_data: &AleLayerData) {
     if ale_data.is_ipv6 {
-        let conn = ConnectionV6::from_key(key, ale_data.process_id, ale_data.direction).unwrap();
-        device.connection_cache.add_v6(conn);
+        if let Ok(conn) = ConnectionV6::from_key(key, ale_data.process_id, ale_data.direction) {
+            device.connection_cache.add_v6(conn);
+        } else {
+            crate::err!("failed to add ipv6 connection");
+        }
     } else {
-        let conn = ConnectionV4::from_key(key, ale_data.process_id, ale_data.direction).unwrap();
-        device.connection_cache.add_v4(conn);
+        if let Ok(conn) = ConnectionV4::from_key(key, ale_data.process_id, ale_data.direction) {
+            device.connection_cache.add_v4(conn);
+        } else {
+            crate::err!("failed to add ipv4 connection");
+        }
     }
 }
 
