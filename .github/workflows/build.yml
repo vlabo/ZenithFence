@@ -66,6 +66,25 @@ jobs:
             driver.pdb
           if-no-files-found: error
 
+      # Optional: rebrand driver.sys -> <product>.sys by re-linking driver.lib.
+      # The product name is not committed -- it comes from the repo variable
+      # DRIVER_PRODUCT_NAME. If unset, this step and its upload are skipped and
+      # the public artifact stays driver.sys.
+      - name: Rebrand driver (optional)
+        if: vars.DRIVER_PRODUCT_NAME != ''
+        shell: pwsh
+        run: ./scripts/rebrand-driver.ps1 -Name '${{ vars.DRIVER_PRODUCT_NAME }}'
+
+      - name: Upload rebranded artifact (unsigned)
+        if: vars.DRIVER_PRODUCT_NAME != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.DRIVER_PRODUCT_NAME }}
+          path: |
+            ${{ vars.DRIVER_PRODUCT_NAME }}.sys
+            ${{ vars.DRIVER_PRODUCT_NAME }}.pdb
+          if-no-files-found: error
+
   check-kext-interface:
     name: Check kext_interface (compile only)
     runs-on: windows-latest
