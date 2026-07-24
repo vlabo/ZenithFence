@@ -167,7 +167,10 @@ impl<'a> CalloutData<'a> {
             Err("callout not supported".to_string())
         }
     }
-
+    // pend_filter_rest creates a pended operation for resetting the state of the filter engine.
+    // The operation is not ideal since it blocks any other operation on the filter engine while its resenting its state.
+    // This include injecting packets.
+    #[allow(dead_code)]
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
         ClassifyDefer::Reauthorization(self.callout_id, packet_list)
     }

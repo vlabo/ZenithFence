@@ -29,6 +29,8 @@ type KextFile struct {
 	read_slice []byte
 }
 
+// Read reads the next chunk of data from the kext.
+// IMPORTANT: method is not thread safe.
 func (f *KextFile) Read(buffer []byte) (int, error) {
 	if len(f.read_slice) == 0 {
 		err := f.refill_read_buffer()

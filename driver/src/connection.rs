@@ -119,6 +119,19 @@ pub trait Connection {
         }
     }
 
+    /// Builds the [`Key`] that identifies this connection (protocol, local and
+    /// remote address/port). Relies on the address/port accessors, so it works
+    /// for both IPv4 and IPv6 connections without per-type duplication.
+    fn get_key(&self) -> Key {
+        Key {
+            protocol: self.get_protocol(),
+            local_address: self.get_local_address(),
+            local_port: self.get_local_port(),
+            remote_address: self.get_remote_address(),
+            remote_port: self.get_remote_port(),
+        }
+    }
+
     /// Returns true if the connection is equal to the given key.
     fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
@@ -197,6 +210,21 @@ impl Clone for BandwidthUsage {
             tx_bytes: AtomicU64::new(self.tx_bytes.load(Ordering::SeqCst)),
             tx_packets: AtomicU64::new(self.tx_packets.load(Ordering::SeqCst)),
         }
+    }
+}
+
+impl BandwidthUsage {
+    /// Accumulates another counter set into this one. Used when merging a
+    /// duplicate connection so its traffic accounting is not lost.
+    pub(crate) fn add_from(&self, other: &BandwidthUsage) {
+        self.rx_bytes
+            .fetch_add(other.rx_bytes.load(Ordering::SeqCst), Ordering::SeqCst);
+        self.rx_packets
+            .fetch_add(other.rx_packets.load(Ordering::SeqCst), Ordering::SeqCst);
+        self.tx_bytes
+            .fetch_add(other.tx_bytes.load(Ordering::SeqCst), Ordering::SeqCst);
+        self.tx_packets
+            .fetch_add(other.tx_packets.load(Ordering::SeqCst), Ordering::SeqCst);
     }
 }
 
