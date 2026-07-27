@@ -109,7 +109,9 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn get_ip_header_size(&self) -> u32 {
+    /// Size of the IP header, including options (IPv4) or the extension header
+    /// chain (IPv6). `None` if the layer does not provide the field.
+    pub fn get_ip_header_size(&self) -> Option<u32> {
         unsafe { (*self.metadata).get_ip_header_size() }
     }
 

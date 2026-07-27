@@ -160,7 +160,18 @@ fn ip_packet_layer<T: IpVersion>(
         if let Direction::Inbound = direction {
             // The first index to the packet is set to the transport header. Retreat to the IP header.
             // The NBL will auto advance after it loses scope.
-            nbl.retreat(T::HEADER_LEN, true);
+            //
+            // The IP header is not a fixed size: IPv4 may carry options and IPv6 may carry a chain
+            // of extension headers, both of which sit between the start of the IP header and the
+            // transport header. WFP reports the real distance in the ip header size metadata field,
+            // so retreating by the fixed header length would land inside the header and every
+            // subsequent parse would read shifted garbage. Fall back to the fixed length only if
+            // the field is absent, and ignore values smaller than it as malformed.
+            let retreat_len = match data.get_ip_header_size() {
+                Some(size) if size >= T::HEADER_LEN => size,
+                _ => T::HEADER_LEN,
+            };
+            nbl.retreat(retreat_len, true);
         }
 
         // Get key from packet.
