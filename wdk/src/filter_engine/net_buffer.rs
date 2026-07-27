@@ -14,63 +14,207 @@ use crate::{
         FwpsAllocateNetBufferAndNetBufferList0, FwpsFreeNetBufferList0,
         NdisAdvanceNetBufferDataStart, NdisAllocateNetBufferListPool, NdisFreeNetBufferListPool,
         NdisGetDataBuffer, NdisRetreatNetBufferDataStart, NDIS_HANDLE, NDIS_OBJECT_TYPE_DEFAULT,
-        NET_BUFFER_LIST, NET_BUFFER_LIST_POOL_PARAMETERS,
+        NET_BUFFER, NET_BUFFER_LIST, NET_BUFFER_LIST_POOL_PARAMETERS,
         NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1,
     },
     utils::check_ntstatus,
 };
 
+/// A single NET_BUFFER inside a NET_BUFFER_LIST.
+///
+/// A list can carry a chain of net buffers, and each one is an independent
+/// packet with its own data offset, length and MDL chain. Everything that acts
+/// on packet bytes -- retreating the data start, reading headers, cloning --
+/// is therefore per net buffer; doing it at the list level only ever touches
+/// the head of the chain and silently ignores the rest.
+pub struct NetBuffer {
+    nb: *mut NET_BUFFER,
+    advance_on_drop: Option<u32>,
+}
+
+impl NetBuffer {
+    pub fn new(nb: *mut NET_BUFFER) -> NetBuffer {
+        NetBuffer {
+            nb,
+            advance_on_drop: None,
+        }
+    }
+
+    pub fn get_data_length(&self) -> u32 {
+        unsafe {
+            match self.nb.as_ref() {
+                Some(nb) => nb.nbSize.DataLength,
+                None => 0,
+            }
+        }
+    }
+
+    /// Reads `buffer.len()` bytes from the current data start of the net buffer.
+    ///
+    /// Fails if the net buffer holds fewer bytes than requested.
+    pub fn read_bytes(&self, buffer: &mut [u8]) -> Result<(), ()> {
+        unsafe {
+            let Some(nb) = self.nb.as_ref() else {
+                return Err(());
+            };
+            let data_length = nb.nbSize.DataLength;
+            if data_length == 0 {
+                return Err(());
+            }
+
+            if buffer.len() > data_length as usize {
+                return Err(());
+            }
+
+            // Two options: returns a pointer to the raw packet buffer if the
+            // requested range is contiguous, or copies into the supplied buffer.
+            let mut ptr = NdisGetDataBuffer(nb, buffer.len() as u32, core::ptr::null_mut(), 1, 0);
+            if !ptr.is_null() {
+                buffer.copy_from_slice(core::slice::from_raw_parts(ptr, buffer.len()));
+                return Ok(());
+            }
+
+            ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
+            if !ptr.is_null() {
+                return Ok(());
+            }
+        }
+        return Err(());
+    }
+
+    /// Copies this net buffer into a new, standalone NET_BUFFER_LIST holding a
+    /// single net buffer.
+    ///
+    /// Each net buffer of a chain is cloned into its own list rather than into a
+    /// chain of its own, because that is what the injection path takes: one
+    /// packet per injected list.
+    pub fn clone_as_nbl(&self, net_allocator: &NetworkAllocator) -> Result<NetBufferList, String> {
+        unsafe {
+            let Some(nb) = self.nb.as_ref() else {
+                return Err("net buffer is null".to_string());
+            };
+
+            let data_length = nb.nbSize.DataLength;
+            if data_length == 0 {
+                return Err("can't clone empty packet".to_string());
+            }
+
+            let mut buffer = alloc::vec![0 as u8; data_length as usize];
+            let buffer_ptr = buffer.as_mut_ptr();
+
+            let ptr = NdisGetDataBuffer(nb, data_length, buffer_ptr, 1, 0);
+            if ptr.is_null() {
+                return Err("failed to copy packet buffer".to_string());
+            }
+
+            // If the pointers differ the data is not in the correct place.
+            if ptr != buffer_ptr {
+                buffer.copy_from_slice(core::slice::from_raw_parts(ptr, data_length as usize));
+            }
+
+            let new_nbl = net_allocator.wrap_packet_in_nbl(&buffer)?;
+
+            return Ok(NetBufferList {
+                nbl: new_nbl,
+                data: Some(buffer),
+            });
+        }
+    }
+
+    /// Retreats the data start of the net buffer, exposing bytes that precede it.
+    ///
+    /// With `auto_advance` the retreat is undone when the value is dropped.
+    /// Returns an error if the retreat failed, in which case the data offset is
+    /// unchanged and reads would still return data from the old offset.
+    pub fn retreat(&mut self, size: u32, auto_advance: bool) -> Result<(), String> {
+        unsafe {
+            let Some(nb) = self.nb.as_mut() else {
+                return Err("net buffer is null".to_string());
+            };
+
+            let status = NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+            check_ntstatus(status)?;
+
+            if auto_advance {
+                self.advance_on_drop = Some(size);
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Advances the data start of the net buffer, undoing a retreat.
+    pub fn advance(&self, size: u32) {
+        unsafe {
+            if let Some(nb) = self.nb.as_mut() {
+                NdisAdvanceNetBufferDataStart(nb as _, size, false, core::ptr::null_mut());
+            }
+        }
+    }
+}
+
+impl Drop for NetBuffer {
+    fn drop(&mut self) {
+        if let Some(advance_amount) = self.advance_on_drop {
+            self.advance(advance_amount);
+        }
+    }
+}
+
+pub struct NetBufferIter(*mut NET_BUFFER);
+
+impl NetBufferIter {
+    pub fn new(nb: *mut NET_BUFFER) -> Self {
+        Self(nb)
+    }
+}
+
+impl Iterator for NetBufferIter {
+    type Item = NetBuffer;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            if let Some(nb) = self.0.as_mut() {
+                self.0 = nb.Next;
+                return Some(NetBuffer {
+                    nb,
+                    advance_on_drop: None,
+                });
+            }
+            None
+        }
+    }
+}
+
 pub struct NetBufferList {
     pub(crate) nbl: *mut NET_BUFFER_LIST,
     data: Option<Vec<u8>>,
-    advance_on_drop: Option<u32>,
 }
 
 impl NetBufferList {
     pub fn new(nbl: *mut NET_BUFFER_LIST) -> NetBufferList {
-        NetBufferList {
-            nbl,
-            data: None,
-            advance_on_drop: None,
-        }
+        NetBufferList { nbl, data: None }
     }
 
     pub fn iter(&self) -> NetBufferListIter {
         NetBufferListIter(self.nbl)
     }
 
-    pub fn read_bytes(&self, buffer: &mut [u8]) -> Result<(), ()> {
+    /// Iterates over every net buffer in this list.
+    pub fn iter_net_buffers(&self) -> NetBufferIter {
         unsafe {
-            let Some(nbl) = self.nbl.as_ref() else {
-                return Err(());
-            };
-            let nb = nbl.Header.first_net_buffer;
-            if let Some(nb) = nb.as_ref() {
-                let data_length = nb.nbSize.DataLength;
-                if data_length == 0 {
-                    return Err(());
-                }
-
-                if buffer.len() > data_length as usize {
-                    return Err(());
-                }
-
-                let mut ptr =
-                    NdisGetDataBuffer(nb, buffer.len() as u32, core::ptr::null_mut(), 1, 0);
-                if !ptr.is_null() {
-                    buffer.copy_from_slice(core::slice::from_raw_parts(ptr, buffer.len()));
-                    return Ok(());
-                }
-
-                ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
-                if !ptr.is_null() {
-                    return Ok(());
-                }
+            match self.nbl.as_ref() {
+                Some(nbl) => NetBufferIter(nbl.Header.first_net_buffer),
+                None => NetBufferIter(core::ptr::null_mut()),
             }
         }
-        return Err(());
     }
 
+    /// Clones the first net buffer of the list.
+    ///
+    /// Only valid where the list is known to hold a single net buffer. Use
+    /// [`NetBufferList::iter_net_buffers`] with [`NetBuffer::clone_as_nbl`] to
+    /// clone a chain without dropping everything past the head.
     pub fn clone(&self, net_allocator: &NetworkAllocator) -> Result<NetBufferList, String> {
         unsafe {
             let Some(nbl) = self.nbl.as_ref() else {
@@ -108,7 +252,6 @@ impl NetBufferList {
                 return Ok(NetBufferList {
                     nbl: new_nbl,
                     data: Some(buffer),
-                    advance_on_drop: None,
                 });
             } else {
                 return Err("net buffer is null".to_string());
@@ -151,47 +294,10 @@ impl NetBufferList {
         }
     }
 
-    /// Retreats the mnl of the buffer. Does not auto advance multiple retreats.
-    ///
-    /// Returns an error if the retreat failed, in which case the data offset is
-    /// unchanged and reading the buffer would return data from the old offset.
-    pub fn retreat(&mut self, size: u32, auto_advance: bool) -> Result<(), String> {
-        unsafe {
-            let Some(nbl) = self.nbl.as_mut() else {
-                return Err("net buffer list is null".to_string());
-            };
-            let Some(nb) = nbl.Header.first_net_buffer.as_mut() else {
-                return Err("net buffer is null".to_string());
-            };
-
-            let status = NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
-            check_ntstatus(status)?;
-
-            if auto_advance {
-                self.advance_on_drop = Some(size);
-            }
-
-            Ok(())
-        }
-    }
-
-    /// Advances the MDL of the buffer.
-    pub fn advance(&self, size: u32) {
-        unsafe {
-            if let Some(nbl) = self.nbl.as_mut() {
-                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
-                    NdisAdvanceNetBufferDataStart(nb as _, size, false, core::ptr::null_mut());
-                }
-            }
-        }
-    }
 }
 
 impl Drop for NetBufferList {
     fn drop(&mut self) {
-        if let Some(advance_amount) = self.advance_on_drop {
-            self.advance(advance_amount);
-        }
         if self.data.is_some() {
             NetworkAllocator::free_net_buffer(self.nbl);
         }
@@ -213,11 +319,7 @@ impl Iterator for NetBufferListIter {
         unsafe {
             if let Some(nbl) = self.0.as_mut() {
                 self.0 = nbl.Header.next as _;
-                return Some(NetBufferList {
-                    nbl,
-                    data: None,
-                    advance_on_drop: None,
-                });
+                return Some(NetBufferList { nbl, data: None });
             }
             None
         }
