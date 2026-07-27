@@ -171,7 +171,13 @@ fn ip_packet_layer<T: IpVersion>(
                 Some(size) if size >= T::HEADER_LEN => size,
                 _ => T::HEADER_LEN,
             };
-            nbl.retreat(retreat_len, true);
+            // A failed retreat leaves the offset at the transport header, so parsing on would
+            // read a shifted packet and derive a key for the wrong connection.
+            if let Err(err) = nbl.retreat(retreat_len, true) {
+                err!("failed to retreat net buffer: {}", err);
+                data.block_and_absorb();
+                return;
+            }
         }
 
         // Get key from packet.

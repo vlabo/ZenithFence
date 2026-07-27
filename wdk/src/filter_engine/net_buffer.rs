@@ -152,16 +152,26 @@ impl NetBufferList {
     }
 
     /// Retreats the mnl of the buffer. Does not auto advance multiple retreats.
-    pub fn retreat(&mut self, size: u32, auto_advance: bool) {
+    ///
+    /// Returns an error if the retreat failed, in which case the data offset is
+    /// unchanged and reading the buffer would return data from the old offset.
+    pub fn retreat(&mut self, size: u32, auto_advance: bool) -> Result<(), String> {
         unsafe {
-            if let Some(nbl) = self.nbl.as_mut() {
-                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
-                    NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
-                    if auto_advance {
-                        self.advance_on_drop = Some(size);
-                    }
-                }
+            let Some(nbl) = self.nbl.as_mut() else {
+                return Err("net buffer list is null".to_string());
+            };
+            let Some(nb) = nbl.Header.first_net_buffer.as_mut() else {
+                return Err("net buffer is null".to_string());
+            };
+
+            let status = NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+            check_ntstatus(status)?;
+
+            if auto_advance {
+                self.advance_on_drop = Some(size);
             }
+
+            Ok(())
         }
     }
 
@@ -320,23 +330,32 @@ impl NetworkAllocator {
         });
     }
 
+    /// Retreats the data start of the first net buffer.
+    ///
+    /// Returns an error if the retreat failed; the returned guard is `None` when
+    /// the retreat succeeded but `auto_advance` was not requested.
     pub fn retreat_net_buffer(
         nbl: *mut NET_BUFFER_LIST,
         size: u32,
         auto_advance: bool,
-    ) -> Option<RetreatGuard> {
+    ) -> Result<Option<RetreatGuard>, String> {
         unsafe {
-            if let Some(nbl) = nbl.as_mut() {
-                if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
-                    NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
-                    if auto_advance {
-                        return Some(RetreatGuard { size, nbl });
-                    }
-                }
+            let Some(nbl_ref) = nbl.as_mut() else {
+                return Err("net buffer list is null".to_string());
+            };
+            let Some(nb) = nbl_ref.Header.first_net_buffer.as_mut() else {
+                return Err("net buffer is null".to_string());
+            };
+
+            let status = NdisRetreatNetBufferDataStart(nb as _, size, 0, core::ptr::null_mut());
+            check_ntstatus(status)?;
+
+            if auto_advance {
+                return Ok(Some(RetreatGuard { size, nbl }));
             }
         }
 
-        return None;
+        return Ok(None);
     }
     pub fn advance_net_buffer(nbl: *mut NET_BUFFER_LIST, size: u32) {
         unsafe {

@@ -1,7 +1,7 @@
 use alloc::string::{String, ToString};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
-    IPV6_HEADER_LEN,
+    IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
 use wdk::filter_engine::net_buffer::NetBufferList;
 
@@ -298,34 +298,75 @@ fn get_ports(packet: &[u8], protocol: smoltcp::wire::IpProtocol) -> (u16, u16) {
     }
 }
 
+/// Upper bound on an IPv4 header: the fixed 20 bytes plus the 40 bytes of
+/// options that the 4-bit IHL field can express.
+const MAX_IPV4_HEADER_LEN: usize = 60;
+
+/// Reads the first `len` bytes of the net buffer into `buffer[..len]`.
+///
+/// `NetBufferList::read_bytes` always reads from the start of the buffer and
+/// fails if the requested length exceeds the packet, so anything past the fixed
+/// header (IPv4 options, IPv6 extension headers, the transport header) is
+/// reached by reading successively larger prefixes and indexing into them.
+fn read_prefix(nbl: &NetBufferList, buffer: &mut [u8], len: usize) -> Result<(), ()> {
+    if len > buffer.len() {
+        return Err(());
+    }
+    nbl.read_bytes(&mut buffer[..len])
+}
+
 pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
-    // Get ip header + 4 bytes for src and dst port
-    let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + 4];
-    if nbl.read_bytes(&mut headers).is_err() {
+    // Buffer large enough for the largest possible IPv4 header, options included, and the
+    // first 4 transport bytes (source + destination ports).
+    let mut headers = [0u8; MAX_IPV4_HEADER_LEN + 4];
+
+    // Read the fixed part of the header; it carries the IHL that locates the transport header.
+    if read_prefix(nbl, &mut headers, IPV4_HEADER_LEN).is_err() {
         return Err("failed to get net_buffer data".to_string());
     }
+    let (src_addr, dst_addr, protocol, header_len) = {
+        let ip_packet = Ipv4Packet::new_unchecked(&headers[..IPV4_HEADER_LEN]);
+        (
+            ip_packet.src_addr(),
+            ip_packet.dst_addr(),
+            ip_packet.next_header(),
+            ip_packet.header_len() as usize,
+        )
+    };
 
-    // Parse packet
-    let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let (src_port, dst_port) = get_ports(
-        &headers[smoltcp::wire::IPV4_HEADER_LEN..],
-        ip_packet.next_header(),
-    );
+    // The header length comes from the packet itself, so validate it before using it as an
+    // offset. IHL < 5 is malformed; IHL > 15 cannot be expressed in 4 bits.
+    if header_len < IPV4_HEADER_LEN || header_len > MAX_IPV4_HEADER_LEN {
+        return Err("invalid ipv4 header length".to_string());
+    }
+
+    // Parse the layer-4 ports for TCP and UDP. Options sit between the fixed header and the
+    // transport header, so the ports are at header_len, which is only IPV4_HEADER_LEN when the
+    // packet carries no options.
+    let (src_port, dst_port) = if matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        let needed = header_len + 4;
+        if read_prefix(nbl, &mut headers, needed).is_err() {
+            return Err("failed to read ipv4 transport header".to_string());
+        }
+        get_ports(&headers[header_len..needed], protocol)
+    } else {
+        (0, 0)
+    };
 
     // Build key
     match direction {
         Direction::Outbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv4(ip_packet.src_addr()),
+            protocol,
+            local_address: IpAddress::Ipv4(src_addr),
             local_port: src_port,
-            remote_address: IpAddress::Ipv4(ip_packet.dst_addr()),
+            remote_address: IpAddress::Ipv4(dst_addr),
             remote_port: dst_port,
         }),
         Direction::Inbound => Ok(Key {
-            protocol: ip_packet.next_header(),
-            local_address: IpAddress::Ipv4(ip_packet.dst_addr()),
+            protocol,
+            local_address: IpAddress::Ipv4(dst_addr),
             local_port: dst_port,
-            remote_address: IpAddress::Ipv4(ip_packet.src_addr()),
+            remote_address: IpAddress::Ipv4(src_addr),
             remote_port: src_port,
         }),
     }
@@ -349,18 +390,6 @@ const MAX_IPV6_EXT_HEADERS: usize = 4;
 /// Upper bound on a single extension header's length; anything larger is treated
 /// as malformed.
 const MAX_IPV6_EXT_HEADER_LEN: usize = 256;
-
-/// Reads the first `len` bytes of the net buffer into `buffer[..len]`.
-///
-/// `NetBufferList::read_bytes` always reads from the start of the buffer and
-/// fails if the requested length exceeds the packet, so extension headers are
-/// reached by reading successively larger prefixes and indexing into them.
-fn read_prefix(nbl: &NetBufferList, buffer: &mut [u8], len: usize) -> Result<(), ()> {
-    if len > buffer.len() {
-        return Err(());
-    }
-    nbl.read_bytes(&mut buffer[..len])
-}
 
 /// This function extracts a key from a given IPv6 network buffer list (NBL).
 /// The key contains the protocol, local and remote addresses and ports.
