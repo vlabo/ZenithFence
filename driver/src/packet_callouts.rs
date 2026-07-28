@@ -145,6 +145,16 @@ fn ip_packet_layer<T: IpVersion>(
         return;
     };
 
+    // Stop inspecting once the teardown has started. The event queue is already run down, so a
+    // packet cached here would never get a verdict, and holding traffic with block_and_absorb
+    // while the driver unloads would black-hole it. Permit instead.
+    if device.is_shutting_down() {
+        // This makes the connections created between driver unload and system shutdown invisible to user-space.
+        // TODO: Is there anything we can do about it?
+        data.action_permit();
+        return;
+    }
+
     // Allow previously injected packets.
     if device
         .injector

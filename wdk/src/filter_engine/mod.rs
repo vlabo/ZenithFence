@@ -117,6 +117,91 @@ impl FilterEngine {
         return Ok(());
     }
 
+    /// Reports whether any filter is still registered.
+    fn has_registered_filters(&self) -> bool {
+        match &self.callouts {
+            Some(callouts) => callouts.iter().any(|callout| callout.filter_id != 0),
+            None => false,
+        }
+    }
+
+    /// Removes all registered filters, leaving the callouts in place. Once the transaction is
+    /// committed no new classify call can reach the callouts. This is the first step of the
+    /// teardown: complete the operations that are still pended, then call `unregister_callouts`,
+    /// which `FwpsCalloutUnregisterById0` refuses to do while one is outstanding.
+    ///
+    /// Does nothing when the filters are already gone, so it is safe to call more than once.
+    pub fn unregister_filters(&mut self) -> Result<(), String> {
+        if !self.has_registered_filters() {
+            // Nothing to remove; do not open a transaction for it.
+            return Ok(());
+        }
+
+        // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
+        let mut filter_engine = match Transaction::begin_write(self) {
+            Ok(transaction) => transaction,
+            Err(err) => {
+                return Err(err);
+            }
+        };
+
+        let filter_engine_handle = filter_engine.handle;
+        if let Some(callouts) = &mut filter_engine.callouts {
+            for callout in callouts {
+                if callout.filter_id != 0 {
+                    if let Err(err) = ffi::unregister_filter(filter_engine_handle, callout.filter_id)
+                    {
+                        return Err(format!("filter_engine: {}", err));
+                    }
+                    callout.filter_id = 0;
+                }
+            }
+        }
+
+        // Commit transaction.
+        if let Err(err) = filter_engine.commit() {
+            return Err(err);
+        }
+
+        return Ok(());
+    }
+
+    /// Unregisters all registered callouts. This is the last step of the teardown and must run
+    /// after `unregister_filters` and after every pended operation has been completed:
+    /// `FwpsCalloutUnregisterById0` fails with STATUS_DEVICE_BUSY while an operation is still
+    /// pended, and letting the driver unload over a callout that is still registered strands that
+    /// operation for good — nothing can complete its IRP afterwards, so the thread waiting on it
+    /// never returns from the kernel and its process can no longer be terminated.
+    ///
+    /// Skips the callouts that are already gone, so it is safe to call more than once.
+    pub fn unregister_callouts(&mut self) -> Result<(), String> {
+        let mut first_failure = None;
+
+        if let Some(callouts) = &mut self.callouts {
+            for callout in callouts {
+                if !callout.registered {
+                    continue;
+                }
+
+                match ffi::unregister_callout(callout.id) {
+                    Ok(()) => callout.registered = false,
+                    // Keep going so the remaining callouts are still removed, and report the first
+                    // failure once the whole set has been tried.
+                    Err(err) => {
+                        if first_failure.is_none() {
+                            first_failure = Some(format!("{}: {}", callout.name, err));
+                        }
+                    }
+                }
+            }
+        }
+
+        match first_failure {
+            Some(err) => Err(format!("filter_engine: failed to unregister callout {}", err)),
+            None => Ok(()),
+        }
+    }
+
     pub fn reset_all_filters(&mut self) -> Result<(), String> {
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         let mut filter_engine = match Transaction::begin_write(self) {
@@ -171,19 +256,22 @@ impl FilterEngine {
 impl Drop for FilterEngine {
     fn drop(&mut self) {
         dbg!("Unregistering callouts");
-        if let Some(callouts) = &self.callouts {
-            for callout in callouts {
-                if callout.registered {
-                    if let Err(code) = ffi::unregister_callout(callout.id) {
-                        dbg!("failed to unregister callout: {}", code);
-                    }
-                    if callout.filter_id != 0 {
-                        if let Err(code) = ffi::unregister_filter(self.handle, callout.filter_id) {
-                            dbg!("failed to unregister filter: {}", code)
-                        }
-                    }
-                }
-            }
+
+        // Failsafe only. The teardown in Device::shutdown removes the filters and the callouts
+        // explicitly, in the order that lets the pended operations be completed in between, so
+        // both calls below are no-ops by the time we get here. They only do anything if the
+        // teardown never ran, and then the order still matters: filters first, so no new classify
+        // call can arrive while the callouts are being unregistered.
+        if let Err(err) = self.unregister_filters() {
+            dbg!("failed to unregister filters: {}", err);
+        }
+        if let Err(err) = self.unregister_callouts() {
+            // Reaching this means a pended operation was never completed and the driver is about
+            // to unload over a live callout, which leaves the thread waiting on that operation
+            // stuck in the kernel for good. Report it through DbgPrint directly, because the log
+            // macros are compiled out in release builds and the event queue that carries the
+            // driver log to user space is already gone by this point.
+            crate::interface::dbg_print(format!("ERROR ZenithFence: {}\n", err));
         }
 
         if self.committed {

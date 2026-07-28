@@ -32,6 +32,13 @@ pub const FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU: u32 = 0x00040000;
 pub const FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU: u32 = 0x00080000;
 pub const FWP_CONDITION_FLAG_IS_CONNECTION_REDIRECTED: u32 = 0x00100000;
 
+// Processor modes (KPROCESSOR_MODE)
+pub const KERNEL_MODE: i8 = 0;
+
+// Interrupt request levels (KIRQL)
+pub const PASSIVE_LEVEL: u8 = 0;
+pub const APC_LEVEL: u8 = 1;
+
 // Driver
 pub const METHOD_BUFFERED: u32 = 0;
 pub const METHOD_IN_DIRECT: u32 = 1;

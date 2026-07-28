@@ -63,7 +63,11 @@ unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
     unsafe {
         if !DEVICE.is_null() {
+            // Dropping the device completes every pending operation and unregisters the callouts,
+            // so no callout can still be running once this returns. Only then is it safe to clear
+            // the pointer the callouts read through.
             _ = Box::from_raw(DEVICE);
+            DEVICE = core::ptr::null_mut();
         }
     }
 }

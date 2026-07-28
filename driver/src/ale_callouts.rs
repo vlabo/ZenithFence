@@ -157,6 +157,17 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
         return;
     };
 
+    // Never pend once the teardown has started. The packet cache is being drained and user space
+    // is gone, so a pend made now would never be answered: its IRP would stay alive inside a
+    // callout that is about to be unregistered, leaving the connecting thread stuck in the kernel.
+    // Permit instead, the filters are being removed anyway.
+    if device.is_shutting_down() {
+        // This makes the connections created between driver unload and system shutdown invisible to user-space.
+        // TODO: Is there anything we can do about it?
+        data.action_permit();
+        return;
+    }
+
     // Only TCP and UDP are associated with a connection and handled here. Everything else is
     // permitted and handled by the packet layer.
     if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {

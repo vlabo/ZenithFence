@@ -1,4 +1,4 @@
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::string::String;
 use num_traits::FromPrimitive;
@@ -41,6 +41,9 @@ pub struct Device {
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
+    /// Set once the teardown has begun. Callouts check it and stop pending operations, because
+    /// from that point on nothing is left to answer a pend.
+    shutdown_started: AtomicBool,
 }
 
 impl Device {
@@ -65,7 +68,15 @@ impl Device {
             connection_cache: ConnectionCache::new(),
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
+            shutdown_started: AtomicBool::new(false),
         })
+    }
+
+    /// Reports whether the teardown has started. Callouts must not pend a new operation once this
+    /// is set: the packet cache is being drained and the user space handle is on its way out, so
+    /// a pend made now would never be completed.
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown_started.load(Ordering::SeqCst)
     }
 
     /// Cleanup is called just before drop.
@@ -429,20 +440,65 @@ impl Device {
         }
     }
 
+    /// Tears the device down, in the only order that leaves nothing behind for the unload:
+    /// remove the filters, complete everything that is still pended, then remove the callouts.
+    ///
+    /// Reachable from the shutdown command (write and device-control) and from the unload path,
+    /// and safe to call more than once: the one-time part runs once, the rest runs on every call
+    /// so anything that raced in afterwards is still resolved.
     pub fn shutdown(&mut self) {
-        // End blocking operations from the queue. This will end pending read requests.
-        self.event_queue.rundown();
+        if !self.shutdown_started.swap(true, Ordering::SeqCst) {
+            // Remove the filters before anything else. Once they are gone no new classify call can
+            // reach the callouts, so no new connection can be pended while the teardown runs. The
+            // flag set above covers the classify calls that are already in flight.
+            if let Err(err) = self.filter_engine.unregister_filters() {
+                err!("failed to unregister filters on shutdown: {}", err);
+            }
+
+            // End blocking operations from the queue. This will end pending read requests.
+            self.event_queue.rundown();
+        }
 
         // Resolve all pending packets. This is important for proper driver unload.
-        let pending_packets = self.packet_cache.pop_all();
-        for el in pending_packets {
-            let key = el.value.0;
-            let packet = el.value.1;
-            // Set any verdict. Driver will unload after that and the filter will not be active.
-            _ = self
-                .connection_cache
-                .update_connection(key, crate::connection::Verdict::PermanentBlock);
-            _ = self.inject_packet(packet, true); // Blocked must be set, so it only handles the ALE layer.
+        self.complete_pending_packets();
+
+        // Nothing is pended anymore, so the callouts can be removed. This has to happen here and
+        // not be left to the filter engine being dropped: unregistering a callout fails while an
+        // operation is still pended on it, and the drop has no way to complete one.
+        if let Err(err) = self.filter_engine.unregister_callouts() {
+            err!("failed to unregister callouts on shutdown: {}", err);
+        }
+    }
+
+    /// Completes every operation still held in the packet cache. A pended ALE operation keeps its
+    /// IRP alive inside the callout: if the driver unloads while one is still outstanding, that
+    /// IRP can never be completed, the thread that owns it never leaves kernel mode, and its
+    /// process can no longer be terminated. Everything is resolved with a verdict here so the
+    /// callouts can be unregistered cleanly.
+    fn complete_pending_packets(&mut self) {
+        for _ in 0..10 {
+            // Wait before every pass, including the first one, so a classify that was still on its
+            // way to pend_operation when the filters were removed has time to land in the cache.
+            if let Err(err) = wdk::utils::sleep_ms(10) {
+                err!("failed to wait between drain passes: {}", err);
+            }
+
+            let pending_packets = self.packet_cache.pop_all();
+            if pending_packets.is_empty() {
+                // Keep going rather than stopping here: an empty pass does not prove the cache
+                // will stay empty, only that nothing had arrived yet.
+                continue;
+            }
+
+            for el in pending_packets {
+                let key = el.value.0;
+                let packet = el.value.1;
+                // Set any verdict. Driver will unload after that and the filter will not be active.
+                _ = self
+                    .connection_cache
+                    .update_connection(key, crate::connection::Verdict::PermanentBlock);
+                _ = self.inject_packet(packet, true); // Blocked must be set, so it only handles the ALE layer.
+            }
         }
     }
 
@@ -468,6 +524,13 @@ impl Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
+        // The driver can also be unloaded without ever receiving a shutdown command (service stop,
+        // driver removal, a user space process that died). Run the same teardown here so no pended
+        // operation is ever left behind. This still runs before the filter engine is dropped, so
+        // completing the operations and removing the callouts is valid at this point; by the time
+        // the engine drops there is nothing left for its own failsafe to do.
+        self.shutdown();
+
         _ = logger::flush();
         // dbg!("Device Context drop called.");
     }
