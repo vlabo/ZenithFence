@@ -7,10 +7,10 @@ use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::{
     driver::Driver,
     filter_engine::{
-        callout_data::ClassifyDefer,
+        callout_data::{ClassifyDefer, DeferResolution},
         net_buffer::{NetBufferList, NetworkAllocator},
         packet::{InjectInfo, Injector},
-        FilterEngine,
+        FilterEngine, ResetError,
     },
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
@@ -22,8 +22,9 @@ use crate::{
     connection::{Connection, ConnectionV4, ConnectionV6, Key},
     connection_cache::ConnectionCache,
     dbg, err,
+    filter_reset_queue::{FilterResetQueue, PendingReset},
     id_cache::IdCache,
-    logger,
+    info, logger,
     packet_util::Redirect,
 };
 
@@ -41,6 +42,9 @@ pub struct Device {
     pub(crate) connection_cache: ConnectionCache,
     pub(crate) injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
+    /// Connections that were deferred without a completion handle and are waiting for the filter
+    /// reset that releases them. See `reset_filters_and_inject`.
+    filter_reset_queue: FilterResetQueue,
     /// Set once the teardown has begun. Callouts check it and stop pending operations, because
     /// from that point on nothing is left to answer a pend.
     shutdown_started: AtomicBool,
@@ -68,6 +72,7 @@ impl Device {
             connection_cache: ConnectionCache::new(),
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
+            filter_reset_queue: FilterResetQueue::new(),
             shutdown_started: AtomicBool::new(false),
         })
     }
@@ -248,9 +253,9 @@ impl Device {
             CommandType::ClearCache => {
                 wdk::dbg!("ClearCache command");
                 self.connection_cache.clear();
-                if let Err(err) = self.filter_engine.reset_all_filters() {
-                    err!("failed to reset filters: {}", err);
-                }
+                // Goes through the same queue as the deferred reauthorizations: it is the same
+                // reset, and only one of them can run at a time. Carries no packet of its own.
+                self.reset_filters_and_inject(None);
             }
             CommandType::GetConnectionsUpdate => {
                 let update = protocol::command::parse_update_info(buffer);
@@ -320,6 +325,7 @@ impl Device {
                 let (active, ended) = self.connection_cache.get_entries_count();
                 let packet_cache_count = self.packet_cache.get_entries_count();
                 let (unlinked_v4, unlinked_v6) = self.connection_cache.get_unlinked_queue_counts();
+                let filter_reset_count = self.filter_reset_queue.get_entries_count();
 
                 {
                     let mut log_line = protocol::info::log_line(
@@ -328,8 +334,8 @@ impl Device {
                     );
                     _ = write!(
                         log_line,
-                        "MemStats: connections active={} ended={} | packet_cache={} | unlinked_ports v4={} v6={}",
-                        active, ended, packet_cache_count, unlinked_v4, unlinked_v6
+                        "MemStats: connections active={} ended={} | packet_cache={} | unlinked_ports v4={} v6={} | filter_reset_queue={}",
+                        active, ended, packet_cache_count, unlinked_v4, unlinked_v6, filter_reset_count
                     );
                     logger::add_line(log_line);
                 }
@@ -511,14 +517,122 @@ impl Device {
                     Ok(())
                 }
             }
-            Packet::AleLayer(defer) => {
-                let packet_list = defer.complete(&mut self.filter_engine)?;
-                if let Some(packet_list) = packet_list {
-                    self.injector.inject_packet_list_transport(packet_list)?;
+            Packet::AleLayer(defer) => match defer.resolve() {
+                // The pended operation has been completed, so the packet can go out right away.
+                DeferResolution::Completed(packet_list) => self.inject_pending(packet_list),
+                // The connection is still held by the filter that blocked it. Reset the filters to
+                // let it go, then inject.
+                DeferResolution::HeldByFilter(packet_list) => {
+                    self.reset_filters_and_inject(packet_list);
+                    Ok(())
                 }
-                Ok(())
+            },
+        }
+    }
+
+    /// Resets the filters to let go of the connections that are still held by one, and injects the
+    /// packets that were captured with them.
+    ///
+    /// This is the only place the filters are reset while the driver is running, and the reset only
+    /// ever happens on the thread holding the drain claim, so two of them can never run at once.
+    /// That matters because a reset opens a WFP write transaction and only one transaction can be
+    /// open on the filter engine session at a time.
+    ///
+    /// The connection is therefore always queued first, never reset for on the spot. Whether the
+    /// calling thread goes on to do the work depends only on whether another thread is already doing
+    /// it:
+    ///  - The claim is free: this thread takes it and works the queue until it runs empty, so its
+    ///    own packet is injected before this returns.
+    ///  - The claim is taken: this returns right away. The holder's next reset releases this
+    ///    connection too — it was deferred before that reset, which is all it takes.
+    ///
+    /// Nothing is lost either way: the entry is queued before the claim is even looked at, and the
+    /// claim is only given back while the queue is empty (see `filter_reset_queue`).
+    ///
+    /// A reset that still loses the race for the transaction — against the teardown removing the
+    /// filters, or the initial commit registering them — is retried every
+    /// `FILTER_RESET_RETRY_INTERVAL_MS`, up to `FILTER_RESET_MAX_ATTEMPTS` times, with everything
+    /// that piled up in the meantime released by the same reset. Waiting means this is only usable
+    /// at IRQL <= APC_LEVEL; every caller reaches it from a user space write or from the teardown,
+    /// so that holds.
+    ///
+    /// Reports failures through the log rather than to the caller: a reset serves a whole batch, so
+    /// a failed one is not attributable to the connection that happened to trigger it.
+    fn reset_filters_and_inject(&mut self, pending: PendingReset) {
+        if !self.filter_reset_queue.push_and_claim(pending) {
+            return;
+        }
+
+        // Attempts spent in a row on the current batch.
+        let mut attempts = 0;
+
+        loop {
+            // Take everything that is queued: one reset releases all of it. Only what was queued
+            // before the reset, though — whatever arrives while the transaction below runs is not
+            // released by it and stays queued for the next pass.
+            //
+            // This is also the only way out of the loop, and it gives the claim back under the same
+            // lock that guards the entries, so the queue can never be left with work and no worker.
+            let Some(batch) = self.filter_reset_queue.take_all_or_release() else {
+                return;
+            };
+
+            match self.filter_engine.reset_all_filters() {
+                Ok(()) => {
+                    attempts = 0;
+                    let len = batch.len();
+                    for pending in batch {
+                        if let Err(err) = self.inject_pending(pending) {
+                            err!("failed to inject packet after filter reset: {}", err);
+                        }
+                    }
+                    info!(
+                        "injected {} reauthorized packets after {} attempts",
+                        len, attempts
+                    )
+                }
+                Err(ResetError::TransactionInProgress) => {
+                    attempts += 1;
+                    if attempts >= 20 {
+                        // Give up on this batch. The packets are freed with it and the connections
+                        // stay held; the peer retransmits and the next packet is classified again.
+                        err!(
+                            "giving up on the filter reset after {} attempts, dropping {} packet(s)",
+                            attempts,
+                            batch.len()
+                        );
+                        attempts = 0;
+                        continue;
+                    }
+
+                    // Nothing was changed by the failed attempt, so put the batch back and try the
+                    // same reset again. A failed wait only makes the attempts come faster, not
+                    // endlessly: they stay bounded and the loop still ends once the queue is empty.
+                    self.filter_reset_queue.push_front_all(batch);
+                    if let Err(err) = wdk::utils::sleep_ms(10) {
+                        err!("failed to wait before the next filter reset: {}", err);
+                    }
+                }
+                Err(err) => {
+                    // Not transient. Drop the batch with its packets and carry on with the queue.
+                    err!(
+                        "failed to reset filters: {}, dropping {} packet(s)",
+                        String::from(err),
+                        batch.len()
+                    );
+                    attempts = 0;
+                }
             }
         }
+    }
+
+    /// Injects a packet captured with a deferred connection, if there was one to capture.
+    fn inject_pending(&self, pending: PendingReset) -> Result<(), String> {
+        let Some(packet_list) = pending else {
+            return Ok(());
+        };
+
+        return self.injector.inject_packet_list_transport(packet_list);
     }
 }
 

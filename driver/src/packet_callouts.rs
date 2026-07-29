@@ -245,7 +245,6 @@ fn ip_packet_layer<T: IpVersion>(
                     // TCP and UDP always need to go through ALE layer first.
                     if matches!(direction, Direction::Inbound) {
                         // If it's an inbound packet and the connection is not found, continue to ALE layer
-                        warn!("connection not found for inbound packet: {}", key);
                         data.action_permit();
                         return;
                     } else {

@@ -9,16 +9,21 @@ use crate::ffi;
 /// Kernel wait intervals are counted in 100-nanosecond units.
 const HUNDRED_NANOS_PER_MILLISECOND: i64 = 10_000;
 
+/// Returns the symbolic name of an NTSTATUS value, or a placeholder if it is not a known code.
+pub fn ntstatus_name(status: i32) -> String {
+    let Some(name) = NtStatus::from_u32(status as u32) else {
+        return "UNKNOWN_ERROR_CODE".to_string();
+    };
+
+    return name.to_string();
+}
+
 pub fn check_ntstatus(status: i32) -> Result<(), String> {
     if status == STATUS_SUCCESS {
         return Ok(());
     }
 
-    let Some(status) = NtStatus::from_u32(status as u32) else {
-        return Err("UNKNOWN_ERROR_CODE".to_string());
-    };
-
-    return Err(status.to_string());
+    return Err(ntstatus_name(status));
 }
 
 pub fn get_system_timestamp_ms() -> u64 {

@@ -32,6 +32,11 @@ pub const FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU: u32 = 0x00040000;
 pub const FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU: u32 = 0x00080000;
 pub const FWP_CONDITION_FLAG_IS_CONNECTION_REDIRECTED: u32 = 0x00100000;
 
+// Filter engine status codes.
+/// Returned by `FwpmTransactionBegin0` when a transaction is already in progress on the same
+/// filter engine session. Nothing was changed, so the call can simply be repeated later.
+pub const STATUS_FWP_TXN_IN_PROGRESS: i32 = 0xC022000Eu32 as i32;
+
 // Processor modes (KPROCESSOR_MODE)
 pub const KERNEL_MODE: i8 = 0;
 

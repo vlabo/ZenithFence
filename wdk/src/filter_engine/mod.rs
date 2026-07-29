@@ -31,6 +31,25 @@ pub mod transaction;
 // Helper functions for ALE Readirect layers. Not needed for the current implementation.
 // pub mod connect_request;
 
+/// Why `FilterEngine::reset_all_filters` did not apply the reset.
+pub enum ResetError {
+    /// Another transaction is in progress on the filter engine session and only one can be open at
+    /// a time. Nothing was changed: no filter was removed and none was re-registered, so the reset
+    /// can be repeated as-is once the other transaction is done.
+    TransactionInProgress,
+    /// Anything else. Not transient, repeating it is pointless.
+    Failed(String),
+}
+
+impl From<ResetError> for String {
+    fn from(err: ResetError) -> Self {
+        match err {
+            ResetError::TransactionInProgress => String::from(transaction::BeginError::InProgress),
+            ResetError::Failed(message) => message,
+        }
+    }
+}
+
 pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
     handle: HANDLE,
@@ -62,7 +81,7 @@ impl FilterEngine {
     pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String> {
         {
             // Begin write transaction. This is also a lock guard.
-            let mut filter_engine = match Transaction::begin_write(self) {
+            let mut filter_engine = match Transaction::begin_write_retrying(self) {
                 Ok(transaction) => transaction,
                 Err(err) => {
                     return Err(err);
@@ -138,7 +157,10 @@ impl FilterEngine {
         }
 
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
-        let mut filter_engine = match Transaction::begin_write(self) {
+        // Waits out a transaction that is in progress instead of failing: leaving the filters
+        // registered here would make `unregister_callouts` fail too, and the teardown has no
+        // second chance to remove them.
+        let mut filter_engine = match Transaction::begin_write_retrying(self) {
             Ok(transaction) => transaction,
             Err(err) => {
                 return Err(err);
@@ -202,13 +224,30 @@ impl FilterEngine {
         }
     }
 
-    pub fn reset_all_filters(&mut self) -> Result<(), String> {
+    /// Removes and re-registers every resettable filter, which makes WFP reauthorize the existing
+    /// connections against them. This is the only way to release a connection that was deferred
+    /// without a completion handle (see `CalloutData::pend_filter_rest`), because a single filter
+    /// cannot be reset on its own.
+    ///
+    /// Does not retry on its own. Only one transaction can be open on the filter engine session, so
+    /// concurrent callers collide; `ResetError::TransactionInProgress` tells them apart from the
+    /// real failures and leaves the decision of when to try again to the caller, which can batch
+    /// several deferred connections into one reset instead of racing per connection.
+    pub fn reset_all_filters(&mut self) -> Result<(), ResetError> {
+        if !self.has_registered_filters() {
+            // The filters are gone, which only happens once the teardown has removed them. There
+            // is nothing to reset, and re-registering them here would bring the callouts back to
+            // life right before they are unregistered.
+            return Ok(());
+        }
+
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         let mut filter_engine = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,
-            Err(err) => {
-                return Err(err);
+            Err(transaction::BeginError::InProgress) => {
+                return Err(ResetError::TransactionInProgress)
             }
+            Err(err) => return Err(ResetError::Failed(String::from(err))),
         };
         let filter_engine_handle = filter_engine.handle;
         let sublayer_guid = filter_engine.sublayer_guid;
@@ -220,20 +259,20 @@ impl FilterEngine {
                         if let Err(err) =
                             ffi::unregister_filter(filter_engine_handle, callout.filter_id)
                         {
-                            return Err(format!("filter_engine: {}", err));
+                            return Err(ResetError::Failed(format!("filter_engine: {}", err)));
                         }
                         callout.filter_id = 0;
                     }
                     // Create new filter.
                     if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
-                        return Err(format!("filter_engine: {}", err));
+                        return Err(ResetError::Failed(format!("filter_engine: {}", err)));
                     }
                 }
             }
         }
         // Commit transaction.
         if let Err(err) = filter_engine.commit() {
-            return Err(err);
+            return Err(ResetError::Failed(err));
         }
         return Ok(());
     }

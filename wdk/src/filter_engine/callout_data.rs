@@ -9,7 +9,6 @@ use super::{
     metadata::FwpsIncomingMetadataValues,
     packet::TransportPacketList,
     stream_data::StreamCalloutIoPacket,
-    FilterEngine,
 };
 use alloc::{
     boxed::Box,
@@ -27,29 +26,35 @@ pub enum ClassifyDefer {
     Reauthorization(usize, Option<TransportPacketList>),
 }
 
+/// The state of the deferred connection, and the packet that was captured with it.
+pub enum DeferResolution {
+    /// The pended operation has been completed. WFP has resumed the classify, so the connection is
+    /// no longer held.
+    Completed(Option<TransportPacketList>),
+    /// There was no pended operation to complete, because the classify had no completion handle.
+    /// The connection is still held by the filter that blocked it, and stays held for as long as
+    /// that filter exists.
+    HeldByFilter(Option<TransportPacketList>),
+}
+
 impl ClassifyDefer {
-    pub fn complete(
-        self,
-        filter_engine: &mut FilterEngine,
-    ) -> Result<Option<TransportPacketList>, String> {
-        unsafe {
-            match self {
-                ClassifyDefer::Initial(context, packet_list) => {
-                    let nbl_ptr = if let Some(ref tpl) = packet_list {
-                        tpl.net_buffer_list_queue.nbl
-                    } else {
-                        core::ptr::null_mut()
-                    };
+    /// Completes the deferral where there is something to complete, and reports the resulting state
+    /// of the connection together with the packet that was captured with it.
+    pub fn resolve(self) -> DeferResolution {
+        match self {
+            ClassifyDefer::Initial(context, packet_list) => {
+                let nbl_ptr = if let Some(ref tpl) = packet_list {
+                    tpl.net_buffer_list_queue.nbl
+                } else {
+                    core::ptr::null_mut()
+                };
+                unsafe {
                     FwpsCompleteOperation0(context, nbl_ptr);
-                    return Ok(packet_list);
                 }
-                ClassifyDefer::Reauthorization(_callout_id, packet_list) => {
-                    // There is no way to reset single filter. If another request for filter reset is trigger at the same time it will fail.
-                    if let Err(err) = filter_engine.reset_all_filters() {
-                        return Err(err);
-                    }
-                    return Ok(packet_list);
-                }
+                return DeferResolution::Completed(packet_list);
+            }
+            ClassifyDefer::Reauthorization(_callout_id, packet_list) => {
+                return DeferResolution::HeldByFilter(packet_list);
             }
         }
     }
@@ -169,7 +174,9 @@ impl<'a> CalloutData<'a> {
             Err("callout not supported".to_string())
         }
     }
-    // pend_filter_rest creates a pended operation for resetting the state of the filter engine.
+    // pend_filter_rest defers the classify without pending anything: the connection is released
+    // later by resetting the state of the filter engine. Used where there is no completion handle
+    // to pend on (a reauthorized connection).
     // The operation is not ideal since it blocks any other operation on the filter engine while its resenting its state.
     // This include injecting packets.
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {

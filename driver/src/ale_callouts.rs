@@ -3,8 +3,8 @@ use core::sync::atomic::Ordering;
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key, Verdict};
 use crate::device::{Device, Packet};
 
+use crate::dbg;
 use crate::id_cache;
-use crate::info;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
@@ -232,10 +232,11 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
         // New connection.
         if ale_data.reauthorize {
             // A reauthorized connection cannot be pended: there is no completion handle during
-            // reauthorization, and resetting all filters to apply the verdict later races into
-            // STATUS_FWP_TXN_IN_PROGRESS (see device.rs inject_packet). Just capture the process
-            // id, inform user space with an info-only event (missing packet id) and permit. The
-            // packet layer sends the real packet and reinjects it after the verdict.
+            // reauthorization. Resetting all filters to release it later works (that is what the
+            // inbound path does) but the outbound packet layer runs after this one and can hold the
+            // real packet without any of that, so it is the cheaper way round here. Just capture
+            // the process id, inform user space with an info-only event (missing packet id) and
+            // permit. The packet layer sends the real packet and reinjects it after the verdict.
             crate::dbg!(
                 "reauthorized connection: {} PID: {}",
                 key,
@@ -389,8 +390,9 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
         // Only the first packet of a connection can be pended: reauthorize == false. A
         // reauthorized connection has no completion handle, so the packet is instead held by
         // resetting all filters once the verdict arrives (see `pend_filter_rest`). That reset
-        // opens a WFP write transaction and can race other resets into
-        // STATUS_FWP_TXN_IN_PROGRESS, which is why the outbound path avoids it.
+        // opens a WFP write transaction, of which only one can be open at a time, so it can lose
+        // the race against a concurrent reset; the verdict path queues those and retries them
+        // (see `Device::reset_filters_and_inject`) instead of dropping the packet.
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
         let can_pend_connection = !ale_data.reauthorize;
         match save_packet_inbound(device, &mut data, &ale_data, can_pend_connection) {
@@ -635,7 +637,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
+                dbg!(
                     "Port {}/{} Ipv4 assign request discarded pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
@@ -666,7 +668,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
+                dbg!(
                     "Port {}/{} Ipv6 assign request discarded pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
@@ -697,8 +699,8 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    "Port {}/{} released pid={}",
+                dbg!(
+                    "Port {}/{} ipv4 released pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
                     process_id,
@@ -728,8 +730,8 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    "Port {}/{} released pid={}",
+                dbg!(
+                    "Port {}/{} ipv6 released pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
                     process_id,
