@@ -19,8 +19,6 @@ trait IpVersion: Connection + Sized {
     const IS_IPV6: bool;
     fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
     fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>>;
-    fn create(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String>;
-    fn add_to_cache(cache: &ConnectionCache, conn: Self);
 }
 
 impl IpVersion for ConnectionV4 {
@@ -34,14 +32,6 @@ impl IpVersion for ConnectionV4 {
     fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
         cache.get_connection_v4(key)
     }
-
-    fn create(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
-        ConnectionV4::from_key(key, process_id, direction)
-    }
-
-    fn add_to_cache(cache: &ConnectionCache, conn: Self) {
-        cache.add_v4(conn);
-    }
 }
 
 impl IpVersion for ConnectionV6 {
@@ -54,14 +44,6 @@ impl IpVersion for ConnectionV6 {
 
     fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
         cache.get_connection_v6(key)
-    }
-
-    fn create(key: &Key, process_id: u64, direction: Direction) -> Result<Self, String> {
-        ConnectionV6::from_key(key, process_id, direction)
-    }
-
-    fn add_to_cache(cache: &ConnectionCache, conn: Self) {
-        cache.add_v6(conn);
     }
 }
 
@@ -260,23 +242,12 @@ fn ip_packet_layer<T: IpVersion>(
                         }
                     }
                 } else {
-                    // Connection not found in cache.
+                    // TCP and UDP always need to go through ALE layer first.
                     if matches!(direction, Direction::Inbound) {
-                        // Inbound connections are handled entirely by the packet layer; the inbound
-                        // ALE layer is disabled. Register the connection so the verdict can be
-                        // tracked and applied to the following packets. The process id is not
-                        // available at this layer, so it is left unset (0); user space resolves the
-                        // process from the connection tuple. The packet is then sent to user space
-                        // and held by the temporary-verdict handling below.
-                        match T::create(&key, 0, direction) {
-                            Ok(conn) => T::add_to_cache(&device.connection_cache, conn),
-                            Err(err) => {
-                                err!("failed to create inbound connection: {}", err);
-                                data.block_and_absorb();
-                                return;
-                            }
-                        }
-                        is_tmp_verdict = true;
+                        // If it's an inbound packet and the connection is not found, continue to ALE layer
+                        warn!("connection not found for inbound packet: {}", key);
+                        data.action_permit();
+                        return;
                     } else {
                         // This happens when connection is closed and there are leftover packets that cannot be associated to a connection.
                         data.block_and_absorb();
