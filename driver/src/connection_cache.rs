@@ -79,6 +79,135 @@ fn get_connection<T: Connection>(
     None
 }
 
+// Adds a connection to its port. If an equal one is already present, its
+// last-accessed time and bandwidth are updated instead of inserting a duplicate.
+//
+// The duplicate check and the publish both run under the port write lock, so
+// concurrent adds of the same connection collapse to a single entry. This
+// matters because `get_connection` + add is not atomic and the packet layer
+// runs on multiple CPUs, so two callers can miss the same connection and race
+// to insert it.
+fn add_connection<T: Connection>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    queue: &MpscQueue<ConnectionArray<T>>,
+    new: T,
+) {
+    let Some(port) = get_port(tcp, udp, new.get_protocol(), new.get_local_port()) else {
+        return;
+    };
+
+    // Identity key, taken before `new` is moved into the Arc.
+    let key = new.get_key();
+    let new_arc = Arc::new(new);
+
+    // Lock for writing.
+    let port_lock = port.lock();
+
+    // Copy the current port connection array. If the connection is already
+    // present, fold the new observation into it instead of inserting a duplicate.
+    let mut new_vec = match port_lock.snapshot() {
+        Some(snap) => {
+            // Check if connection is already in.
+            for conn in snap.iter() {
+                if conn.equals(&key) {
+                    // Refresh last-accessed and accumulate bandwidth so no traffic
+                    // accounting is lost. Identity, verdict and process id are left
+                    // untouched — the existing connection stays authoritative.
+                    conn.set_last_accessed_time(new_arc.get_last_accessed_time());
+                    conn.get_bandwidth_usage()
+                        .add_from(new_arc.get_bandwidth_usage());
+                    return;
+                }
+            }
+
+            let mut v = Vec::with_capacity(snap.len() + 1);
+            v.extend(snap.iter().cloned());
+            v
+        }
+        None => Vec::with_capacity(1),
+    };
+
+    // Add the new connection and publish.
+    new_vec.push(new_arc);
+    port_lock.publish(Some(new_vec.into_boxed_slice()), queue);
+}
+
+// Marks the connection matching `key` as ended and returns it. Read-only guard.
+fn end_connection<T: Connection>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    key: &Key,
+) -> Option<Arc<T>> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
+    let snap = port.get()?;
+    for conn in snap.iter() {
+        if conn.equals(key) {
+            conn.end(wdk::utils::get_system_timestamp_ms());
+            return Some(conn.clone());
+        }
+    }
+    None
+}
+
+// Marks every active connection on the given (protocol, port) as ended and
+// returns them. Read-only guard.
+fn end_all_on_port<T: Connection>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    protocol: IpProtocol,
+    local_port: u16,
+) -> Option<Vec<Arc<T>>> {
+    let port = get_port(tcp, udp, protocol, local_port)?.read();
+    let snap = port.get()?;
+    let now = wdk::utils::get_system_timestamp_ms();
+    let mut ended = Vec::new();
+    for conn in snap.iter() {
+        if !conn.has_ended() {
+            conn.end(now);
+            ended.push(conn.clone());
+        }
+    }
+    Some(ended)
+}
+
+// Sets the verdict on the connection matching `key`, returning any redirect
+// info. Read-only guard.
+fn set_connection_verdict<T: Connection>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    key: &Key,
+    verdict: Verdict,
+) -> Option<RedirectInfo> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
+    let snap = port.get()?;
+    for conn in snap.iter() {
+        if conn.equals(key) {
+            conn.set_verdict(verdict);
+            return conn.redirect_info();
+        }
+    }
+    None
+}
+
+// Returns the verdict of the connection matching `key`, including redirect
+// matches. Refreshes the last-accessed time. Read-only guard.
+fn find_verdict<T: Connection>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    key: &Key,
+) -> Option<Verdict> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
+    let snap = port.get()?;
+    for conn in snap.iter() {
+        if conn.equals(key) || conn.redirect_equals(key) {
+            conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+            return Some(conn.get_verdict());
+        }
+    }
+    None
+}
+
 // ports_walk generic function for waling over all connections.
 fn ports_walk<T: Connection, F: FnMut(&T)>(tcp: &PortArray<T>, udp: &PortArray<T>, mut iter: F) {
     for port in tcp.iter().chain(udp.iter()) {
@@ -222,159 +351,35 @@ impl ConnectionCache {
     }
 
     pub fn add_v4(&self, new: ConnectionV4) {
-        // Get the specific port connection array for the connection.
-        let Some(port) = get_port(
-            &self.tcp_v4,
-            &self.udp_v4,
-            new.get_protocol(),
-            new.get_local_port(),
-        ) else {
-            return;
-        };
-        // Make it into a pointer.
-        let new_arc = Arc::new(new);
-
-        // Lock for writing.
-        let port_lock = port.lock();
-
-        // Copy current port connection array.
-        let mut new_vec = match port_lock.snapshot() {
-            Some(snap) => {
-                let mut v = Vec::with_capacity(snap.len() + 1);
-                v.extend(snap.iter().cloned());
-                v
-            }
-            None => Vec::with_capacity(1),
-        };
-        // Add the new connection.
-        new_vec.push(new_arc);
-
-        // Publish the change.
-        port_lock.publish(Some(new_vec.into_boxed_slice()), &self.unlinked_ports_v4);
+        add_connection(&self.tcp_v4, &self.udp_v4, &self.unlinked_ports_v4, new);
     }
 
     pub fn add_v6(&self, new: ConnectionV6) {
-        // Get the specific port connection array for the connection.
-        let Some(port) = get_port(
-            &self.tcp_v6,
-            &self.udp_v6,
-            new.get_protocol(),
-            new.get_local_port(),
-        ) else {
-            return;
-        };
-        // Make it into a pointer.
-        let new_arc = Arc::new(new);
-
-        // Lock for writing.
-        let port_lock = port.lock();
-
-        // Copy current port connection array.
-        let mut new_vec = match port_lock.snapshot() {
-            Some(snap) => {
-                let mut v = Vec::with_capacity(snap.len() + 1);
-                v.extend(snap.iter().cloned());
-                v
-            }
-            None => Vec::with_capacity(1),
-        };
-
-        // Add the new connection.
-        new_vec.push(new_arc);
-
-        // Publish the change.
-        port_lock.publish(Some(new_vec.into_boxed_slice()), &self.unlinked_ports_v6);
+        add_connection(&self.tcp_v6, &self.udp_v6, &self.unlinked_ports_v6, new);
     }
 
     pub fn end_v4(&self, key: Key) -> Option<Arc<ConnectionV4>> {
-        // Get the specific port connection array for the connection.
-        // Read only guard.
-        let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.read();
-        let snap = port.get()?;
-        // Iterate over all connection on the port.
-        for conn in snap.iter() {
-            if conn.equals(&key) {
-                conn.end(wdk::utils::get_system_timestamp_ms());
-                return Some(conn.clone());
-            }
-        }
-        None
+        end_connection(&self.tcp_v4, &self.udp_v4, &key)
     }
 
     pub fn end_v6(&self, key: Key) -> Option<Arc<ConnectionV6>> {
-        // Get the specific port connection array for the connection.
-        // Read only guard.
-        let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.read();
-        let snap = port.get()?;
-        // Iterate over all connection on the port.
-        for conn in snap.iter() {
-            if conn.equals(&key) {
-                // Mark it as ended.
-                conn.end(wdk::utils::get_system_timestamp_ms());
-                return Some(conn.clone());
-            }
-        }
-        None
+        end_connection(&self.tcp_v6, &self.udp_v6, &key)
     }
 
     pub fn end_all_on_port_v4(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV4>>> {
-        // Get the port, read only
-        let port = get_port(&self.tcp_v4, &self.udp_v4, key.0, key.1)?.read();
-        let snap = port.get()?;
-        let now = wdk::utils::get_system_timestamp_ms();
-        let mut ended = Vec::new();
-        // Mark all as ended
-        for conn in snap.iter() {
-            if !conn.has_ended() {
-                conn.end(now);
-                ended.push(conn.clone());
-            }
-        }
-        Some(ended)
+        end_all_on_port(&self.tcp_v4, &self.udp_v4, key.0, key.1)
     }
 
     pub fn end_all_on_port_v6(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV6>>> {
-        // Get the port, read only
-        let port = get_port(&self.tcp_v6, &self.udp_v6, key.0, key.1)?.read();
-        let snap = port.get()?;
-        let now = wdk::utils::get_system_timestamp_ms();
-        let mut ended = Vec::new();
-        // Mark all as ended
-        for conn in snap.iter() {
-            if !conn.has_ended() {
-                conn.end(now);
-                ended.push(conn.clone());
-            }
-        }
-        Some(ended)
+        end_all_on_port(&self.tcp_v6, &self.udp_v6, key.0, key.1)
     }
 
     pub fn update_connection(&self, key: Key, verdict: Verdict) -> Option<RedirectInfo> {
         if key.is_ipv6() {
-            // Get read only port.
-            let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?.read();
-            let snap = port.get()?;
-            // Iterate over all connections.
-            for conn in snap.iter() {
-                if conn.equals(&key) {
-                    // Update verdict.
-                    conn.set_verdict(verdict);
-                    return conn.redirect_info();
-                }
-            }
+            set_connection_verdict(&self.tcp_v6, &self.udp_v6, &key, verdict)
         } else {
-            // Get read only port.
-            let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?.read();
-            let snap = port.get()?;
-            // Iterate over all connections.
-            for conn in snap.iter() {
-                if conn.equals(&key) {
-                    conn.set_verdict(verdict);
-                    return conn.redirect_info();
-                }
-            }
+            set_connection_verdict(&self.tcp_v4, &self.udp_v4, &key, verdict)
         }
-        None
     }
 
     // clean_ended_connections is not thread safe and should be called from one place only.
@@ -406,27 +411,10 @@ impl ConnectionCache {
 
     pub fn get_verdict(&self, key: &Key) -> Option<Verdict> {
         if key.is_ipv6() {
-            let port = get_port(&self.tcp_v6, &self.udp_v6, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
-            for conn in snap.iter() {
-                if conn.equals(key) || conn.redirect_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    return Some(conn.get_verdict());
-                }
-            }
+            find_verdict(&self.tcp_v6, &self.udp_v6, key)
         } else {
-            let port = get_port(&self.tcp_v4, &self.udp_v4, key.protocol, key.local_port)?;
-            let guard = port.read();
-            let snap = guard.get()?;
-            for conn in snap.iter() {
-                if conn.equals(key) || conn.redirect_equals(key) {
-                    conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
-                    return Some(conn.get_verdict());
-                }
-            }
+            find_verdict(&self.tcp_v4, &self.udp_v4, key)
         }
-        None
     }
     // walk_over_connections_v4 walks over all IPv4 connections. Lock free.
     pub fn walk_over_connections_v4<F: FnMut(&ConnectionV4)>(&self, iter: F) {

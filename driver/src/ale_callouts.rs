@@ -5,7 +5,9 @@ use crate::device::{Device, Packet};
 
 use crate::id_cache;
 use crate::info;
-use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
+use smoltcp::wire::{
+    IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
+};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer::{
     self, FieldsAleAuthConnectV4, FieldsAleAuthConnectV6, FieldsAleAuthRecvAcceptV4,
@@ -98,7 +100,7 @@ pub fn ale_layer_connect_v4(data: CalloutData) {
         sub_interface_index: 0,
     };
 
-    ale_layer_auth(data, ale_data);
+    ale_layer_auth_outbound(data, ale_data);
 }
 
 pub fn ale_layer_accept_v4(data: CalloutData) {
@@ -116,7 +118,7 @@ pub fn ale_layer_accept_v4(data: CalloutData) {
         interface_index: data.get_value_u32(Fields::InterfaceIndex as usize),
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
-    ale_layer_auth(data, ale_data);
+    ale_layer_auth_inbound(data, ale_data);
 }
 
 pub fn ale_layer_connect_v6(data: CalloutData) {
@@ -136,7 +138,7 @@ pub fn ale_layer_connect_v6(data: CalloutData) {
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
 
-    ale_layer_auth(data, ale_data);
+    ale_layer_auth_outbound(data, ale_data);
 }
 
 pub fn ale_layer_accept_v6(data: CalloutData) {
@@ -154,25 +156,23 @@ pub fn ale_layer_accept_v6(data: CalloutData) {
         interface_index: data.get_value_u32(Fields::InterfaceIndex as usize),
         sub_interface_index: data.get_value_u32(Fields::SubInterfaceIndex as usize),
     };
-    ale_layer_auth(data, ale_data);
+    ale_layer_auth_inbound(data, ale_data);
 }
 
-fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
+// Outbound connections (ALE Auth Connect layers).
+//
+// The ALE layer runs *before* the packet layer for outbound traffic, so permitting here means the
+// packet layer gets the chance to send the real packet to user space and reinject it.
+fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
     let Some(device) = crate::entry::get_device() else {
         return;
     };
 
-    match ale_data.protocol {
-        IpProtocol::Tcp | IpProtocol::Udp => {
-            // Only TCP and UDP make sense to be supported in the ALE layer.
-            // Everything else is not associated with a connection and will be handled in the packet layer.
-        }
-        _ => {
-            // Outbound: Will be handled by packet layer next.
-            // Inbound: Was already handled by the packet layer.
-            data.action_permit();
-            return;
-        }
+    // Only TCP and UDP are associated with a connection and handled here. Everything else is
+    // permitted and handled by the packet layer.
+    if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        data.action_permit();
+        return;
     }
 
     let key = ale_data.as_key();
@@ -184,11 +184,120 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
     if let Some(verdict) = verdict {
         crate::dbg!("processing existing connection: {} {}", key, verdict);
         match verdict {
-            // No verdict yet
+            // No verdict yet. User space may not know about this connection at all (e.g. it
+            // existed before the driver was loaded), so send an info-only event that carries the
+            // process id (missing packet id, nothing to reinject) and permit. The packet layer
+            // sends the real packet and applies the actual verdict after user space decides.
+            Verdict::Undecided => {
+                if let Some(info) =
+                    id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
+                {
+                    let _ = device.event_queue.push(info);
+                }
+                data.action_permit();
+            }
+            // A verdict exists: let the packet layer enforce it. For outbound connections the
+            // temporary verdicts (Accept, Block, Drop) and the redirects are all applied there.
+            Verdict::PermanentAccept
+            | Verdict::Accept
+            | Verdict::RedirectNameServer
+            | Verdict::RedirectTunnel
+            | Verdict::Block
+            | Verdict::Drop => {
+                data.action_permit();
+            }
+            Verdict::PermanentBlock | Verdict::Undeterminable | Verdict::Failed => {
+                // Packet layer will not see this connection.
+                crate::dbg!("permanent block {}", key);
+                data.action_block();
+            }
+            Verdict::PermanentDrop => {
+                // Packet layer will not see this connection.
+                crate::dbg!("permanent drop {}", key);
+                data.block_and_absorb();
+            }
+        }
+    } else {
+        // New connection.
+        if ale_data.reauthorize {
+            // A reauthorized connection cannot be pended: there is no completion handle during
+            // reauthorization, and resetting all filters to apply the verdict later races into
+            // STATUS_FWP_TXN_IN_PROGRESS (see device.rs inject_packet). Just capture the process
+            // id, inform user space with an info-only event (missing packet id) and permit. The
+            // packet layer sends the real packet and reinjects it after the verdict.
+            crate::dbg!(
+                "reauthorized connection: {} PID: {}",
+                key,
+                ale_data.process_id
+            );
+            add_connection(device, &key, &ale_data, None);
+            if let Some(info) =
+                id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
+            {
+                let _ = device.event_queue.push(info);
+            }
+            data.action_permit();
+        } else {
+            // First packet of a new connection (a genuine connect()). Pend it so the verdict can
+            // be returned as the result of the connect call; the packet is reinjected once user
+            // space decides.
+            crate::dbg!("pending connection: {} PID: {}", key, ale_data.process_id);
+            match save_packet_outbound(device, &mut data, &ale_data) {
+                Ok(packet) => {
+                    let info = device.packet_cache.push(
+                        (key, packet),
+                        ale_data.process_id,
+                        ale_data.direction,
+                        true,
+                    );
+                    if let Some(info) = info {
+                        let _ = device.event_queue.push(info);
+                    }
+                }
+                Err(err) => {
+                    crate::err!("failed to pend packet: {}", err);
+                }
+            };
+            add_connection(device, &key, &ale_data, None);
+
+            // Drop the packet. It will be re-injected after user space returns a verdict.
+            data.block_and_absorb();
+        }
+    }
+}
+
+// Inbound connections (ALE Auth Recv-Accept layers).
+//
+// Note that the ordering is the opposite of the outbound case: the inbound packet layer runs
+// *before* this layer, and it only forwards packets that have no connection in the cache. So this
+// callout is the entry point for new inbound connections; once a cache entry exists, following
+// packets are handled by the packet layer and mostly never reach this layer.
+fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
+    let Some(device) = crate::entry::get_device() else {
+        return;
+    };
+
+    // Only TCP and UDP are associated with a connection and handled here. Everything else was
+    // already handled by the packet layer.
+    if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        data.action_permit();
+        return;
+    }
+
+    let key = ale_data.as_key();
+
+    // Check if connection is already in cache.
+    let verdict = device.connection_cache.get_verdict(&key);
+
+    // Connection already in cache.
+    if let Some(verdict) = verdict {
+        crate::dbg!("processing existing connection: {} {}", key, verdict);
+        match verdict {
+            // No verdict yet: the connection is already pended and user space has not decided.
+            // Save this packet too so it is sent to user space and reinjected with the verdict.
             Verdict::Undecided => {
                 crate::dbg!("saving packet: {}", key);
-                // Connection is already pended. Save packet and wait for verdict.
-                match save_packet(device, &mut data, &ale_data, false) {
+                match save_packet_inbound(device, &mut data, &ale_data, false) {
                     Ok(packet) => {
                         let info = device.packet_cache.push(
                             (key, packet),
@@ -206,12 +315,12 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 };
                 data.block_and_absorb();
             }
-            // There is a verdict
+            // Accepting verdicts continue to the packet layer, which applies the redirects and
+            // keeps counting bandwidth.
             Verdict::PermanentAccept
             | Verdict::Accept
             | Verdict::RedirectNameServer
             | Verdict::RedirectTunnel => {
-                // Continue to packet layer.
                 data.action_permit();
             }
             Verdict::PermanentBlock | Verdict::Undeterminable | Verdict::Failed => {
@@ -224,49 +333,29 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                 crate::dbg!("permanent drop {}", key);
                 data.block_and_absorb();
             }
+            // Unlike the outbound case, blocking temporary verdicts are enforced here: the packet
+            // layer already ran for this packet, so permitting would let it through.
             Verdict::Block => {
-                if let Direction::Outbound = ale_data.direction {
-                    // Handled by packet layer.
-                    data.action_permit();
-                } else {
-                    // packet layer will still see the packets.
-                    data.action_block();
-                }
+                data.action_block();
             }
             Verdict::Drop => {
-                if let Direction::Outbound = ale_data.direction {
-                    // Handled by packet layer.
-                    data.action_permit();
-                } else {
-                    // packet layer will still see the packets.
-                    data.block_and_absorb();
-                }
+                data.block_and_absorb();
             }
         }
     } else {
-        // Special case for incoming loopback connection
-        if ale_data.is_loopback() && matches!(ale_data.direction, Direction::Inbound) {
-            // Pending connection for inbound loopback does not work.
-            // Set the verdict to accept and send info only event to userspace.
+        // Special case for incoming loopback connections.
+        if ale_data.is_loopback() {
+            // Pending an inbound loopback connection does not work. Set the verdict to accept and
+            // send an info-only event (missing packet id, nothing to reinject) to user space.
             crate::dbg!(
                 "loopback inbound connection: {} PID: {}",
                 key,
                 ale_data.process_id
             );
-            if ale_data.is_ipv6 {
-                let conn =
-                    ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-                conn.set_verdict(Verdict::Accept);
-                device.connection_cache.add_v6(conn);
-            } else {
-                let conn =
-                    ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-                conn.set_verdict(Verdict::Accept);
-                device.connection_cache.add_v4(conn);
-            }
+            add_connection(device, &key, &ale_data, Some(Verdict::Accept));
 
             if let Some(info) =
-                id_cache::build_loopback_info(&key, ale_data.process_id, ale_data.direction)
+                id_cache::build_info_only(&key, ale_data.process_id, ale_data.direction)
             {
                 let _ = device.event_queue.push(info);
             }
@@ -275,10 +364,14 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
             return;
         }
 
+        // Only the first packet of a connection can be pended: reauthorize == false. A
+        // reauthorized connection has no completion handle, so the packet is instead held by
+        // resetting all filters once the verdict arrives (see `pend_filter_rest`). That reset
+        // opens a WFP write transaction and can race other resets into
+        // STATUS_FWP_TXN_IN_PROGRESS, which is why the outbound path avoids it.
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
-        // Only first packet of a connection can be pended: reauthorize == false
         let can_pend_connection = !ale_data.reauthorize;
-        match save_packet(device, &mut data, &ale_data, can_pend_connection) {
+        match save_packet_inbound(device, &mut data, &ale_data, can_pend_connection) {
             Ok(packet) => {
                 let info = device.packet_cache.push(
                     (key, packet),
@@ -286,7 +379,6 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
                     ale_data.direction,
                     true,
                 );
-
                 if let Some(info) = info {
                     let _ = device.event_queue.push(info);
                 }
@@ -298,43 +390,68 @@ fn ale_layer_auth(mut data: CalloutData, ale_data: AleLayerData) {
 
         // Connection is not in cache, add it.
         crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
-        if ale_data.is_ipv6 {
-            let conn =
-                ConnectionV6::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.add_v6(conn);
-        } else {
-            let conn =
-                ConnectionV4::from_key(&key, ale_data.process_id, ale_data.direction).unwrap();
-            device.connection_cache.add_v4(conn);
-        }
+        add_connection(device, &key, &ale_data, None);
 
-        // Drop packet. It will be re-injected after user space returns a verdict.
+        // Drop the packet. It will be re-injected after user space returns a verdict.
         data.block_and_absorb();
     }
 }
 
-fn save_packet(
+fn add_connection(device: &Device, key: &Key, ale_data: &AleLayerData, verdict: Option<Verdict>) {
+    if ale_data.is_ipv6 {
+        if let Ok(conn) = ConnectionV6::from_key(key, ale_data.process_id, ale_data.direction) {
+            if let Some(verdict) = verdict {
+                conn.set_verdict(verdict);
+            }
+            device.connection_cache.add_v6(conn);
+        } else {
+            crate::err!("failed to add ipv6 connection");
+        }
+    } else {
+        if let Ok(conn) = ConnectionV4::from_key(key, ale_data.process_id, ale_data.direction) {
+            if let Some(verdict) = verdict {
+                conn.set_verdict(verdict);
+            }
+            device.connection_cache.add_v4(conn);
+        } else {
+            crate::err!("failed to add ipv4 connection");
+        }
+    }
+}
+
+// Pends the outbound connect operation, capturing the packet so it can be reinjected after the
+// verdict. Only called for a genuine new connection (reauthorize == false).
+fn save_packet_outbound(
+    device: &Device,
+    callout_data: &mut CalloutData,
+    ale_data: &AleLayerData,
+) -> Result<Packet, alloc::string::String> {
+    // During the connect state of an outbound TCP connection there is no packet data yet, so
+    // nothing is captured. UDP carries the datagram, which is captured for reinjection.
+    let packet_list = match ale_data.protocol {
+        IpProtocol::Udp => create_packet_list(device, callout_data, ale_data),
+        _ => None,
+    };
+    match callout_data.pend_operation(packet_list) {
+        Ok(classify_defer) => Ok(Packet::AleLayer(classify_defer)),
+        Err(err) => Err(alloc::format!("failed to defer connection: {}", err)),
+    }
+}
+
+// Captures the inbound packet so it can be reinjected after the verdict.
+//
+// `pend` selects how the operation is deferred: with a completion handle (only available when
+// reauthorize == false) or, when there is none, by resetting the filters once the verdict arrives.
+fn save_packet_inbound(
     device: &Device,
     callout_data: &mut CalloutData,
     ale_data: &AleLayerData,
     pend: bool,
 ) -> Result<Packet, alloc::string::String> {
-    let mut packet_list = None;
-    let mut save_packet_list = true;
-    match ale_data.protocol {
-        IpProtocol::Tcp => {
-            if let Direction::Outbound = ale_data.direction {
-                // Only time a packet data is missing is during connect state of outbound TCP connection.
-                // Don't save packet list only if connection is outbound, reauthorize is false and the protocol is TCP.
-                save_packet_list = ale_data.reauthorize;
-            }
-        }
-        _ => {}
-    };
-    if save_packet_list {
-        packet_list = create_packet_list(device, callout_data, ale_data);
-    }
-    if pend && matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+    // Inbound packets always carry data, unlike the connect state of an outbound TCP connection.
+    let packet_list = create_packet_list(device, callout_data, ale_data);
+
+    if pend {
         match callout_data.pend_operation(packet_list) {
             Ok(classify_defer) => Ok(Packet::AleLayer(classify_defer)),
             Err(err) => Err(alloc::format!("failed to defer connection: {}", err)),
@@ -352,8 +469,23 @@ fn create_packet_list(
     let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
     let mut inbound = false;
     if let Direction::Inbound = ale_data.direction {
-        let retreat_size =
-            callout_data.get_ip_header_size() + callout_data.get_transport_header_size();
+        // At this layer the net buffer starts at the transport payload. Retreat it back over the
+        // transport and IP headers so the whole packet can be cloned and reinjected.
+        //
+        // The IP header is not a fixed size: IPv4 may carry options and IPv6 a chain of extension
+        // headers. WFP reports the real size in the ip header size metadata field; fall back to
+        // the fixed length only when the field is absent, and ignore values smaller than it as
+        // malformed (same handling as the inbound packet layer).
+        let fixed_ip_header_len = if ale_data.is_ipv6 {
+            IPV6_HEADER_LEN as u32
+        } else {
+            IPV4_HEADER_LEN as u32
+        };
+        let ip_header_size = match callout_data.get_ip_header_size() {
+            Some(size) if size >= fixed_ip_header_len => size,
+            _ => fixed_ip_header_len,
+        };
+        let retreat_size = ip_header_size + callout_data.get_transport_header_size();
         nbl.retreat(retreat_size, true);
         inbound = true;
     }

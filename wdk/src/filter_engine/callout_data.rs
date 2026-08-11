@@ -11,7 +11,10 @@ use super::{
     stream_data::StreamCalloutIoPacket,
     FilterEngine,
 };
-use alloc::string::{String, ToString};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+};
 use core::{ffi::c_void, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::HANDLE,
@@ -106,7 +109,9 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn get_ip_header_size(&self) -> u32 {
+    /// Size of the IP header, including options (IPv4) or the extension header
+    /// chain (IPv6). `None` if the layer does not provide the field.
+    pub fn get_ip_header_size(&self) -> Option<u32> {
         unsafe { (*self.metadata).get_ip_header_size() }
     }
 
@@ -123,6 +128,15 @@ impl<'a> CalloutData<'a> {
     pub fn get_control_data(&self) -> Option<NonNull<[u8]>> {
         unsafe {
             return (*self.metadata).get_control_data();
+        }
+    }
+
+    pub fn get_control_data_copy(&self) -> Option<Box<[u8]>> {
+        unsafe {
+            match (*self.metadata).get_control_data() {
+                Some(data) => Some(data.as_ref().to_vec().into_boxed_slice()),
+                None => None,
+            }
         }
     }
 
@@ -155,7 +169,9 @@ impl<'a> CalloutData<'a> {
             Err("callout not supported".to_string())
         }
     }
-
+    // pend_filter_rest creates a pended operation for resetting the state of the filter engine.
+    // The operation is not ideal since it blocks any other operation on the filter engine while its resenting its state.
+    // This include injecting packets.
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
         ClassifyDefer::Reauthorization(self.callout_id, packet_list)
     }
