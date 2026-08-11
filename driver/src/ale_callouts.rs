@@ -207,14 +207,17 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
                 }
                 data.action_permit();
             }
-            // A verdict exists: let the packet layer enforce it. For outbound connections the
-            // temporary verdicts (Accept, Block, Drop) and the redirects are all applied there.
-            Verdict::PermanentAccept
-            | Verdict::Accept
+            // A verdict exists:
+            // Temporary verdicts are applied in the packet layer
+            Verdict::Accept
             | Verdict::RedirectNameServer
             | Verdict::RedirectTunnel
             | Verdict::Block
             | Verdict::Drop => {
+                data.action_permit();
+            }
+            // Permanent verdicts are applied here.
+            Verdict::PermanentAccept => {
                 data.action_permit();
             }
             Verdict::PermanentBlock | Verdict::Undeterminable | Verdict::Failed => {
