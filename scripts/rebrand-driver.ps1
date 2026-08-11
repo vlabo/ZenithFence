@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Produce a product-named driver (e.g. nexufend-agent.sys) from the generically
+    Produce a product-named driver (e.g. company-name.sys) from the generically
     linked driver.sys / driver.lib, so the public repo never references the
     product name.
 
@@ -30,11 +30,11 @@
     sign, so the Authenticode hash covers the final bytes).
 
 .EXAMPLE
-    pwsh ./scripts/rebrand-driver.ps1 -Name nexufend-agent
-    Re-link driver.lib into nexufend-agent.sys (+ .pdb).
+    pwsh ./scripts/rebrand-driver.ps1 -Name company-name
+    Re-link driver.lib into company-name.sys (+ .pdb).
 
 .EXAMPLE
-    pwsh ./scripts/rebrand-driver.ps1 -Name nexufend-agent -PatchOnly -Sign
+    pwsh ./scripts/rebrand-driver.ps1 -Name company-name -PatchOnly -Sign
     Rebrand the existing driver.sys artifact and sign it.
 #>
 [CmdletBinding()]

@@ -3,8 +3,8 @@ use core::sync::atomic::Ordering;
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key, Verdict};
 use crate::device::{Device, Packet};
 
+use crate::dbg;
 use crate::id_cache;
-use crate::info;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv6Address, IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
@@ -168,6 +168,17 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
         return;
     };
 
+    // Never pend once the teardown has started. The packet cache is being drained and user space
+    // is gone, so a pend made now would never be answered: its IRP would stay alive inside a
+    // callout that is about to be unregistered, leaving the connecting thread stuck in the kernel.
+    // Permit instead, the filters are being removed anyway.
+    if device.is_shutting_down() {
+        // This makes the connections created between driver unload and system shutdown invisible to user-space.
+        // TODO: Is there anything we can do about it?
+        data.action_permit();
+        return;
+    }
+
     // Only TCP and UDP are associated with a connection and handled here. Everything else is
     // permitted and handled by the packet layer.
     if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
@@ -196,14 +207,17 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
                 }
                 data.action_permit();
             }
-            // A verdict exists: let the packet layer enforce it. For outbound connections the
-            // temporary verdicts (Accept, Block, Drop) and the redirects are all applied there.
-            Verdict::PermanentAccept
-            | Verdict::Accept
+            // A verdict exists:
+            // Temporary verdicts are applied in the packet layer
+            Verdict::Accept
             | Verdict::RedirectNameServer
             | Verdict::RedirectTunnel
             | Verdict::Block
             | Verdict::Drop => {
+                data.action_permit();
+            }
+            // Permanent verdicts are applied here.
+            Verdict::PermanentAccept => {
                 data.action_permit();
             }
             Verdict::PermanentBlock | Verdict::Undeterminable | Verdict::Failed => {
@@ -221,10 +235,11 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
         // New connection.
         if ale_data.reauthorize {
             // A reauthorized connection cannot be pended: there is no completion handle during
-            // reauthorization, and resetting all filters to apply the verdict later races into
-            // STATUS_FWP_TXN_IN_PROGRESS (see device.rs inject_packet). Just capture the process
-            // id, inform user space with an info-only event (missing packet id) and permit. The
-            // packet layer sends the real packet and reinjects it after the verdict.
+            // reauthorization. Resetting all filters to release it later works (that is what the
+            // inbound path does) but the outbound packet layer runs after this one and can hold the
+            // real packet without any of that, so it is the cheaper way round here. Just capture
+            // the process id, inform user space with an info-only event (missing packet id) and
+            // permit. The packet layer sends the real packet and reinjects it after the verdict.
             crate::dbg!(
                 "reauthorized connection: {} PID: {}",
                 key,
@@ -276,6 +291,17 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
     let Some(device) = crate::entry::get_device() else {
         return;
     };
+
+    // Never pend once the teardown has started. The packet cache is being drained and user space
+    // is gone, so a pend made now would never be answered: its IRP would stay alive inside a
+    // callout that is about to be unregistered, leaving the accepting thread stuck in the kernel.
+    // Permit instead, the filters are being removed anyway.
+    if device.is_shutting_down() {
+        // This makes the connections created between driver unload and system shutdown invisible to user-space.
+        // TODO: Is there anything we can do about it?
+        data.action_permit();
+        return;
+    }
 
     // Only TCP and UDP are associated with a connection and handled here. Everything else was
     // already handled by the packet layer.
@@ -367,8 +393,9 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
         // Only the first packet of a connection can be pended: reauthorize == false. A
         // reauthorized connection has no completion handle, so the packet is instead held by
         // resetting all filters once the verdict arrives (see `pend_filter_rest`). That reset
-        // opens a WFP write transaction and can race other resets into
-        // STATUS_FWP_TXN_IN_PROGRESS, which is why the outbound path avoids it.
+        // opens a WFP write transaction, of which only one can be open at a time, so it can lose
+        // the race against a concurrent reset; the verdict path queues those and retries them
+        // (see `Device::reset_filters_and_inject`) instead of dropping the packet.
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
         let can_pend_connection = !ale_data.reauthorize;
         match save_packet_inbound(device, &mut data, &ale_data, can_pend_connection) {
@@ -466,11 +493,20 @@ fn create_packet_list(
     callout_data: &mut CalloutData,
     ale_data: &AleLayerData,
 ) -> Option<TransportPacketList> {
-    let mut nbl = NetBufferList::new(callout_data.get_layer_data() as _);
+    let nbl = NetBufferList::new(callout_data.get_layer_data() as _);
+
+    // The ALE layers hand over a single packet, so only the first net buffer of the list is ever
+    // relevant here (unlike the packet layers, which walk the whole chain).
+    let Some(mut nb) = nbl.iter_net_buffers().next() else {
+        crate::err!("no net buffer in ale layer data");
+        return None;
+    };
+
     let mut inbound = false;
     if let Direction::Inbound = ale_data.direction {
         // At this layer the net buffer starts at the transport payload. Retreat it back over the
-        // transport and IP headers so the whole packet can be cloned and reinjected.
+        // transport and IP headers so the whole packet can be cloned and reinjected. The net
+        // buffer will auto advance after it loses scope.
         //
         // The IP header is not a fixed size: IPv4 may carry options and IPv6 a chain of extension
         // headers. WFP reports the real size in the ip header size metadata field; fall back to
@@ -486,7 +522,12 @@ fn create_packet_list(
             _ => fixed_ip_header_len,
         };
         let retreat_size = ip_header_size + callout_data.get_transport_header_size();
-        nbl.retreat(retreat_size, true);
+        // A failed retreat leaves the offset at the transport header, so the clone would be
+        // missing the headers it has to be reinjected with.
+        if let Err(err) = nb.retreat(retreat_size, true) {
+            crate::err!("failed to retreat net buffer: {}", err);
+            return None;
+        }
         inbound = true;
     }
 
@@ -494,7 +535,7 @@ fn create_packet_list(
         IpAddress::Ipv4(address) => &address.octets(),
         IpAddress::Ipv6(address) => &address.octets(),
     };
-    if let Ok(clone) = nbl.clone(&device.network_allocator) {
+    if let Ok(clone) = nb.clone_as_nbl(&device.network_allocator) {
         return Some(Injector::from_ale_callout(
             ale_data.is_ipv6,
             callout_data,
@@ -599,7 +640,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
+                dbg!(
                     "Port {}/{} Ipv4 assign request discarded pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
@@ -630,7 +671,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
+                dbg!(
                     "Port {}/{} Ipv6 assign request discarded pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
@@ -661,8 +702,8 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    "Port {}/{} released pid={}",
+                dbg!(
+                    "Port {}/{} ipv4 released pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
                     process_id,
@@ -692,8 +733,8 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 data.get_value_u16(Fields::IpLocalPort as usize),
             )) {
                 let process_id = data.get_process_id().unwrap_or(0);
-                info!(
-                    "Port {}/{} released pid={}",
+                dbg!(
+                    "Port {}/{} ipv6 released pid={}",
                     data.get_value_u16(Fields::IpLocalPort as usize),
                     get_protocol(&data, Fields::IpProtocol as usize),
                     process_id,
