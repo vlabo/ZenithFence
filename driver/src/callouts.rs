@@ -5,7 +5,7 @@ use wdk::{
     filter_engine::{callout::Callout, layer::Layer},
 };
 
-use crate::{ale_callouts, packet_callouts};
+use crate::{ale_callouts, mac_callouts, packet_callouts};
 
 pub fn get_callout_vec() -> Vec<Callout> {
     alloc::vec![
@@ -142,6 +142,20 @@ pub fn get_callout_vec() -> Vec<Callout> {
             consts::FWP_ACTION_CALLOUT_TERMINATING,
             FilterType::NonResettable,
             packet_callouts::ip_packet_layer_inbound_v6,
+        ),
+        // -----------------------------------------
+        // MAC layer
+        //
+        // Below every NDIS filter, so it sees frames injected past the IP layers. NonResettable
+        // like the packet layers: it must never take part in `reset_all_filters`.
+        Callout::new(
+            "MacFrameOutboundNative",
+            "Outbound MAC frame layer callout, catches traffic injected below the IP stack",
+            0x66ebe675_2136_4301_b795_b563b0531639,
+            Layer::OutboundMacFrameNative,
+            consts::FWP_ACTION_CALLOUT_TERMINATING,
+            FilterType::NonResettable,
+            mac_callouts::mac_frame_layer_outbound,
         )
     ]
 }

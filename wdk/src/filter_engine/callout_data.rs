@@ -62,6 +62,9 @@ impl ClassifyDefer {
 
 pub struct CalloutData<'a> {
     pub layer: Layer,
+    /// Run time layer id of the layer this classify came from. MAC layer injection needs it, and
+    /// unlike the compile time `layer` it is the value WFP itself uses.
+    pub(crate) layer_id: u16,
     pub(crate) callout_id: usize,
     pub(crate) values: &'a [Value],
     pub(crate) metadata: *const FwpsIncomingMetadataValues,
@@ -232,6 +235,10 @@ impl<'a> CalloutData<'a> {
             (*self.classify_out).action_permit();
             (*self.classify_out).set_absorb();
         }
+    }
+
+    pub fn get_layer_id(&self) -> u16 {
+        self.layer_id
     }
 
     pub fn get_callout_id(&self) -> usize {

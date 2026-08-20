@@ -17,6 +17,7 @@ mod entry;
 mod filter_reset_queue;
 mod id_cache;
 pub mod logger;
+mod mac_callouts;
 mod packet_callouts;
 mod packet_util;
 

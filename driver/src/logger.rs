@@ -6,6 +6,10 @@ use core::{
 };
 use protocol::info::{Info, Severity};
 
+// Lowest severity that is kept. `Severity::Trace` turns on the per packet callout tracing
+// (`trace!`): every packet that reaches a WFP callout produces at least one line, which is enough
+// to make the 1024 entry ring buffer below wrap between two GetLogs commands on a busy machine.
+// Use `Severity::Debug` for the per connection logs without the per packet firehose.
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 pub const MAX_LOG_LINE_SIZE: usize = 150;
@@ -95,6 +99,16 @@ macro_rules! dbg {
     ($($arg:tt)*) => ({
         if protocol::info::Severity::Debug as u8 >= $crate::logger::LOG_LEVEL {
             let mut log_line = protocol::info::log_line(protocol::info::Severity::Debug, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
+        }
+    });
+}
+
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => ({
+        if protocol::info::Severity::Trace as u8 >= $crate::logger::LOG_LEVEL {
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Trace, $crate::logger::MAX_LOG_LINE_SIZE);
             $crate::log_internal!(log_line, $($arg)*);
         }
     });

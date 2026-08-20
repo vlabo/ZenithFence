@@ -164,6 +164,13 @@ pub fn ale_layer_accept_v6(data: CalloutData) {
 // The ALE layer runs *before* the packet layer for outbound traffic, so permitting here means the
 // packet layer gets the chance to send the real packet to user space and reinject it.
 fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
+    crate::trace!(
+        "ALE Outbound: {} PID: {} reauth: {}",
+        ale_data.as_key(),
+        ale_data.process_id,
+        ale_data.reauthorize
+    );
+
     let Some(device) = crate::entry::get_device() else {
         return;
     };
@@ -182,6 +189,11 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
     // Only TCP and UDP are associated with a connection and handled here. Everything else is
     // permitted and handled by the packet layer.
     if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        crate::trace!(
+            "ALE {}: protocol {} -> permit, packet layer decides",
+            ale_data.direction,
+            ale_data.protocol
+        );
         data.action_permit();
         return;
     }
@@ -288,6 +300,13 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
 // callout is the entry point for new inbound connections; once a cache entry exists, following
 // packets are handled by the packet layer and mostly never reach this layer.
 fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
+    crate::trace!(
+        "ALE Inbound: {} PID: {} reauth: {}",
+        ale_data.as_key(),
+        ale_data.process_id,
+        ale_data.reauthorize
+    );
+
     let Some(device) = crate::entry::get_device() else {
         return;
     };
@@ -306,6 +325,11 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
     // Only TCP and UDP are associated with a connection and handled here. Everything else was
     // already handled by the packet layer.
     if !matches!(ale_data.protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        crate::trace!(
+            "ALE {}: protocol {} -> permit, packet layer decides",
+            ale_data.direction,
+            ale_data.protocol
+        );
         data.action_permit();
         return;
     }

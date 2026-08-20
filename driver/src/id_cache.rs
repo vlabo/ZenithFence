@@ -79,6 +79,11 @@ impl IdCache {
 fn get_payload<'a>(packet: &'a Packet) -> Option<&'a [u8]> {
     match packet {
         Packet::PacketLayer(nbl, _) => nbl.get_data(),
+        // The frame is kept whole for reinjection, but the event reports a network layer payload,
+        // so the link layer header is skipped here rather than teaching user space about it.
+        Packet::MacLayer(nbl, _, l2_len) => nbl
+            .get_data()
+            .and_then(|data| data.get((*l2_len as usize)..)),
         Packet::AleLayer(defer) => {
             let p = match defer {
                 wdk::filter_engine::callout_data::ClassifyDefer::Initial(_, p) => p,

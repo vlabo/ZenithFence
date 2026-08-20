@@ -347,6 +347,7 @@ unsafe extern "C" fn catch_all_callout(
         );
         let data = CalloutData {
             layer: callout.layer,
+            layer_id: (*fixed_values).layer_id,
             callout_id: filter.context as usize,
             values: array,
             metadata: meta_values,

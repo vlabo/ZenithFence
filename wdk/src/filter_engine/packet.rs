@@ -11,11 +11,11 @@ use windows_sys::Win32::{
 
 use crate::{
     ffi::{
-        FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0,
+        FwpsInjectMacSendAsync0, FwpsInjectNetworkReceiveAsync0, FwpsInjectNetworkSendAsync0,
         FwpsInjectTransportReceiveAsync0, FwpsInjectTransportSendAsync1,
         FwpsInjectionHandleCreate0, FwpsInjectionHandleDestroy0, FwpsQueryPacketInjectionState0,
-        FWPS_INJECTION_TYPE_NETWORK, FWPS_INJECTION_TYPE_TRANSPORT, FWPS_PACKET_INJECTION_STATE,
-        FWPS_TRANSPORT_SEND_PARAMS1, NET_BUFFER_LIST,
+        FWPS_INJECTION_TYPE_L2, FWPS_INJECTION_TYPE_NETWORK, FWPS_INJECTION_TYPE_TRANSPORT,
+        FWPS_PACKET_INJECTION_STATE, FWPS_TRANSPORT_SEND_PARAMS1, NET_BUFFER_LIST,
     },
     utils::check_ntstatus,
 };
@@ -59,10 +59,21 @@ pub struct InjectInfo {
     pub compartment_id: COMPARTMENT_ID,
 }
 
+/// Everything `FwpsInjectMacSendAsync0` needs to put a frame back where it was taken from. All
+/// three values come from the MAC layer classify that absorbed it; there is no address family
+/// here, the frame carries its own headers.
+pub struct MacInjectInfo {
+    /// Run time layer id of the layer the frame was classified at.
+    pub layer_id: u16,
+    pub interface_index: u32,
+    pub ndis_port: u32,
+}
+
 pub struct Injector {
     transport_inject_handle: HANDLE,
     packet_inject_handle_v4: HANDLE,
     packet_inject_handle_v6: HANDLE,
+    l2_inject_handle: HANDLE,
 }
 
 // TODO: Implement custom allocator for the packet buffers for reusing memory and reducing allocations. This should improve latency.
@@ -71,6 +82,7 @@ impl Injector {
         let mut transport_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
         let mut packet_inject_handle_v4: HANDLE = INVALID_HANDLE_VALUE;
         let mut packet_inject_handle_v6: HANDLE = INVALID_HANDLE_VALUE;
+        let mut l2_inject_handle: HANDLE = INVALID_HANDLE_VALUE;
         unsafe {
             let status = FwpsInjectionHandleCreate0(
                 AF_UNSPEC,
@@ -98,11 +110,23 @@ impl Injector {
             if let Err(err) = check_ntstatus(status) {
                 crate::err!("error allocating network inject handle: {}", err);
             }
+            // The MAC layers carry whole frames and no address family, so the handle is created
+            // with AF_UNSPEC like the transport one.
+            let status = FwpsInjectionHandleCreate0(
+                AF_UNSPEC,
+                FWPS_INJECTION_TYPE_L2,
+                &mut l2_inject_handle,
+            );
+
+            if let Err(err) = check_ntstatus(status) {
+                crate::err!("error allocating l2 inject handle: {}", err);
+            }
         }
         Self {
             transport_inject_handle,
             packet_inject_handle_v4,
             packet_inject_handle_v6,
+            l2_inject_handle,
         }
     }
 
@@ -291,6 +315,67 @@ impl Injector {
         return Ok(());
     }
 
+    /// Re-sends a frame that a MAC layer callout absorbed. The net buffer list must still start
+    /// at the MAC header, exactly as it was received, because nothing below re-adds it.
+    pub fn inject_mac_send(
+        &self,
+        net_buffer_list: NetBufferList,
+        inject_info: MacInjectInfo,
+    ) -> Result<(), String> {
+        if self.l2_inject_handle == INVALID_HANDLE_VALUE || self.l2_inject_handle == 0 {
+            return Err("failed to inject frame: invalid l2 handle".to_string());
+        }
+        // Escape the stack, so the data can be freed after inject is complete.
+        let packet_boxed = Box::new(net_buffer_list);
+        let nbl = packet_boxed.nbl;
+        let packet_pointer = Box::into_raw(packet_boxed);
+
+        let status = unsafe {
+            FwpsInjectMacSendAsync0(
+                self.l2_inject_handle,
+                0,
+                0,
+                inject_info.layer_id,
+                inject_info.interface_index,
+                inject_info.ndis_port,
+                nbl,
+                free_packet,
+                (packet_pointer as *mut NetBufferList) as _,
+            )
+        };
+
+        if let Err(err) = check_ntstatus(status) {
+            unsafe {
+                // Get back ownership for data.
+                _ = Box::from_raw(packet_pointer);
+            }
+            return Err(err);
+        }
+
+        return Ok(());
+    }
+
+    /// True for frames this driver injected at a MAC layer. Without it every reinjected frame
+    /// would be classified again and absorbed again, forever.
+    pub fn was_mac_packet_injected_by_self(&self, nbl: *const NET_BUFFER_LIST) -> bool {
+        if self.l2_inject_handle == INVALID_HANDLE_VALUE || self.l2_inject_handle == 0 {
+            return false;
+        }
+
+        unsafe {
+            let state =
+                FwpsQueryPacketInjectionState0(self.l2_inject_handle, nbl, core::ptr::null_mut());
+
+            match state {
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_NOT_INJECTED => false,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTED_BY_OTHER => false,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_PREVIOUSLY_INJECTED_BY_SELF => true,
+                FWPS_PACKET_INJECTION_STATE::FWPS_PACKET_INJECTION_STATE_MAX => false,
+            }
+        }
+    }
+
     pub fn was_network_packet_injected_by_self(
         &self,
         nbl: *const NET_BUFFER_LIST,
@@ -357,6 +442,10 @@ impl Drop for Injector {
             {
                 FwpsInjectionHandleDestroy0(self.packet_inject_handle_v6);
                 self.packet_inject_handle_v6 = INVALID_HANDLE_VALUE;
+            }
+            if self.l2_inject_handle != INVALID_HANDLE_VALUE && self.l2_inject_handle != 0 {
+                FwpsInjectionHandleDestroy0(self.l2_inject_handle);
+                self.l2_inject_handle = INVALID_HANDLE_VALUE;
             }
         }
     }

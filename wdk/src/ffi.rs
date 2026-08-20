@@ -416,6 +416,21 @@ extern "C" {
         completionContext: *mut c_void,
     ) -> NTSTATUS;
 
+    /// The FwpsInjectMacSendAsync0 function injects an ethernet frame into the send data path at
+    /// the MAC layers. `layerId` must be the run time layer id of the layer the frame was
+    /// classified at, and `interfaceIndex` / `ndisPortNumber` identify where to send it.
+    pub(crate) fn FwpsInjectMacSendAsync0(
+        injectionHandle: HANDLE,
+        injectionContext: HANDLE,
+        flags: u32,
+        layerId: u16,
+        interfaceIndex: u32,
+        ndisPortNumber: u32,
+        netBufferList: *mut NET_BUFFER_LIST,
+        completionFn: FWPS_INJECT_COMPLETE0,
+        completionContext: *mut c_void,
+    ) -> NTSTATUS;
+
     /// The FwpsInjectTransportSendAsync1 function injects packet data from the transport, datagram data, or ICMP error layers into the send data path. This function differs from the previous version (FwpsInjectTransportSendAsync0) in that it takes an updated parameters structure as an argument.
     pub(crate) fn FwpsInjectTransportSendAsync1(
         injectionHandle: HANDLE,

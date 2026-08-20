@@ -27,6 +27,7 @@ use windows_sys::{
         FWPM_LAYER_INBOUND_TRANSPORT_V6, FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD,
         FWPM_LAYER_IPFORWARD_V4, FWPM_LAYER_IPFORWARD_V4_DISCARD, FWPM_LAYER_IPFORWARD_V6,
         FWPM_LAYER_IPFORWARD_V6_DISCARD, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_OUTBOUND_MAC_FRAME_NATIVE,
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4_DISCARD, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6_DISCARD, FWPM_LAYER_OUTBOUND_IPPACKET_V4,
         FWPM_LAYER_OUTBOUND_IPPACKET_V4_DISCARD, FWPM_LAYER_OUTBOUND_IPPACKET_V6,
@@ -155,6 +156,10 @@ pub enum Layer {
     AleResourceReleaseV6,
     AleEndpointClosureV4,
     AleEndpointClosureV6,
+    /// The bottom of the NDIS filter stack, fed by the inbox `ms_wfplwf_lower` lightweight filter.
+    /// Frames injected by a filter higher up (a packet capture driver, for example) still pass
+    /// through here, which is what makes this the only layer that sees them.
+    OutboundMacFrameNative,
 }
 
 impl Layer {
@@ -224,6 +229,7 @@ impl Layer {
             Layer::AleResourceReleaseV6 => FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
             Layer::AleEndpointClosureV4 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V4,
             Layer::AleEndpointClosureV6 => FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V6,
+            Layer::OutboundMacFrameNative => FWPM_LAYER_OUTBOUND_MAC_FRAME_NATIVE,
         }
     }
 }

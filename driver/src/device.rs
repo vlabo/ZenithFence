@@ -9,7 +9,7 @@ use wdk::{
     filter_engine::{
         callout_data::{ClassifyDefer, DeferResolution},
         net_buffer::{NetBufferList, NetworkAllocator},
-        packet::{InjectInfo, Injector},
+        packet::{InjectInfo, Injector, MacInjectInfo},
         FilterEngine, ResetError,
     },
     ioqueue::{self, IOQueue},
@@ -30,6 +30,11 @@ use crate::{
 
 pub enum Packet {
     PacketLayer(NetBufferList, InjectInfo),
+    /// A frame absorbed at a MAC layer. It still starts at the MAC header and is re-sent as is,
+    /// so no checksum work is needed on the way out. The `u32` is the length of that link layer
+    /// header: reinjection needs the frame whole, but the event sent to user space carries an IP
+    /// payload, so the header is skipped there (see `id_cache::get_payload`).
+    MacLayer(NetBufferList, MacInjectInfo, u32),
     AleLayer(ClassifyDefer),
 }
 
@@ -513,6 +518,13 @@ impl Device {
             Packet::PacketLayer(nbl, inject_info) => {
                 if !blocked {
                     self.injector.inject_net_buffer_list(nbl, inject_info)
+                } else {
+                    Ok(())
+                }
+            }
+            Packet::MacLayer(nbl, inject_info, _) => {
+                if !blocked {
+                    self.injector.inject_mac_send(nbl, inject_info)
                 } else {
                     Ok(())
                 }

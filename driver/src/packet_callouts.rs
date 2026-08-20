@@ -12,7 +12,7 @@ use crate::device::{Device, Packet};
 use crate::packet_util::{
     get_key_from_nb_v4, get_key_from_nb_v6, recalc_header_checksums, Redirect,
 };
-use crate::{err, warn};
+use crate::{err, trace, warn};
 
 trait IpVersion: Connection + Sized {
     const HEADER_LEN: u32;
@@ -121,6 +121,14 @@ fn ip_packet_layer<T: IpVersion>(
     sub_interface_index: u32,
     compartment_id: i32,
 ) {
+    trace!(
+        "packet layer v{} {}: classify if: {}.{}",
+        if T::IS_IPV6 { 6 } else { 4 },
+        direction,
+        interface_index,
+        sub_interface_index
+    );
+
     // Get the current device object.
     let Some(device) = crate::entry::get_device() else {
         // Should never happen.
@@ -133,6 +141,7 @@ fn ip_packet_layer<T: IpVersion>(
     if device.is_shutting_down() {
         // This makes the connections created between driver unload and system shutdown invisible to user-space.
         // TODO: Is there anything we can do about it?
+        trace!("packet layer {}: shutting down -> permit", direction);
         data.action_permit();
         return;
     }
@@ -142,6 +151,7 @@ fn ip_packet_layer<T: IpVersion>(
         .injector
         .was_network_packet_injected_by_self(data.get_layer_data() as _, T::IS_IPV6)
     {
+        trace!("packet layer {}: reinjected by self -> permit", direction);
         data.action_permit();
         return;
     }
@@ -190,6 +200,8 @@ fn ip_packet_layer<T: IpVersion>(
 
             let packet_size = nb.get_data_length() as u64;
 
+            trace!("packet layer {}: {} size: {}", direction, key, packet_size);
+
             if matches!(
                 key.protocol,
                 smoltcp::wire::IpProtocol::Tcp | smoltcp::wire::IpProtocol::Udp
@@ -204,7 +216,9 @@ fn ip_packet_layer<T: IpVersion>(
                     process_id = conn.get_process_id();
 
                     // Check if there is action for this connection.
-                    match conn.get_verdict() {
+                    let verdict = conn.get_verdict();
+                    trace!("packet layer {}: cached verdict: {}", direction, verdict);
+                    match verdict {
                         Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
                             // Temporary verdicts have special paths.
                             is_tmp_verdict = true
@@ -245,16 +259,28 @@ fn ip_packet_layer<T: IpVersion>(
                     // TCP and UDP always need to go through ALE layer first.
                     if matches!(direction, Direction::Inbound) {
                         // If it's an inbound packet and the connection is not found, continue to ALE layer
+                        trace!("packet layer Inbound: no connection -> permit, ALE decides");
                         data.action_permit();
                         return;
                     } else {
                         // This happens when connection is closed and there are leftover packets that cannot be associated to a connection.
+                        // It also covers traffic that never passed the ALE layer as TCP/UDP, such as
+                        // sends from a raw socket: ALE sees those as protocol raw and creates no entry.
+                        warn!(
+                            "packet layer Outbound: no connection for {} -> dropped",
+                            key
+                        );
                         data.block_and_absorb();
                         return;
                     }
                 }
             } else {
                 // Every other protocol treat as a tmp verdict.
+                trace!(
+                    "packet layer {}: {} is not TCP/UDP",
+                    direction,
+                    key.protocol
+                );
                 is_tmp_verdict = true;
             }
 
@@ -280,6 +306,11 @@ fn ip_packet_layer<T: IpVersion>(
                     }
                 };
 
+                trace!(
+                    "packet layer {}: sending to user space, PID: {}",
+                    direction,
+                    process_id
+                );
                 let info = device
                     .packet_cache
                     .push((key, packet), process_id, direction, false);
