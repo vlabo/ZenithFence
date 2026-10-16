@@ -7,8 +7,9 @@ use windows_sys::Win32::{
     NetworkManagement::{
         IpHelper::IP_ADDRESS_PREFIX,
         WindowsFilteringPlatform::{
-            FWPS_METADATA_FIELD_COMPLETION_HANDLE, FWPS_METADATA_FIELD_PROCESS_ID,
-            FWPS_METADATA_FIELD_PROCESS_PATH, FWPS_METADATA_FIELD_REMOTE_SCOPE_ID,
+            FWPS_METADATA_FIELD_COMPLETION_HANDLE, FWPS_METADATA_FIELD_IP_HEADER_SIZE,
+            FWPS_METADATA_FIELD_PROCESS_ID, FWPS_METADATA_FIELD_PROCESS_PATH,
+            FWPS_METADATA_FIELD_REMOTE_SCOPE_ID,
             FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA,
             FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE, FWP_BYTE_BLOB, FWP_DIRECTION,
         },
@@ -90,8 +91,17 @@ impl FwpsIncomingMetadataValues {
         self.current_metadata_values & field > 0
     }
 
-    pub(crate) fn get_ip_header_size(&self) -> u32 {
-        self.ip_header_size
+    /// Size of the IP header, including any options / extension headers.
+    ///
+    /// Only meaningful when the corresponding metadata field is set; at the
+    /// inbound IP packet layers it is the amount the net buffer has to be
+    /// retreated by to expose the IP header.
+    pub(crate) fn get_ip_header_size(&self) -> Option<u32> {
+        if self.has_field(FWPS_METADATA_FIELD_IP_HEADER_SIZE) {
+            return Some(self.ip_header_size);
+        }
+
+        None
     }
 
     pub(crate) fn get_transport_header_size(&self) -> u32 {

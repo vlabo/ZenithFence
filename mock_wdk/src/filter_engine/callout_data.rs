@@ -5,7 +5,6 @@ use super::classify::ClassifyOut;
 use super::layer::{Layer, ValueType};
 use super::net_buffer::NET_BUFFER_LIST;
 use super::packet::TransportPacketList;
-use super::FilterEngine;
 
 /// One classify "fixed value". The real type is a tagged C union; the mock uses
 /// a safe enum the harness can build directly. A callout reads it through the
@@ -29,14 +28,24 @@ pub enum ClassifyDefer {
     Reauthorization(usize, Option<TransportPacketList>),
 }
 
+/// Host mock of `wdk::filter_engine::callout_data::DeferResolution`.
+pub enum DeferResolution {
+    /// The pended operation has been completed.
+    Completed(Option<TransportPacketList>),
+    /// There was no completion handle; the connection stays held by the filter
+    /// until the filters are reset.
+    HeldByFilter(Option<TransportPacketList>),
+}
+
 impl ClassifyDefer {
-    pub fn complete(
-        self,
-        _filter_engine: &mut FilterEngine,
-    ) -> Result<Option<TransportPacketList>, String> {
+    /// Mirrors the real `resolve`: completing an `Initial` pend has no host-side
+    /// effect, a `Reauthorization` is reported as still held by its filter.
+    pub fn resolve(self) -> DeferResolution {
         match self {
-            ClassifyDefer::Initial(_, packet_list) => Ok(packet_list),
-            ClassifyDefer::Reauthorization(_, packet_list) => Ok(packet_list),
+            ClassifyDefer::Initial(_, packet_list) => DeferResolution::Completed(packet_list),
+            ClassifyDefer::Reauthorization(_, packet_list) => {
+                DeferResolution::HeldByFilter(packet_list)
+            }
         }
     }
 }
@@ -125,8 +134,13 @@ impl<'a> CalloutData<'a> {
         self.process_id
     }
 
-    pub fn get_ip_header_size(&self) -> u32 {
-        self.ip_header_size
+    /// Mirrors the real accessor, which returns `None` when the layer does not
+    /// set the metadata field. The mock models an absent field as 0.
+    pub fn get_ip_header_size(&self) -> Option<u32> {
+        if self.ip_header_size == 0 {
+            return None;
+        }
+        Some(self.ip_header_size)
     }
 
     pub fn get_transport_header_size(&self) -> u32 {

@@ -11,6 +11,26 @@ use crate::kernel_types::DEVICE_OBJECT;
 use self::callout::{Callout, FilterType};
 use self::layer::Layer;
 
+/// Host mock of `wdk::filter_engine::ResetError`.
+pub enum ResetError {
+    /// Another transaction is in progress on the filter engine session. The
+    /// mock has no concurrent transactions, so it never produces this, but the
+    /// driver matches on it.
+    TransactionInProgress,
+    Failed(String),
+}
+
+impl From<ResetError> for String {
+    fn from(err: ResetError) -> Self {
+        match err {
+            ResetError::TransactionInProgress => {
+                "filter-engine: failed to begin transaction: STATUS_FWP_TXN_IN_PROGRESS".into()
+            }
+            ResetError::Failed(message) => message,
+        }
+    }
+}
+
 /// One registered callout+filter pair, as the kernel would hold it after
 /// `FwpsCalloutRegister` + `FwpmFilterAdd`. Exposed so harnesses can assert the
 /// driver registered exactly the callouts it should, on the layers it should.
@@ -19,8 +39,11 @@ pub struct FilterRegistration {
     pub guid: u128,
     pub layer: Layer,
     pub callout_id: u32,
+    /// 0 once the filter has been removed (`unregister_filters`).
     pub filter_id: u64,
     pub resettable: bool,
+    /// Cleared by `unregister_callouts`.
+    pub callout_registered: bool,
 }
 
 /// Host mock of `wdk::filter_engine::FilterEngine`.
@@ -94,6 +117,7 @@ impl FilterEngine {
                 callout_id: 0,
                 filter_id: 0,
                 resettable: matches!(callout.filter_type, FilterType::Resettable),
+                callout_registered: false,
             });
         }
         for reg in &mut staged {
@@ -101,6 +125,7 @@ impl FilterEngine {
             self.next_filter_id += 1;
             reg.callout_id = self.next_callout_id;
             reg.filter_id = self.next_filter_id;
+            reg.callout_registered = true;
         }
         self.registrations = staged;
         self._callouts = callouts;
@@ -108,18 +133,48 @@ impl FilterEngine {
         Ok(())
     }
 
-    pub fn reset_all_filters(&mut self) -> Result<(), String> {
+    fn has_registered_filters(&self) -> bool {
+        self.registrations.iter().any(|reg| reg.filter_id != 0)
+    }
+
+    /// Mirrors the real `unregister_filters`: removes every filter, leaving the
+    /// callouts registered. A no-op once the filters are gone.
+    pub fn unregister_filters(&mut self) -> Result<(), String> {
+        for reg in self.registrations.iter_mut() {
+            reg.filter_id = 0;
+        }
+        Ok(())
+    }
+
+    /// Mirrors the real `unregister_callouts`: unregisters every callout that is
+    /// still registered. A no-op for the ones already gone.
+    pub fn unregister_callouts(&mut self) -> Result<(), String> {
+        for reg in self.registrations.iter_mut() {
+            reg.callout_registered = false;
+        }
+        Ok(())
+    }
+
+    pub fn reset_all_filters(&mut self) -> Result<(), ResetError> {
         if !self.committed {
             // The real version begins a write transaction against the committed
             // engine; before commit there is nothing to reset.
-            return Err("filter engine: reset before commit".into());
+            return Err(ResetError::Failed("filter engine: reset before commit".into()));
+        }
+        if !self.has_registered_filters() {
+            // Like the real one: once the teardown removed the filters there is
+            // nothing to reset, and re-adding them would revive the callouts.
+            return Ok(());
         }
         for reg in self.registrations.iter_mut() {
             if !reg.resettable {
                 continue;
             }
             if reg.filter_id == 0 {
-                return Err(format!("filter engine: {} has no registered filter", reg.name));
+                return Err(ResetError::Failed(format!(
+                    "filter engine: {} has no registered filter",
+                    reg.name
+                )));
             }
             // Re-adding the filter assigns a fresh id, like FwpmFilterAdd.
             self.next_filter_id += 1;
@@ -219,9 +274,26 @@ mod tests {
         ])
         .expect("commit");
         let before: Vec<u64> = fe.registrations().iter().map(|r| r.filter_id).collect();
-        fe.reset_all_filters().expect("reset");
+        assert!(fe.reset_all_filters().is_ok(), "reset");
         let after: Vec<u64> = fe.registrations().iter().map(|r| r.filter_id).collect();
         assert_ne!(before[0], after[0], "resettable filter must get a fresh id");
         assert_eq!(before[1], after[1], "non-resettable filter must keep its id");
+    }
+
+    #[test]
+    fn teardown_removes_filters_then_callouts_and_stops_resets() {
+        let mut fe = engine();
+        fe.commit(vec![callout("a", 1, FilterType::Resettable)]).expect("commit");
+        fe.unregister_filters().expect("unregister filters");
+        assert!(fe.registrations().iter().all(|r| r.filter_id == 0));
+        assert!(fe.registrations().iter().all(|r| r.callout_registered));
+        // A reset after the filters are gone must not bring them back.
+        assert!(fe.reset_all_filters().is_ok());
+        assert!(fe.registrations().iter().all(|r| r.filter_id == 0));
+        fe.unregister_callouts().expect("unregister callouts");
+        assert!(fe.registrations().iter().all(|r| !r.callout_registered));
+        // Both steps are idempotent.
+        fe.unregister_filters().expect("second unregister filters");
+        fe.unregister_callouts().expect("second unregister callouts");
     }
 }

@@ -227,14 +227,19 @@ pub(crate) fn filter_engine_close(filter_engine_handle: HANDLE) -> Result<(), St
     }
 }
 
+/// Returns the raw NTSTATUS on failure, unlike the other wrappers here: the caller has to tell
+/// `STATUS_FWP_TXN_IN_PROGRESS` (another transaction is open on this session, try again later)
+/// apart from the failures that are not worth repeating.
 pub(crate) fn filter_engine_transaction_begin(
     filter_engine_handle: HANDLE,
     flags: u32,
-) -> Result<(), String> {
+) -> Result<(), i32> {
     unsafe {
-        let status = FwpmTransactionBegin0(filter_engine_handle, flags);
-        check_ntstatus(status as i32)?;
-        return Ok(());
+        let status = FwpmTransactionBegin0(filter_engine_handle, flags) as i32;
+        if status == STATUS_SUCCESS {
+            return Ok(());
+        }
+        return Err(status);
     }
 }
 

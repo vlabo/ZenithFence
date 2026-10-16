@@ -104,9 +104,11 @@ pub(crate) unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT
     info!("Unloading complete");
     unsafe {
         if !DEVICE.is_null() {
+            // Dropping the device completes every pending operation and unregisters the callouts,
+            // so no callout can still be running once this returns. Only then is it safe to clear
+            // the pointer the callouts read through. Nulling it also keeps a subsequent load in
+            // the same process (as the simulation/tests do) from a use-after-free.
             _ = Box::from_raw(DEVICE);
-            // Null the slot so a late dispatch (or a subsequent load in the same
-            // process, as the simulation/tests do) can't use-after-free.
             DEVICE = core::ptr::null_mut();
         }
     }

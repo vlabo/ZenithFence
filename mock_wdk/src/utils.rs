@@ -31,3 +31,10 @@ pub fn get_system_timestamp_ms() -> u64 {
 pub fn get_startup_time_ns() -> u64 {
     0
 }
+
+/// Mock of `wdk::utils::sleep_ms`: the kernel version waits non-alertably and
+/// fails above APC_LEVEL. The host has no IRQL, so this just sleeps the thread.
+pub fn sleep_ms(milliseconds: u32) -> Result<(), String> {
+    std::thread::sleep(std::time::Duration::from_millis(u64::from(milliseconds)));
+    Ok(())
+}

@@ -31,6 +31,25 @@ pub mod transaction;
 // Helper functions for ALE Readirect layers. Not needed for the current implementation.
 // pub mod connect_request;
 
+/// Why `FilterEngine::reset_all_filters` did not apply the reset.
+pub enum ResetError {
+    /// Another transaction is in progress on the filter engine session and only one can be open at
+    /// a time. Nothing was changed: no filter was removed and none was re-registered, so the reset
+    /// can be repeated as-is once the other transaction is done.
+    TransactionInProgress,
+    /// Anything else. Not transient, repeating it is pointless.
+    Failed(String),
+}
+
+impl From<ResetError> for String {
+    fn from(err: ResetError) -> Self {
+        match err {
+            ResetError::TransactionInProgress => String::from(transaction::BeginError::InProgress),
+            ResetError::Failed(message) => message,
+        }
+    }
+}
+
 pub struct FilterEngine {
     device_object: *mut DEVICE_OBJECT,
     handle: HANDLE,
@@ -62,7 +81,7 @@ impl FilterEngine {
     pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String> {
         {
             // Begin write transaction. This is also a lock guard.
-            let mut filter_engine = match Transaction::begin_write(self) {
+            let mut filter_engine = match Transaction::begin_write_retrying(self) {
                 Ok(transaction) => transaction,
                 Err(err) => {
                     return Err(err);
@@ -117,13 +136,118 @@ impl FilterEngine {
         return Ok(());
     }
 
-    pub fn reset_all_filters(&mut self) -> Result<(), String> {
+    /// Reports whether any filter is still registered.
+    fn has_registered_filters(&self) -> bool {
+        match &self.callouts {
+            Some(callouts) => callouts.iter().any(|callout| callout.filter_id != 0),
+            None => false,
+        }
+    }
+
+    /// Removes all registered filters, leaving the callouts in place. Once the transaction is
+    /// committed no new classify call can reach the callouts. This is the first step of the
+    /// teardown: complete the operations that are still pended, then call `unregister_callouts`,
+    /// which `FwpsCalloutUnregisterById0` refuses to do while one is outstanding.
+    ///
+    /// Does nothing when the filters are already gone, so it is safe to call more than once.
+    pub fn unregister_filters(&mut self) -> Result<(), String> {
+        if !self.has_registered_filters() {
+            // Nothing to remove; do not open a transaction for it.
+            return Ok(());
+        }
+
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
-        let mut filter_engine = match Transaction::begin_write(self) {
+        // Waits out a transaction that is in progress instead of failing: leaving the filters
+        // registered here would make `unregister_callouts` fail too, and the teardown has no
+        // second chance to remove them.
+        let mut filter_engine = match Transaction::begin_write_retrying(self) {
             Ok(transaction) => transaction,
             Err(err) => {
                 return Err(err);
             }
+        };
+
+        let filter_engine_handle = filter_engine.handle;
+        if let Some(callouts) = &mut filter_engine.callouts {
+            for callout in callouts {
+                if callout.filter_id != 0 {
+                    if let Err(err) = ffi::unregister_filter(filter_engine_handle, callout.filter_id)
+                    {
+                        return Err(format!("filter_engine: {}", err));
+                    }
+                    callout.filter_id = 0;
+                }
+            }
+        }
+
+        // Commit transaction.
+        if let Err(err) = filter_engine.commit() {
+            return Err(err);
+        }
+
+        return Ok(());
+    }
+
+    /// Unregisters all registered callouts. This is the last step of the teardown and must run
+    /// after `unregister_filters` and after every pended operation has been completed:
+    /// `FwpsCalloutUnregisterById0` fails with STATUS_DEVICE_BUSY while an operation is still
+    /// pended, and letting the driver unload over a callout that is still registered strands that
+    /// operation for good — nothing can complete its IRP afterwards, so the thread waiting on it
+    /// never returns from the kernel and its process can no longer be terminated.
+    ///
+    /// Skips the callouts that are already gone, so it is safe to call more than once.
+    pub fn unregister_callouts(&mut self) -> Result<(), String> {
+        let mut first_failure = None;
+
+        if let Some(callouts) = &mut self.callouts {
+            for callout in callouts {
+                if !callout.registered {
+                    continue;
+                }
+
+                match ffi::unregister_callout(callout.id) {
+                    Ok(()) => callout.registered = false,
+                    // Keep going so the remaining callouts are still removed, and report the first
+                    // failure once the whole set has been tried.
+                    Err(err) => {
+                        if first_failure.is_none() {
+                            first_failure = Some(format!("{}: {}", callout.name, err));
+                        }
+                    }
+                }
+            }
+        }
+
+        match first_failure {
+            Some(err) => Err(format!("filter_engine: failed to unregister callout {}", err)),
+            None => Ok(()),
+        }
+    }
+
+    /// Removes and re-registers every resettable filter, which makes WFP reauthorize the existing
+    /// connections against them. This is the only way to release a connection that was deferred
+    /// without a completion handle (see `CalloutData::pend_filter_rest`), because a single filter
+    /// cannot be reset on its own.
+    ///
+    /// Does not retry on its own. Only one transaction can be open on the filter engine session, so
+    /// concurrent callers collide; `ResetError::TransactionInProgress` tells them apart from the
+    /// real failures and leaves the decision of when to try again to the caller, which can batch
+    /// several deferred connections into one reset instead of racing per connection.
+    pub fn reset_all_filters(&mut self) -> Result<(), ResetError> {
+        if !self.has_registered_filters() {
+            // The filters are gone, which only happens once the teardown has removed them. There
+            // is nothing to reset, and re-registering them here would bring the callouts back to
+            // life right before they are unregistered.
+            return Ok(());
+        }
+
+        // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
+        let mut filter_engine = match Transaction::begin_write(self) {
+            Ok(transaction) => transaction,
+            Err(transaction::BeginError::InProgress) => {
+                return Err(ResetError::TransactionInProgress)
+            }
+            Err(err) => return Err(ResetError::Failed(String::from(err))),
         };
         let filter_engine_handle = filter_engine.handle;
         let sublayer_guid = filter_engine.sublayer_guid;
@@ -135,20 +259,20 @@ impl FilterEngine {
                         if let Err(err) =
                             ffi::unregister_filter(filter_engine_handle, callout.filter_id)
                         {
-                            return Err(format!("filter_engine: {}", err));
+                            return Err(ResetError::Failed(format!("filter_engine: {}", err)));
                         }
                         callout.filter_id = 0;
                     }
                     // Create new filter.
                     if let Err(err) = callout.register_filter(filter_engine_handle, sublayer_guid) {
-                        return Err(format!("filter_engine: {}", err));
+                        return Err(ResetError::Failed(format!("filter_engine: {}", err)));
                     }
                 }
             }
         }
         // Commit transaction.
         if let Err(err) = filter_engine.commit() {
-            return Err(err);
+            return Err(ResetError::Failed(err));
         }
         return Ok(());
     }
@@ -171,19 +295,22 @@ impl FilterEngine {
 impl Drop for FilterEngine {
     fn drop(&mut self) {
         dbg!("Unregistering callouts");
-        if let Some(callouts) = &self.callouts {
-            for callout in callouts {
-                if callout.registered {
-                    if let Err(code) = ffi::unregister_callout(callout.id) {
-                        dbg!("failed to unregister callout: {}", code);
-                    }
-                    if callout.filter_id != 0 {
-                        if let Err(code) = ffi::unregister_filter(self.handle, callout.filter_id) {
-                            dbg!("failed to unregister filter: {}", code)
-                        }
-                    }
-                }
-            }
+
+        // Failsafe only. The teardown in Device::shutdown removes the filters and the callouts
+        // explicitly, in the order that lets the pended operations be completed in between, so
+        // both calls below are no-ops by the time we get here. They only do anything if the
+        // teardown never ran, and then the order still matters: filters first, so no new classify
+        // call can arrive while the callouts are being unregistered.
+        if let Err(err) = self.unregister_filters() {
+            dbg!("failed to unregister filters: {}", err);
+        }
+        if let Err(err) = self.unregister_callouts() {
+            // Reaching this means a pended operation was never completed and the driver is about
+            // to unload over a live callout, which leaves the thread waiting on that operation
+            // stuck in the kernel for good. Report it through DbgPrint directly, because the log
+            // macros are compiled out in release builds and the event queue that carries the
+            // driver log to user space is already gone by this point.
+            crate::interface::dbg_print(format!("ERROR ZenithFence: {}\n", err));
         }
 
         if self.committed {

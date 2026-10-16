@@ -1,8 +1,9 @@
 use alloc::string::{String, ToString};
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
+    IPV4_HEADER_LEN, IPV6_HEADER_LEN,
 };
-use wdk::filter_engine::net_buffer::NetBufferList;
+use wdk::filter_engine::net_buffer::NetBuffer;
 
 use crate::device::Packet;
 use crate::{
@@ -271,12 +272,12 @@ fn print_packet(packet: &[u8]) {
     }
 }
 
-/// This function extracts a key from a given IPv4 network buffer list (NBL).
+/// This function extracts a key from a given IPv4 net buffer.
 /// The key contains the protocol, local and remote addresses and ports.
 ///
 /// # Arguments
 ///
-/// * `nbl` - A reference to the network buffer list from which the key will be extracted.
+/// * `nb` - A reference to the net buffer from which the key will be extracted.
 /// * `direction` - The direction of the packet (Inbound or Outbound).
 ///
 /// # Returns
@@ -297,29 +298,59 @@ pub(crate) fn get_ports(packet: &[u8], protocol: smoltcp::wire::IpProtocol) -> (
     }
 }
 
-pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
-    // Get ip header + 4 bytes for src and dst port
-    let mut headers = [0; smoltcp::wire::IPV4_HEADER_LEN + 4];
-    if nbl.read_bytes(&mut headers).is_err() {
+/// Upper bound on an IPv4 header: the fixed 20 bytes plus the 40 bytes of
+/// options that the 4-bit IHL field can express.
+const MAX_IPV4_HEADER_LEN: usize = 60;
+
+/// Reads the first `len` bytes of the net buffer into `buffer[..len]`.
+///
+/// `NetBuffer::read_bytes` always reads from the start of the buffer and
+/// fails if the requested length exceeds the packet, so anything past the fixed
+/// header (IPv4 options, IPv6 extension headers, the transport header) is
+/// reached by reading successively larger prefixes and indexing into them.
+fn read_prefix(nb: &NetBuffer, buffer: &mut [u8], len: usize) -> Result<(), ()> {
+    if len > buffer.len() {
+        return Err(());
+    }
+    nb.read_bytes(&mut buffer[..len])
+}
+
+pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    // Buffer large enough for the largest possible IPv4 header, options included, and the
+    // first 4 transport bytes (source + destination ports).
+    let mut headers = [0u8; MAX_IPV4_HEADER_LEN + 4];
+
+    // Read the fixed part of the header; it carries the IHL that locates the transport header.
+    if read_prefix(nb, &mut headers, IPV4_HEADER_LEN).is_err() {
         return Err("failed to get net_buffer data".to_string());
     }
+    let (src_addr, dst_addr, protocol, header_len) = {
+        let ip_packet = Ipv4Packet::new_unchecked(&headers[..IPV4_HEADER_LEN]);
+        (
+            ip_packet.src_addr(),
+            ip_packet.dst_addr(),
+            ip_packet.next_header(),
+            ip_packet.header_len() as usize,
+        )
+    };
 
-    // Parse packet
-    let ip_packet = Ipv4Packet::new_unchecked(&headers);
-    let src_addr = ip_packet.src_addr();
-    let dst_addr = ip_packet.dst_addr();
-    let protocol = ip_packet.next_header();
-    let header_len = ip_packet.header_len() as usize;
+    // The header length comes from the packet itself, so validate it before using it as an
+    // offset. IHL < 5 is malformed; IHL > 15 cannot be expressed in 4 bits.
+    if header_len < IPV4_HEADER_LEN || header_len > MAX_IPV4_HEADER_LEN {
+        return Err("invalid ipv4 header length".to_string());
+    }
 
-    // The transport header starts after the IPv4 header, which is variable
-    // length when IP options are present (IHL > 5). The base read above only
-    // reaches the ports for the common option-less header; otherwise re-read a
-    // bounded window and index the ports at the true header offset, so the key
-    // matches the (already option-resolved) ports the ALE layer reports.
-    let (src_port, dst_port) = if header_len <= smoltcp::wire::IPV4_HEADER_LEN {
-        get_ports(&headers[smoltcp::wire::IPV4_HEADER_LEN..], protocol)
+    // Parse the layer-4 ports for TCP and UDP. Options sit between the fixed header and the
+    // transport header, so the ports are at header_len, which is only IPV4_HEADER_LEN when the
+    // packet carries no options.
+    let (src_port, dst_port) = if matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        let needed = header_len + 4;
+        if read_prefix(nb, &mut headers, needed).is_err() {
+            return Err("failed to read ipv4 transport header".to_string());
+        }
+        get_ports(&headers[header_len..needed], protocol)
     } else {
-        resolve_ports_v4(nbl, protocol, header_len)
+        (0, 0)
     };
 
     // Build key
@@ -341,64 +372,109 @@ pub fn get_key_from_nbl_v4(nbl: &NetBufferList, direction: Direction) -> Result<
     }
 }
 
-/// Reads the TCP/UDP ports of an IPv4 packet whose header carries options
-/// (IHL > 5). Reads a bounded window from the NBL and indexes the ports at the
-/// true header offset. Returns `(0, 0)` when the protocol is not TCP/UDP or the
-/// transport header cannot be reached.
-fn resolve_ports_v4(nbl: &NetBufferList, protocol: IpProtocol, header_len: usize) -> (u16, u16) {
-    if !matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
-        return (0, 0);
-    }
-    // Max IPv4 header is 60 bytes (IHL = 15), plus 4 bytes for the ports.
-    const WINDOW: usize = 60 + 4;
-    let available = nbl.get_data_length() as usize;
-    let to_read = core::cmp::min(available, WINDOW);
-    if header_len + 4 > to_read {
-        return (0, 0);
-    }
-    let mut buf = [0u8; WINDOW];
-    if nbl.read_bytes(&mut buf[..to_read]).is_err() {
-        return (0, 0);
-    }
-    get_ports(&buf[header_len..], protocol)
-}
+// NOTE: The IPv6 extension-header parsing below is duplicated in the Linux eBPF
+// parser (`get_key_skb` in cmds/ebpf-firewall/modules/headers/key.h). Keep the
+// two implementations in sync.
 
-/// This function extracts a key from a given IPv6 network buffer list (NBL).
+// IPv6 extension-header protocol numbers.
+const IPPROTO_HOPOPTS: u8 = 0;
+const IPPROTO_ROUTING: u8 = 43;
+const IPPROTO_FRAGMENT: u8 = 44;
+const IPPROTO_DSTOPT: u8 = 60;
+
+/// Bounds the extension-header walk. This is the chain depth (headers stacked in
+/// one packet), not the number of header types; a real-world packet almost never
+/// stacks more than 2-3.
+const MAX_IPV6_EXT_HEADERS: usize = 4;
+
+/// Upper bound on a single extension header's length; anything larger is treated
+/// as malformed.
+const MAX_IPV6_EXT_HEADER_LEN: usize = 256;
+
+/// This function extracts a key from a given IPv6 net buffer.
 /// The key contains the protocol, local and remote addresses and ports.
+///
+/// IPv6 packets may carry a chain of extension headers (Hop-by-Hop, Routing,
+/// Fragment, Destination Options) between the fixed header and the transport
+/// header. The chain is walked so the key reflects the real transport protocol
+/// and ports rather than the first extension header.
 ///
 /// # Arguments
 ///
-/// * `nbl` - A reference to the network buffer list from which the key will be extracted.
+/// * `nb` - A reference to the net buffer from which the key will be extracted.
 /// * `direction` - The direction of the packet (Inbound or Outbound).
 ///
 /// # Returns
 ///
 /// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
-/// * `Err(String)` - An error message if the function fails to get net_buffer data.
-pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<Key, String> {
-    // Get ip header + 4 bytes for src and dst port
-    let mut headers = [0; smoltcp::wire::IPV6_HEADER_LEN + 4];
-    let Ok(()) = nbl.read_bytes(&mut headers) else {
-        return Err("failed to get net_buffer data".to_string());
-    };
-    // Parse packet
-    let ip_packet = Ipv6Packet::new_unchecked(&headers);
-    let src_addr = ip_packet.src_addr();
-    let dst_addr = ip_packet.dst_addr();
-    let first_header = ip_packet.next_header();
+/// * `Err(String)` - An error message if the function fails to get net_buffer data
+///   or the packet carries a malformed extension-header chain.
+pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    // Buffer large enough for the fixed IPv6 header, the bounded extension-header
+    // chain, and the first 4 transport bytes (source + destination ports).
+    let mut headers = [0u8; IPV6_HEADER_LEN + MAX_IPV6_EXT_HEADERS * MAX_IPV6_EXT_HEADER_LEN + 4];
 
-    // The base header's `next_header` is the transport protocol only when no
-    // extension headers are present. When it is an extension header, walk the
-    // chain so the resolved protocol/ports match what the ALE layer reports for
-    // the same flow -- otherwise the packet-layer key would never match the
-    // connection added at the ALE layer. The common (no extension header) case
-    // keeps the original fixed 44-byte read.
-    let (protocol, src_port, dst_port) = if is_ipv6_ext_header(first_header) {
-        resolve_transport_v6(nbl, first_header)
+    // Read the fixed IPv6 header to get the addresses and the first Next Header.
+    if read_prefix(nb, &mut headers, IPV6_HEADER_LEN).is_err() {
+        return Err("failed to get net_buffer data".to_string());
+    }
+    let (src_addr, dst_addr, mut nexthdr) = {
+        let ip_packet = Ipv6Packet::new_unchecked(&headers[..IPV6_HEADER_LEN]);
+        (
+            ip_packet.src_addr(),
+            ip_packet.dst_addr(),
+            u8::from(ip_packet.next_header()),
+        )
+    };
+
+    // l4_offset starts right after the fixed 40-byte IPv6 header.
+    let mut l4_offset = IPV6_HEADER_LEN;
+
+    // Walk the extension-header chain until the Next Header is an L4 protocol.
+    for _ in 0..MAX_IPV6_EXT_HEADERS {
+        // Stop once the current Next Header is not a known extension header; it
+        // is then the L4 protocol.
+        if nexthdr != IPPROTO_HOPOPTS
+            && nexthdr != IPPROTO_ROUTING
+            && nexthdr != IPPROTO_FRAGMENT
+            && nexthdr != IPPROTO_DSTOPT
+        {
+            break;
+        }
+
+        // Each extension header starts with [next_header:u8][hdr_ext_len:u8].
+        if read_prefix(nb, &mut headers, l4_offset + 2).is_err() {
+            return Err("failed to read ipv6 extension header".to_string());
+        }
+        let ext_next_header = headers[l4_offset];
+        let ext_hdr_len_units = headers[l4_offset + 1];
+
+        // Extension-header length is given in 8-octet units, not counting the
+        // first 8 octets, so the total length is (hdrlen + 1) * 8.
+        let ext_hdr_len = (ext_hdr_len_units as usize + 1) * 8;
+
+        // Reject ridiculously large / malformed headers.
+        if ext_hdr_len > MAX_IPV6_EXT_HEADER_LEN {
+            return Err("ipv6 extension header too large".to_string());
+        }
+
+        // Move past this extension header; its Next Header drives the next step.
+        l4_offset += ext_hdr_len;
+        nexthdr = ext_next_header;
+    }
+
+    // nexthdr now holds the L4 protocol number and l4_offset points at the L4 header.
+    let protocol = IpProtocol::from(nexthdr);
+
+    // Parse the layer-4 ports for TCP and UDP.
+    let (src_port, dst_port) = if matches!(protocol, IpProtocol::Tcp | IpProtocol::Udp) {
+        let needed = l4_offset + 4;
+        if read_prefix(nb, &mut headers, needed).is_err() {
+            return Err("failed to read ipv6 transport header".to_string());
+        }
+        get_ports(&headers[l4_offset..needed], protocol)
     } else {
-        let (src_port, dst_port) =
-            get_ports(&headers[smoltcp::wire::IPV6_HEADER_LEN..], first_header);
-        (first_header, src_port, dst_port)
+        (0, 0)
     };
 
     // Build key
@@ -417,75 +493,6 @@ pub fn get_key_from_nbl_v6(nbl: &NetBufferList, direction: Direction) -> Result<
             remote_address: IpAddress::Ipv6(src_addr),
             remote_port: src_port,
         }),
-    }
-}
-
-// IPv6 extension header types understood by `resolve_transport_v6`.
-fn is_ipv6_ext_header(protocol: IpProtocol) -> bool {
-    matches!(
-        protocol,
-        IpProtocol::HopByHop | IpProtocol::Ipv6Route | IpProtocol::Ipv6Frag | IpProtocol::Ipv6Opts
-    )
-}
-
-/// Walks past IPv6 extension headers to find the upper-layer protocol and its
-/// ports. Reads a bounded window from the NBL: a packet that carries extension
-/// headers is necessarily longer than the base 44 bytes, so a larger read is
-/// safe here. Returns `(protocol, src_port, dst_port)`; ports are `0` when the
-/// transport header cannot be reached (truncated chain, a non-first fragment, or
-/// a non-TCP/UDP upper-layer protocol).
-fn resolve_transport_v6(nbl: &NetBufferList, first_header: IpProtocol) -> (IpProtocol, u16, u16) {
-    const WINDOW: usize = smoltcp::wire::IPV6_HEADER_LEN + 64;
-    let available = nbl.get_data_length() as usize;
-    let to_read = core::cmp::min(available, WINDOW);
-    if to_read <= smoltcp::wire::IPV6_HEADER_LEN {
-        return (first_header, 0, 0);
-    }
-    let mut buf = [0u8; WINDOW];
-    if nbl.read_bytes(&mut buf[..to_read]).is_err() {
-        return (first_header, 0, 0);
-    }
-
-    let mut next = first_header;
-    let mut offset = smoltcp::wire::IPV6_HEADER_LEN;
-    // Bound the chain so a crafted packet cannot loop us.
-    for _ in 0..8 {
-        match next {
-            IpProtocol::HopByHop | IpProtocol::Ipv6Route | IpProtocol::Ipv6Opts => {
-                if offset + 2 > to_read {
-                    return (next, 0, 0);
-                }
-                // Generic extension header: [next: u8][hdr_ext_len: u8] where the
-                // total length is (hdr_ext_len + 1) * 8 octets.
-                let next_header = buf[offset];
-                let header_len = (buf[offset + 1] as usize + 1) * 8;
-                next = IpProtocol::from(next_header);
-                offset += header_len;
-            }
-            IpProtocol::Ipv6Frag => {
-                if offset + 8 > to_read {
-                    return (next, 0, 0);
-                }
-                // Fragment header is a fixed 8 octets. Only the first fragment
-                // (fragment offset 0) carries the transport header.
-                let fragment_offset = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) >> 3;
-                let next_header = buf[offset];
-                next = IpProtocol::from(next_header);
-                offset += 8;
-                if fragment_offset != 0 {
-                    return (next, 0, 0);
-                }
-            }
-            _ => break,
-        }
-    }
-
-    match next {
-        IpProtocol::Tcp | IpProtocol::Udp if offset + 4 <= to_read => {
-            let (src_port, dst_port) = get_ports(&buf[offset..], next);
-            (next, src_port, dst_port)
-        }
-        _ => (next, 0, 0),
     }
 }
 
@@ -555,7 +562,7 @@ mod tests {
     use crate::connection::Direction;
     use proptest::prelude::*;
     use smoltcp::wire::{IpAddress, Ipv4Address, Ipv6Address};
-    use wdk::filter_engine::net_buffer::NetBufferList;
+    use wdk::filter_engine::net_buffer::NetBuffer;
 
     fn v6(last: u8) -> Ipv6Address {
         let mut o = [0u8; 16];
@@ -572,8 +579,8 @@ mod tests {
             inbound in any::<bool>(),
         ) {
             let dir = if inbound { Direction::Inbound } else { Direction::Outbound };
-            let nbl = NetBufferList::owned_from_bytes(bytes);
-            let _ = get_key_from_nbl_v4(&nbl, dir);
+            let nb = NetBuffer::owned_from_bytes(bytes);
+            let _ = get_key_from_nb_v4(&nb, dir);
         }
 
         #[test]
@@ -582,8 +589,8 @@ mod tests {
             inbound in any::<bool>(),
         ) {
             let dir = if inbound { Direction::Inbound } else { Direction::Outbound };
-            let nbl = NetBufferList::owned_from_bytes(bytes);
-            let _ = get_key_from_nbl_v6(&nbl, dir);
+            let nb = NetBuffer::owned_from_bytes(bytes);
+            let _ = get_key_from_nb_v6(&nb, dir);
         }
 
         // Inbound/outbound extract a 5-tuple that is the reverse of each other.
@@ -591,11 +598,11 @@ mod tests {
         fn get_key_v4_direction_symmetry(
             bytes in proptest::collection::vec(any::<u8>(), 24..64),
         ) {
-            let nbl_in = NetBufferList::owned_from_bytes(bytes.clone());
-            let nbl_out = NetBufferList::owned_from_bytes(bytes);
+            let nb_in = NetBuffer::owned_from_bytes(bytes.clone());
+            let nb_out = NetBuffer::owned_from_bytes(bytes);
             if let (Ok(k_in), Ok(k_out)) = (
-                get_key_from_nbl_v4(&nbl_in, Direction::Inbound),
-                get_key_from_nbl_v4(&nbl_out, Direction::Outbound),
+                get_key_from_nb_v4(&nb_in, Direction::Inbound),
+                get_key_from_nb_v4(&nb_out, Direction::Outbound),
             ) {
                 prop_assert!(k_in == k_out.reverse());
             }

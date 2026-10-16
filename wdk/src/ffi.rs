@@ -543,4 +543,17 @@ extern "C" {
     /// The KeQueryPerformanceCounter routine retrieves the current value and frequency of the performance counter.
     /// Use KeQueryPerformanceCounter to acquire high resolution (<1µs) time stamps for time interval measurements.
     pub(crate) fn KeQueryPerformanceCounter(frequency: *mut i64) -> i64;
+
+    /// The KeGetCurrentIrql routine returns the current IRQL.
+    pub(crate) fn KeGetCurrentIrql() -> u8;
+
+    /// The KeDelayExecutionThread routine puts the current thread into an alertable or
+    /// nonalertable wait state for a given interval.
+    /// `interval` is a count of 100-nanosecond units: negative is relative to now, positive is an
+    /// absolute system time. Callable only at IRQL <= APC_LEVEL (PASSIVE_LEVEL if alertable).
+    pub(crate) fn KeDelayExecutionThread(
+        wait_mode: i8,
+        alertable: u8,
+        interval: *const i64,
+    ) -> NTSTATUS;
 }

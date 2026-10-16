@@ -22,11 +22,11 @@ use wdk::irp_helpers::{ReadRequest, WriteRequest};
 pub use crate::connection::{Direction, Key, Verdict};
 pub use crate::device::{Device, Packet};
 pub use crate::entry::{clear_device, get_device, set_device};
-pub use crate::packet_util::{get_key_from_nbl_v4, get_key_from_nbl_v6, recalc_header_checksums};
+pub use crate::packet_util::{get_key_from_nb_v4, get_key_from_nb_v6, recalc_header_checksums};
 
 // Re-export the mock NBL type so fuzz targets can construct packet buffers.
 pub use wdk::driver::Driver;
-pub use wdk::filter_engine::net_buffer::{NetBufferList, NET_BUFFER_LIST};
+pub use wdk::filter_engine::net_buffer::{NetBuffer, NetBufferList, NET_BUFFER_LIST};
 // Re-export the classify action constants so the callout fuzz target can assert
 // the verdict an action produced without depending on `wdk`/`mock_wdk` directly.
 pub use wdk::filter_engine::classify::{FWP_ACTION_BLOCK, FWP_ACTION_PERMIT};
@@ -70,7 +70,7 @@ pub struct CalloutResult {
 /// while collisions stay common. The last slot is always a loopback connection
 /// (special-cased by ALE). Fully fuzzer-controlled, arbitrary-range packets are
 /// exercised separately via the `raw` packet path (the bytes become the packet
-/// verbatim, so `get_key_from_nbl` parses arbitrary addresses/ports/protocols).
+/// verbatim, so `get_key_from_nb` parses arbitrary addresses/ports/protocols).
 pub const POOL_SIZE: u8 = 64;
 
 const IP4_HDR: u32 = 20;
@@ -364,7 +364,7 @@ fn reauth_flag(reauthorize: bool) -> u32 {
 
 // Build an IPv4 packet whose extracted 5-tuple is `t` for the given direction.
 // `raw` returns the fuzzer bytes verbatim instead, to exercise the in-callout
-// parser on garbage. `get_key_from_nbl_v4` uses `next_header`, addresses and the
+// parser on garbage. `get_key_from_nb_v4` uses `next_header`, addresses and the
 // first 4 transport bytes (ports); the rest is padding/payload.
 fn build_packet_v4(t: &TupleV4, direction: Direction, payload: &[u8], raw: bool) -> Vec<u8> {
     if raw {
@@ -587,15 +587,14 @@ pub struct FilterEngineSnapshot {
 
 pub fn filter_engine_snapshot() -> Option<FilterEngineSnapshot> {
     let device = crate::entry::get_device()?;
-    let filter_engine = device.filter_engine.read_lock();
-    Some(FilterEngineSnapshot {
+    Some(device.filter_engine.with(|filter_engine| FilterEngineSnapshot {
         committed: filter_engine.is_committed(),
         callouts: filter_engine
             .registrations()
             .iter()
             .map(|reg| (reg.name.clone(), reg.layer, reg.filter_id))
             .collect(),
-    })
+    }))
 }
 
 // ---- ALE callouts ---------------------------------------------------------

@@ -6,7 +6,10 @@ use protocol::info::Info;
 use smoltcp::wire::{IpAddress, IpProtocol};
 use wdk::rw_spin_lock::Mutex;
 
-use crate::{connection::{Direction, Key}, device::Packet};
+use crate::{
+    connection::{Direction, Key},
+    device::Packet,
+};
 
 pub const PACKET_MISSING_ID: u64 = u64::MAX;
 
@@ -168,7 +171,12 @@ mod tests {
     }
 }
 
-pub fn build_loopback_info(key: &Key, process_id: u64, direction: Direction) -> Option<Info> {
+/// Builds an informational-only event that carries no packet to reinject (it uses
+/// [`PACKET_MISSING_ID`]). Used when the ALE layer only needs to tell user space about a
+/// connection and its process id, leaving the real packet to be sent and reinjected by the
+/// packet layer. This is the case for inbound loopback and for reauthorized outbound
+/// connections (which cannot be pended).
+pub fn build_info_only(key: &Key, process_id: u64, direction: Direction) -> Option<Info> {
     let (local_port, remote_port) = match key.protocol {
         IpProtocol::Tcp | IpProtocol::Udp => (key.local_port, key.remote_port),
         _ => (0, 0),

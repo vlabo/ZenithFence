@@ -23,6 +23,7 @@ mod connection_cache;
 mod rcu_port;
 mod device;
 mod entry;
+mod filter_reset_queue;
 mod id_cache;
 pub mod logger;
 mod packet_callouts;

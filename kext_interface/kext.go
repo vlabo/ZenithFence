@@ -5,6 +5,7 @@ package kext_interface
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -61,24 +62,32 @@ func (s *KextService) isRunning() (bool, error) {
 }
 
 func (s *KextService) waitForServiceStatus(neededStatus uint32, timeLimit time.Duration) (bool, error) {
-	var status windows.SERVICE_STATUS
-	status.CurrentState = windows.SERVICE_NO_CHANGE
 	start := time.Now()
-	for status.CurrentState == neededStatus {
-		err := windows.QueryServiceStatus(s.handle, &status)
-		if err != nil {
-			return false, fmt.Errorf("failed while waiting for service to start: %w", err)
+	for {
+		// Read the current service state.
+		var status windows.SERVICE_STATUS
+		if err := windows.QueryServiceStatus(s.handle, &status); err != nil {
+			return false, fmt.Errorf("failed while waiting for service status change: %w", err)
+		}
+
+		// Reached the target state.
+		if status.CurrentState == neededStatus {
+			return true, nil
 		}
 
 		if time.Since(start) > timeLimit {
 			return false, fmt.Errorf("time limit reached")
 		}
 
-		// Sleep for 1/10 of the wait hint, recommended time from microsoft
-		time.Sleep(time.Duration((status.WaitHint / 10)) * time.Millisecond)
+		// Sleep for 1/10 of the wait hint, as recommended by Microsoft, with a
+		// floor so a zero wait hint (common for driver services) does not turn
+		// this into a busy loop.
+		sleep := time.Duration(status.WaitHint/10) * time.Millisecond
+		if sleep < 100*time.Millisecond {
+			sleep = 100 * time.Millisecond
+		}
+		time.Sleep(sleep)
 	}
-
-	return true, nil
 }
 
 func (s *KextService) Start(wait bool) error {
@@ -126,6 +135,11 @@ func (s *KextService) Stop(wait bool) error {
 	var status windows.SERVICE_STATUS
 	err := windows.ControlService(s.handle, windows.SERVICE_CONTROL_STOP, &status)
 	if err != nil {
+		// The driver already being stopped is exactly the state we want; treat
+		// it as success so teardown does not report a spurious error.
+		if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+			return nil
+		}
 		return fmt.Errorf("service failed to stop: %w", err)
 	}
 
