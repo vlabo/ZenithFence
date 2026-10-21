@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Before exploring the source, read the relevant generated reference in `docs/LLMs/`** (every type, signature and doc comment; bodies stripped):
+> driver → `RUSTDOC-driver.md` · protocol → `RUSTDOC-protocol.md` · `wdk/` → `RUSTDOC-wdk.md` · `mock/` / fuzzing → `RUSTDOC-mock.md` · `sim/` + `release/` → `RUSTDOC-tools.md` · Go (`kext_interface`, `kext_tester`) → `GODOC.md`.
+> See `docs/LLMs/README.md` for sizes and when to load which. Regenerate with `just gen-llm-docs` after significant changes.
+
 ## Project Overview
 
 ZenithFence is a Windows kernel network filtering driver (`.sys`) written in Rust, with Go bindings for user-space communication. It hooks into the Windows Filtering Platform (WFP) to intercept, inspect, and make allow/block decisions on network traffic at the kernel level. Target architecture: **amd64 only**.
@@ -28,6 +32,9 @@ just test-kext-interface    # Go parsing tests (kext_interface/)
 just kext-interface-gen     # Regenerate binary test fixtures
 just test-mock              # Real driver over the mock WDK (mock/): unit, property, harness tests
 just fuzz-replay callouts   # Fuzz-target smoke loop (Windows); `just fuzz <target>` on Linux
+
+# Regenerate the LLM reference files in docs/LLMs/
+just gen-llm-docs
 
 # One-time: generate test signing certificate
 just generate-cert

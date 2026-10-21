@@ -72,6 +72,11 @@ fuzz-replay target *files:
 
 test: kext-interface-gen test-protocol test-kext-interface test-mock
 
+# Regenerate the LLM reference files under docs/LLMs/ (see docs/LLMs/README.md).
+gen-llm-docs:
+	go run ./tools/godoc-gen .
+	cargo run -q --manifest-path tools/rustdoc-gen/Cargo.toml -- .
+
 # ---------------------------------------------------------------------------
 # Real-world userspace simulation (see sim/).
 #
