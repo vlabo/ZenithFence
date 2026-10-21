@@ -1,0 +1,24 @@
+[package]
+name = "driver-kernel"
+version = "0.1.0"
+edition = "2021"
+
+# The production build root: the only crate that produces the shipped driver.lib
+# (built as driver_kernel.lib, copied to driver.lib by `just link`). It links the
+# `driver` core against the real kernel `wdk`; nothing in this dependency graph
+# can reach `mock_wdk`. Keep it free of logic -- see src/lib.rs.
+
+[lib]
+name = "driver_kernel"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+driver = { path = "..", default-features = false, features = ["real_wdk"] }
+wdk = { path = "../../wdk" }

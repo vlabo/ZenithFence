@@ -11,7 +11,7 @@ ZenithFence is a Windows kernel network filtering driver (`.sys`) written in Rus
 All top-level tasks are in the `Justfile` (run `just` to list them).
 
 ```bash
-# Build the Rust driver static lib
+# Build the Rust driver static lib (driver/kernel -> driver_kernel.lib)
 just build              # debug
 just build --release    # release
 
@@ -48,7 +48,8 @@ cd kext_interface && go test -run <TestName>
 
 | Directory | Language | Role |
 |-----------|----------|------|
-| `driver/` | Rust (`no_std`) | Kernel driver — WFP callouts, packet decisions, I/O with user space |
+| `driver/` | Rust (`no_std`) | Kernel driver core library — WFP callouts, packet decisions, I/O with user space |
+| `driver/kernel/` | Rust (`no_std`) | Production build root — the only crate that produces the shipped `driver.lib` (allocator, panic handler, `DriverEntry` export); links `driver` against the real `wdk` only. Keep it free of logic |
 | `protocol/` | Rust | Shared serialization of commands (user→kernel) and info events (kernel→user) |
 | `wdk/` | Rust (unsafe) | Thin wrappers over Windows kernel APIs (NDIS, WFP, IRP, etc.) |
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |
@@ -91,7 +92,8 @@ Treated as temporary verdict — no cache entry, every packet sent to user space
 
 | File | Purpose |
 |------|---------|
-| `driver/src/entry.rs` | `DriverEntry`, IRP dispatch table, I/O routing |
+| `driver/kernel/src/lib.rs` | Exported `DriverEntry` symbol, global allocator, panic handler |
+| `driver/src/entry.rs` | `driver_entry` (driver init), IRP dispatch table, I/O routing |
 | `driver/src/device.rs` | `DeviceContext` — global state, `read()`, `write()`, command processing |
 | `driver/src/connection.rs` | `Connection`, `Verdict` enum, bandwidth tracking |
 | `driver/src/connection_cache.rs` | Per-port arrays, RCU-style concurrent access, 1-min/10-min eviction |

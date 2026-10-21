@@ -1,5 +1,4 @@
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
 #![allow(clippy::needless_return)]
 
 extern crate alloc;
@@ -20,26 +19,10 @@ pub mod logger;
 mod packet_callouts;
 mod packet_util;
 
-#[cfg(not(test))]
-use wdk::allocator::WindowsAllocator;
+// The driver entry point. The production build root (kernel/) exports it as
+// `DriverEntry`.
+pub use entry::driver_entry;
 
-#[cfg(not(test))]
-use core::panic::PanicInfo;
-
-// Declaration of the global memory allocator
-#[cfg(not(test))]
-#[global_allocator]
-static HEAP: WindowsAllocator = WindowsAllocator {};
-
-#[cfg(not(test))]
-#[no_mangle]
-pub extern "system" fn _DllMainCRTStartup() {}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    use wdk::err;
-
-    err!("{}", info);
-    loop {}
-}
+// The global allocator, panic handler and the exported `DriverEntry` are not
+// here: they belong to the kernel image, so they live in the production build
+// root (kernel/src/lib.rs).

@@ -3,7 +3,9 @@ set windows-shell := ["powershell.exe", "-NoProfile", "-NoLogo", "-Command"]
 default:
 	@just --list
 
-[working-directory: './driver']
+# Builds the production build root (driver/kernel), which links the driver core
+# against the real kernel wdk. Output: driver_kernel.lib (`link` copies it to driver.lib).
+[working-directory: './driver/kernel']
 build arg="":
 	cargo build {{arg}}
 
@@ -12,7 +14,7 @@ link arg="":
 	just build {{arg}}
 
 	$DriverVarient="{{ if arg == "--release" { "release" } else { "debug" } }}"
-	cp ./driver/target/x86_64-pc-windows-msvc/$DriverVarient/driver.lib .
+	cp ./driver/kernel/target/x86_64-pc-windows-msvc/$DriverVarient/driver_kernel.lib ./driver.lib
 	link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 /ENTRY:FxDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" /MERGE:.rustc=.data /INTEGRITYCHECK driver.lib
 	signtool sign /a /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com driver.sys
 
