@@ -1,0 +1,6 @@
+# Source files always use Linux-style line endings, regardless of the
+# contributor's platform or core.autocrlf setting. Other files are left as-is.
+*.rs text eol=lf
+*.go text eol=lf
+*.c  text eol=lf
+*.h  text eol=lf
