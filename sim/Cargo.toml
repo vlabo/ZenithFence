@@ -1,0 +1,35 @@
+[package]
+name = "nexufend-sim"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Real-world userspace simulation harness. A host binary that loads the *real*
+# driver over the mock WDK (via `driver_harness::sim::Simulation`, see mock/) and
+# exposes it on a Windows named pipe (or, on Unix, a Unix domain socket) so the
+# real Go agent can connect to it exactly as it would to the kernel device. The
+# libFuzzer targets under mock/fuzz remain the coverage-guided path.
+
+[[bin]]
+name = "zf-sim"
+path = "src/main.rs"
+
+[dependencies]
+# The real driver over the host mock WDK, loaded and driven through the harness
+# (same as mock/fuzz).
+driver_harness = { package = "driver-harness", path = "../mock/harness" }
+# For the user-space connection's status constants (STATUS_SUCCESS / EOF). This
+# resolves to the same `mock_wdk` instance the driver links, so the
+# `DriverConnection` returned by `Simulation::connect` is the matching type.
+mock_wdk = { path = "../mock/wdk" }
+
+# --- Scenario-file executor (see src/scenario.rs) --------------------------
+# A scenario is a CBOR sequence (`.cbor`) or JSON Lines (`.json`, one object per
+# line, for debugging) of per-command records; it is decoded as a lazy stream and
+# replayed against the driver by a worker pool. All pure host crates -- the mock
+# build stays windows-sys-free.
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+crossbeam-channel = "0.5"

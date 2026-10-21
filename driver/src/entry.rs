@@ -3,24 +3,30 @@ use crate::device;
 use alloc::boxed::Box;
 use num_traits::FromPrimitive;
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
+use wdk::kernel_types::{
+    DEVICE_OBJECT, DRIVER_OBJECT, IRP, NTSTATUS, STATUS_FAILED_DRIVER_ENTRY, STATUS_SUCCESS,
+    UNICODE_STRING,
+};
 use wdk::{err, info, interface};
-use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
-use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
+// Global device pointer. `get_device` hands out a shared `&'static` so callout
+// and read/write threads can share one device soundly (every `Device` field is
+// interior-mutable).
 static mut DEVICE: *mut device::Device = core::ptr::null_mut();
-pub fn get_device() -> Option<&'static mut device::Device> {
-    return unsafe { DEVICE.as_mut() };
+pub fn get_device() -> Option<&'static device::Device> {
+    return unsafe { DEVICE.as_ref() };
 }
 
-// DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
-// Name should not be changed
-#[export_name = "DriverEntry"]
+// Entry point of the driver (main function). Called when the driver is loaded.
+// The production build root (kernel/src/lib.rs) exports it as the `DriverEntry`
+// symbol. The kernel types come through `wdk::kernel_types`, so this plumbing
+// does not depend on `windows_sys` directly.
 pub extern "system" fn driver_entry(
-    driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
-    registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
-) -> windows_sys::Win32::Foundation::NTSTATUS {
+    driver_object: *mut DRIVER_OBJECT,
+    registry_path: *mut UNICODE_STRING,
+) -> NTSTATUS {
     info!("Starting initialization...");
 
     // Initialize driver object.
@@ -33,7 +39,7 @@ pub extern "system" fn driver_entry(
         Ok(driver) => driver,
         Err(status) => {
             err!("driver_entry: failed to initialize driver: {}", status);
-            return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
+            return STATUS_FAILED_DRIVER_ENTRY;
         }
     };
 
@@ -49,7 +55,7 @@ pub extern "system" fn driver_entry(
             Ok(device) => Box::new(device),
             Err(err) => {
                 wdk::err!("filed to initialize device: {}", err);
-                return -1;
+                return STATUS_FAILED_DRIVER_ENTRY;
             }
         };
         DEVICE = Box::into_raw(device);

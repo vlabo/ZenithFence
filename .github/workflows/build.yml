@@ -30,15 +30,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            driver/target
-          key: cargo-driver-${{ runner.os }}-${{ hashFiles('driver/Cargo.lock') }}
+            driver/kernel/target
+          key: cargo-driver-${{ runner.os }}-${{ hashFiles('driver/kernel/Cargo.lock') }}
           restore-keys: cargo-driver-${{ runner.os }}-
 
-      # crate-type = "staticlib": `cargo build` compiles driver.lib and surfaces
-      # any compilation errors.
+      # driver/kernel is the production build root (crate-type = "staticlib"):
+      # `cargo build` compiles driver_kernel.lib and surfaces any compilation errors.
       - name: Build driver
-        working-directory: ./driver
-        run: cargo build
+        working-directory: ./driver/kernel
+        run: cargo build --locked
 
       # Link driver.lib into the .sys, mirroring the Justfile `link` recipe.
       # The WDK / c_helper static libs referenced via #[link(kind="static")]
@@ -49,7 +49,7 @@ jobs:
       - name: Link driver (driver.sys)
         shell: pwsh
         run: |
-          Copy-Item ./driver/target/x86_64-pc-windows-msvc/debug/driver.lib .
+          Copy-Item ./driver/kernel/target/x86_64-pc-windows-msvc/debug/driver_kernel.lib ./driver.lib
           link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT `
             /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO `
             /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 `

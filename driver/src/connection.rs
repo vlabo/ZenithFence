@@ -583,11 +583,11 @@ impl Clone for ConnectionV6 {
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 pub struct Key {
-    pub(crate) protocol: IpProtocol,
-    pub(crate) local_address: IpAddress,
-    pub(crate) local_port: u16,
-    pub(crate) remote_address: IpAddress,
-    pub(crate) remote_port: u16,
+    pub protocol: IpProtocol,
+    pub local_address: IpAddress,
+    pub local_port: u16,
+    pub remote_address: IpAddress,
+    pub remote_port: u16,
 }
 
 impl core::fmt::Display for Key {

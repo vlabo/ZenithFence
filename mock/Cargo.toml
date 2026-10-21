@@ -1,0 +1,8 @@
+# Host-side mock of the kernel driver. Nothing under mock/ is part of the
+# shipped driver: driver/kernel (the production build root) never depends on
+# these crates, and no file in driver/ or wdk/ refers to them.
+[workspace]
+resolver = "2"
+members = ["wdk", "driver", "harness"]
+# The cargo-fuzz crate is its own workspace (cargo-fuzz requirement).
+exclude = ["fuzz"]

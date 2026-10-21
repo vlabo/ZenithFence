@@ -293,7 +293,7 @@ fn ip_packet_layer<T: IpVersion>(
 }
 
 fn clone_packet(
-    device: &mut Device,
+    device: &Device,
     nb: &NetBuffer,
     direction: Direction,
     ipv6: bool,

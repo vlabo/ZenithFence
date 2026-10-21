@@ -1,0 +1,23 @@
+[package]
+name = "driver-harness"
+version = "0.1.0"
+edition = "2021"
+
+# Test/fuzz harness for the real driver running over the mock WDK: loads it
+# through its real `driver_entry`, drives its callouts and its user-space
+# channel, and observes its state. Used by the property tests (tests/), the
+# cargo-fuzz targets (../fuzz) and the simulation daemon (sim/).
+
+[lib]
+name = "driver_harness"
+path = "src/lib.rs"
+
+[dependencies]
+driver = { package = "driver-mock", path = "../driver" }
+wdk = { package = "mock_wdk", path = "../wdk" }
+protocol = { path = "../../protocol" }
+smoltcp = { version = "0.13", default-features = false, features = ["proto-ipv4", "proto-ipv6", "medium-ethernet", "socket-raw"] }
+
+[dev-dependencies]
+proptest = "1"
+num-traits = { version = "0.2", default-features = false }

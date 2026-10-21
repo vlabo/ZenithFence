@@ -25,7 +25,15 @@ var (
 	IOCTL_SHUTDOWN_REQUEST = ctlCode(SIOCTL_TYPE, 0x801, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
 )
 
+// ReadVersion queries the driver's version. A simulation pipe (OpenPipe) has no
+// IOCTL channel; the daemon runs the driver built from this same tree, so the
+// interface version is reported instead.
 func ReadVersion(file *KextFile) ([]uint8, error) {
+	if file.pipe {
+		version := InterfaceVersion
+		return version[:], nil
+	}
+
 	data := make([]uint8, 4)
 	err := file.deviceIOControl(IOCTL_VERSION, nil, data)
 
