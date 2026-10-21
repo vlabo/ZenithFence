@@ -9,7 +9,8 @@ import "io"
 //
 // The daemon's endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
 // per OS by SimEndpoint. The rule must match `endpoint` in sim/src/pipe/mod.rs:
-//   - Windows: the named pipe \\.\pipe\<name>
+//   - Windows: <name> itself if it is a full \\.\pipe\ path, else the named
+//     pipe \\.\pipe\<name>
 //   - Unix:    <name> itself if it contains '/', else $XDG_RUNTIME_DIR/<name>.sock,
 //     falling back to /tmp/<name>.sock
 type SimConn = io.ReadWriteCloser

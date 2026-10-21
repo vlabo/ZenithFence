@@ -14,15 +14,18 @@
 
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// The current client's stream, shared with the pump blocked on it.
+type Slot = Mutex<Option<Arc<UnixStream>>>;
 
 pub struct PipeServer {
     path: String,
     listener: UnixListener,
-    // Set once by `wait_for_client`; the reader and writer are separate fds so
-    // the command and event pumps never contend on one handle.
-    reader: OnceLock<UnixStream>,
-    writer: OnceLock<UnixStream>,
+    // Set by `wait_for_client` for each client; the reader and writer are
+    // separate fds so the command and event pumps never contend on one handle.
+    reader: Slot,
+    writer: Slot,
 }
 
 impl PipeServer {
@@ -38,23 +41,25 @@ impl PipeServer {
         Ok(Self {
             path: path.to_string(),
             listener,
-            reader: OnceLock::new(),
-            writer: OnceLock::new(),
+            reader: Mutex::new(None),
+            writer: Mutex::new(None),
         })
     }
 
-    /// Block until a client (the Go agent) connects.
+    /// Block until a client (the Go agent) connects, replacing the previous
+    /// client's streams.
     pub fn wait_for_client(&self) -> io::Result<()> {
         let (stream, _) = self.listener.accept()?;
         let writer = stream.try_clone()?;
-        let _ = self.reader.set(stream);
-        let _ = self.writer.set(writer);
+        *lock(&self.reader) = Some(Arc::new(stream));
+        *lock(&self.writer) = Some(Arc::new(writer));
         Ok(())
     }
 
     /// Write all `bytes` to the socket (event stream → agent).
     pub fn write_all(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut writer = self.writer.get().ok_or_else(not_connected)?;
+        let writer = lock(&self.writer).clone().ok_or_else(not_connected)?;
+        let mut writer = &*writer;
         writer.write_all(bytes)
     }
 
@@ -62,7 +67,8 @@ impl PipeServer {
     /// channel). Returns the byte count, or `Err` once the client disconnects or
     /// sends a frame that doesn't fit `buf`.
     pub fn read_message(&self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut reader = self.reader.get().ok_or_else(not_connected)?;
+        let reader = lock(&self.reader).clone().ok_or_else(not_connected)?;
+        let mut reader = &*reader;
         let mut len = [0u8; 4];
         reader.read_exact(&mut len)?;
         let len = u32::from_le_bytes(len) as usize;
@@ -76,13 +82,13 @@ impl PipeServer {
         Ok(len)
     }
 
-    /// Force the connection closed, ending both pumps. Unused while the
-    /// producer runs forever; kept for parity with the Windows pipe.
-    #[allow(dead_code)]
+    /// Force the connection closed, ending both pumps, and forget the client so
+    /// the next [`wait_for_client`](Self::wait_for_client) starts clean.
     pub fn disconnect(&self) {
-        if let Some(stream) = self.reader.get() {
+        if let Some(stream) = lock(&self.reader).take() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
+        lock(&self.writer).take();
     }
 }
 
@@ -90,6 +96,10 @@ impl Drop for PipeServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+fn lock(slot: &Slot) -> MutexGuard<'_, Option<Arc<UnixStream>>> {
+    slot.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn not_connected() -> io::Error {

@@ -86,7 +86,9 @@ gen-llm-docs:
 # exactly as it would the kernel device. By default the agent *loads and starts
 # the mock driver itself* -- it spawns the daemon (ZF_SIM_DAEMON), mirroring how
 # production loads and starts the kernel driver -- so a single command runs the
-# whole thing. Fake OS network events are injected by the daemon. Each recipe
+# whole thing. Fake OS network events are injected by the daemon. In random-
+# traffic mode the daemon serves agents one after another: each disconnect
+# unloads the driver and the daemon waits for the next agent. Each recipe
 # below that differs by OS has a [windows] (pwsh) and a [unix] (bash) variant.
 # ---------------------------------------------------------------------------
 
@@ -115,6 +117,21 @@ mock-run: sim-build
 [unix]
 mock-run: sim-build
 	./sim/target/debug/zf-sim
+
+# Serve the mock driver to the REAL agent (nexufend, built with
+# `just agent build-mock-kext`): random traffic, any verdict the agent decides is
+# accepted (--any-verdict), and after the agent disconnects the driver is
+# reloaded and the daemon waits for the next agent. Start this before the agent;
+# `pipe` must match the path the agent was built with. Ctrl+C to stop.
+[windows]
+mock-serve pipe='\\.\pipe\ZenithFence': sim-build
+	#!pwsh.exe -File
+	$env:ZF_SIM_PIPE = '{{pipe}}'
+	./sim/target/debug/zf-sim.exe --any-verdict
+
+[unix]
+mock-serve pipe='ZenithFence': sim-build
+	ZF_SIM_PIPE='{{pipe}}' ./sim/target/debug/zf-sim --any-verdict
 
 # Run the whole simulation with ONE command: the agent loads and starts the mock
 # driver (spawns the daemon), then reads events and answers verdicts. The daemon

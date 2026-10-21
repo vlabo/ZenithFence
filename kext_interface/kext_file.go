@@ -27,12 +27,11 @@ type KextFile struct {
 
 	buffer     []byte
 	read_slice []byte
-	// synchronous is set for handles opened WITHOUT FILE_FLAG_OVERLAPPED (e.g.
-	// the simulation named pipe). Such handles require a NULL lpOverlapped so
-	// ReadFile/WriteFile block to completion; passing an OVERLAPPED to a
-	// synchronous handle does not wait for data that arrives later. The kernel
-	// device is opened overlapped, so it leaves this false.
-	synchronous bool
+	// pipe is set when the file is the simulation named pipe (OpenPipe) rather
+	// than the kernel device. The pipe has no IOCTL channel (see ReadVersion),
+	// and a server-side disconnect is reported as end-of-file (see
+	// runOverlapped) so callers see the same errors as from the device.
+	pipe bool
 }
 
 // Read reads the next chunk of data from the kext.
@@ -142,13 +141,6 @@ func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *w
 	}
 	defer f.endIO()
 
-	if f.synchronous {
-		// The call blocks to completion on a synchronous handle.
-		var done uint32
-		err := issue(handle, nil, &done)
-		return done, err
-	}
-
 	// Manual-reset event, dedicated to this single operation.
 	event, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
@@ -167,6 +159,11 @@ func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *w
 		err = windows.GetOverlappedResult(handle, overlapped, &done, true)
 	}
 	if err != nil {
+		if f.pipe && (errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_PIPE_NOT_CONNECTED)) {
+			// The daemon went away: report it the way the device reports its
+			// event queue running down.
+			err = windows.ERROR_HANDLE_EOF
+		}
 		return done, err
 	}
 

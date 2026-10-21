@@ -1,5 +1,7 @@
 //! The daemon's agent-facing endpoint, one implementation per OS behind the same
-//! `PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`):
+//! `PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`,
+//! `disconnect`). One client is served at a time; after `disconnect` the server
+//! can `wait_for_client` again for the next one:
 //!
 //! * Windows: an overlapped, message-mode named pipe (`\\.\pipe\<name>`).
 //! * Unix: a stream Unix domain socket. Stream sockets don't preserve message
@@ -20,10 +22,15 @@ pub use unix::PipeServer;
 #[cfg(windows)]
 pub use windows::PipeServer;
 
-/// The OS address for the logical endpoint `name`.
+/// The OS address for the logical endpoint `name`: `name` itself if it is a
+/// full pipe path (`\\.\pipe\...`), else `\\.\pipe\<name>`.
 #[cfg(windows)]
 pub fn endpoint(name: &str) -> String {
-    format!(r"\\.\pipe\{name}")
+    const PREFIX: &str = r"\\.\pipe\";
+    if name.get(..PREFIX.len()).is_some_and(|p| p.eq_ignore_ascii_case(PREFIX)) {
+        return name.to_string();
+    }
+    format!("{PREFIX}{name}")
 }
 
 /// The OS address for the logical endpoint `name`: `name` itself if it is a

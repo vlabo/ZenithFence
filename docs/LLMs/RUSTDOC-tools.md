@@ -16,8 +16,9 @@ query and response datagrams that crossed the socket. The `dns` op feeds those
 real bytes to the driver's callouts, so a domain-aware policy sees genuine DNS
 traffic. Touching the network makes `dns` records non-deterministic and
 dependent on connectivity; a failed lookup is reported, never silently faked.
-The OS default resolver is read via `GetNetworkParams` (iphlpapi) -- raw FFI in
-the same spirit as the named-pipe server, pulling in no `windows-sys`.
+The OS default resolver is read via `GetNetworkParams` (iphlpapi) on Windows --
+raw FFI in the same spirit as the named-pipe server, pulling in no
+`windows-sys` -- and from `/etc/resolv.conf` on Unix.
 
 ### Constants & statics
 
@@ -34,11 +35,13 @@ const ATTEMPTS: usize = 2;
 ```
 
 ```rust
-const ERROR_SUCCESS: u32 = 0;
+#[cfg(windows)]
+const ERROR_SUCCESS: u32 = ...;
 ```
 
 ```rust
-const ERROR_BUFFER_OVERFLOW: u32 = 111;
+#[cfg(windows)]
+const ERROR_BUFFER_OVERFLOW: u32 = ...;
 ```
 
 ### Types
@@ -61,6 +64,7 @@ pub struct Resolution {
 #### `IpAddrString`
 
 ```rust
+#[cfg(windows)]
 #[repr(C)]
 struct IpAddrString {
     next: *mut IpAddrString,
@@ -73,6 +77,7 @@ struct IpAddrString {
 #### `FixedInfo`
 
 ```rust
+#[cfg(windows)]
 #[repr(C)]
 struct FixedInfo {
     host_name: [u8; 132],
@@ -119,6 +124,16 @@ The machine's primary configured DNS server, or `None` if none can be read.
 Walks `DnsServerList`, skipping any unspecified (0.0.0.0) placeholder entry.
 
 ```rust
+#[cfg(windows)]
+fn os_default_resolver() -> Option<IpAddr>;
+```
+
+The first usable `nameserver` in `/etc/resolv.conf`, or `None` if there is
+none. A zone-scoped IPv6 entry (`fe80::1%eth0`) doesn't parse as `IpAddr` and
+is skipped.
+
+```rust
+#[cfg(unix)]
 fn os_default_resolver() -> Option<IpAddr>;
 ```
 
@@ -131,6 +146,7 @@ fn parse_ascii_ip(bytes: &[u8]) -> Option<IpAddr>;
 ### Extern blocks
 
 ```rust
+#[cfg(windows)]
 #[link(name = "iphlpapi")]
 extern "system" {
     fn GetNetworkParams(fixed_info: *mut FixedInfo, out_buf_len: *mut u32) -> u32;
@@ -142,34 +158,88 @@ extern "system" {
 ## `sim/src/main.rs`
 
 Real-world userspace simulation: a *fake driver* the real Go agent connects
-to over a Windows named pipe.
+to over a Windows named pipe or, on Unix, a Unix domain socket (see [`pipe`]).
 Loads the real driver over `mock_wdk` ([`driver::sim::Simulation`]), exposes
-it on `\\.\pipe\ZenithFence`, and bridges the pipe to the driver's user-space
-channel ([`DriverConnection`] read/write). A producer injects fake OS network
-events through the driver's callout entry points; the agent reads the
-resulting events and writes verdicts back, exactly as it does against the
+it on the endpoint named by `ZF_SIM_PIPE` (default `ZenithFence`, i.e.
+`\\.\pipe\ZenithFence` on Windows; a full `\\.\pipe\...` path is used as is),
+waits for an agent to connect, and bridges the pipe to the driver's
+user-space channel ([`DriverConnection`] read/write). A producer injects fake
+OS network events through the driver's callout entry points; the agent reads
+the resulting events and writes verdicts back, exactly as it does against the
 kernel device.
 Threads (genuine concurrency, all funnelling to the one global `Device`):
   - producer ("kernel"): runs callouts that pend packets and emit events
   - event pump: blocks on `DriverConnection::read`, ships bytes to the pipe
   - command pump: reads command messages from the pipe, applies them
-With no scenario file the producer runs forever: a healthy run ends when the
-user stops it (Ctrl+C), and a broken invariant ends it via the monitor
-thread's non-zero `process::exit`. Given a scenario file (positional arg or
-`ZF_SIM_SCENARIO`, see [`scenario`]) the daemon instead replays that file on a
-worker pool and exits when it finishes. Either way the OS reclaims the driver,
-the pumps, and the pipe.
+With no scenario file the daemon serves agents one after another until the
+user stops it (Ctrl+C): each agent session gets a freshly loaded driver and
+seeded-random traffic, and when the agent disconnects the driver is unloaded
+and the daemon waits for the next agent -- the way the agent's Start/Stop load
+and unload the kernel driver. A broken invariant ends the process via the
+monitor thread's non-zero `process::exit`. `--any-verdict` /
+`ZF_SIM_ANY_VERDICT` lets a real agent decide verdicts by its own policy (see
+[`producer::VerdictPolicy`]). Given a scenario file (positional arg or
+`ZF_SIM_SCENARIO`, see [`scenario`]) the daemon instead serves one agent,
+replays that file on a worker pool and exits when it finishes. Either way the
+OS reclaims the driver, the pumps, and the pipe.
 
 ### Constants & statics
 
+Logical endpoint name when `ZF_SIM_PIPE` is unset; mapped per OS by [`pipe::endpoint`].
+
 ```rust
-const PIPE_NAME: &str = r"\\.\pipe\ZenithFence";
+const DEFAULT_PIPE_NAME: &str = "ZenithFence";
+```
+
+### Types
+
+#### `Pumps`
+
+The two threads bridging the pipe and the driver's user-space channel. Both
+set `stop` once the agent is gone.
+
+```rust
+struct Pumps {
+    events: JoinHandle<()>,
+    commands: JoinHandle<()>,
+}
+```
+
+```rust
+impl Pumps {
+    fn spawn(sim: &Simulation, server: &Arc<PipeServer>, stop: Arc<AtomicBool>) -> Self;
+    fn join(self);
+}
 ```
 
 ### Functions
 
 ```rust
-fn main() -> std::process::ExitCode;
+fn main() -> ExitCode;
+```
+
+Random-traffic mode: serve agents one after another until the process is
+stopped. Each session mirrors the agent's Start/Stop of the kernel driver: the
+producer runs while the agent is connected; once it disconnects the driver is
+shut down and unloaded, and a fresh one is loaded for the next agent.
+
+```rust
+fn serve_agents(
+    mut sim: Simulation,
+    server: &Arc<PipeServer>,
+    policy: VerdictPolicy,
+) -> ExitCode;
+```
+
+Load the real driver over mock_wdk and check it registered like a kernel
+load would.
+
+```rust
+fn load_driver() -> Result<Simulation, ExitCode>;
+```
+
+```rust
+fn wait_for_agent(server: &PipeServer) -> Result<(), ExitCode>;
 ```
 
 Assert the driver's load registered exactly the production callout set, on
@@ -181,7 +251,124 @@ fn check_registration() -> Result<(), String>;
 
 ---
 
-## `sim/src/pipe.rs`
+## `sim/src/pipe/mod.rs`
+
+The daemon's agent-facing endpoint, one implementation per OS behind the same
+`PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`,
+`disconnect`). One client is served at a time; after `disconnect` the server
+can `wait_for_client` again for the next one:
+* Windows: an overlapped, message-mode named pipe (`\\.\pipe\<name>`).
+* Unix: a stream Unix domain socket. Stream sockets don't preserve message
+  boundaries, so on this transport the agent prefixes each command with a
+  `u32` little-endian length, which restores "one command message = one
+  `Device::write`". The event direction stays an unframed byte stream on both.
+[`endpoint`] maps the logical name (`ZF_SIM_PIPE`) to the OS address. The Go
+side (`kext_interface/sim_conn*.go`) applies the same rule.
+
+### Re-exports
+
+```rust
+#[cfg(unix)]
+pub use unix::PipeServer;
+#[cfg(windows)]
+pub use windows::PipeServer;
+```
+
+### Functions
+
+The OS address for the logical endpoint `name`: `name` itself if it is a
+full pipe path (`\\.\pipe\...`), else `\\.\pipe\<name>`.
+
+```rust
+#[cfg(windows)]
+pub fn endpoint(name: &str) -> String;
+```
+
+The OS address for the logical endpoint `name`: `name` itself if it is a
+path (contains `/`), else `$XDG_RUNTIME_DIR/<name>.sock`, falling back to
+`/tmp/<name>.sock`.
+
+```rust
+#[cfg(unix)]
+pub fn endpoint(name: &str) -> String;
+```
+
+---
+
+## `sim/src/pipe/unix.rs`
+
+Unix domain socket server: the Unix counterpart of the Windows named pipe.
+A `SOCK_STREAM` socket from `std` (no extra dependencies). Reads and writes
+run on separate threads over separate fds (`try_clone`), the same concurrency
+the overlapped pipe provides on Windows.
+Stream sockets don't keep message boundaries, but the driver needs one command
+per `Device::write` (one IRP per `WriteFile` in the kernel). So on this
+transport each agent command arrives as a frame: a `u32` little-endian length,
+then that many bytes. `SOCK_SEQPACKET` would keep the boundaries without
+framing, but it truncates any message larger than the reader's buffer, and the
+agent deliberately reads events through a small (1 KiB) buffer. Events are
+therefore sent as a plain byte stream, exactly like the pipe's byte-mode reads.
+
+### Types
+
+#### `Slot`
+
+The current client's stream, shared with the pump blocked on it.
+
+```rust
+type Slot = Mutex<Option<Arc<UnixStream>>>;
+```
+
+#### `PipeServer`
+
+```rust
+pub struct PipeServer {
+    path: String,
+    listener: UnixListener,
+    reader: Slot,
+    writer: Slot,
+}
+```
+
+```rust
+impl PipeServer {
+    /// Bind the socket at `path`, replacing a stale socket file left by a
+    /// daemon that was killed before it could clean up.
+    pub fn create(path: &str) -> io::Result<Self>;
+    /// Block until a client (the Go agent) connects, replacing the previous
+    /// client's streams.
+    pub fn wait_for_client(&self) -> io::Result<()>;
+    /// Write all `bytes` to the socket (event stream → agent).
+    pub fn write_all(&self, bytes: &[u8]) -> io::Result<()>;
+    /// Read one length-prefixed command frame into `buf` (agent → command
+    /// channel). Returns the byte count, or `Err` once the client disconnects or
+    /// sends a frame that doesn't fit `buf`.
+    pub fn read_message(&self, buf: &mut [u8]) -> io::Result<usize>;
+    /// Force the connection closed, ending both pumps, and forget the client so
+    /// the next [`wait_for_client`](Self::wait_for_client) starts clean.
+    pub fn disconnect(&self);
+}
+```
+
+### Trait implementations
+
+```rust
+impl Drop for PipeServer
+```
+
+### Functions
+
+```rust
+fn lock(slot: &Slot) -> MutexGuard<'_, Option<Arc<UnixStream>>>;
+```
+
+```rust
+fn not_connected() -> io::Error;
+```
+
+---
+
+## `sim/src/pipe/windows.rs`
 
 Minimal Windows named-pipe server with overlapped (asynchronous) I/O.
 Raw `kernel32` FFI (no `windows-sys`/`windows` dependency, so it is immune to
@@ -290,8 +477,8 @@ impl PipeServer {
     /// count, or `Err` once the client disconnects.
     pub fn read_message(&self, buf: &mut [u8]) -> io::Result<usize>;
     /// Force the connection closed: completes both a pending server `ReadFile`
-    /// and the agent's `ReadFile` with an error, so each side's loop ends. Unused
-    /// while the producer runs forever; kept for a future graceful-stop path.
+    /// and the agent's `ReadFile` with an error, so each side's loop ends. Also
+    /// readies the instance for the next [`wait_for_client`](Self::wait_for_client).
     pub fn disconnect(&self);
     /// Run an overlapped op (started by `start`) to completion and return the
     /// number of bytes transferred.
@@ -381,7 +568,8 @@ Drives semi-realistic flows through the real driver callout entry points,
 the way the OS does: ALE authorization first (which pends and emits an event
 the agent answers over the pipe), then data packets through the IP packet
 layer, then endpoint closure and resource release. The default run generates
-seeded random flows ([`crate::scenarios::random_flow`]) forever.
+seeded random flows ([`crate::scenarios::random_flow`]) until the agent
+disconnects.
 Concurrency mirrors the kernel: several producer workers classify flows at
 the same time (WFP classify callbacks fire on many threads), and one
 reinjector thread models the OS re-presenting driver-injected packets to the
@@ -389,6 +577,9 @@ packet-layer callouts (network injects re-enter marked injected-by-self;
 outbound transport injects descend the stack unmarked; inbound transport
 injects re-indicate upward and never pass the network layer again).
 Everything is reproducible from the fixed [`SEED`]: just rerun.
+Verdicts are judged per [`VerdictPolicy`]: against kext_tester's fixed rules
+by default, or -- for a real agent with its own policy -- accepting any
+verdict and checking only that the driver enforces the one it got.
 
 ### Constants & statics
 
@@ -398,6 +589,12 @@ const VERDICT_POLL: Duration = Duration::from_millis(5);
 
 ```rust
 const REINJECT_POLL: Duration = Duration::from_millis(2);
+```
+
+How often the monitor checks whether the run was stopped.
+
+```rust
+const STOP_POLL: Duration = Duration::from_millis(50);
 ```
 
 Fixed run seed. The traffic is fully reproducible across runs -- rerun to
@@ -454,6 +651,8 @@ pub struct Summary {
 impl Summary {
     fn fail(&self, msg: String);
     fn count_scenario(&self, name: &'static str);
+    /// No failures recorded. Verdict timeouts are recorded as failures only
+    /// under [`VerdictPolicy::Expected`] (see [`Run::verdict_timeout`]).
     pub fn is_ok(&self) -> bool;
     /// Compact one-line liveness snapshot for the periodic monitor.
     pub fn heartbeat(&self);
@@ -461,17 +660,54 @@ impl Summary {
 }
 ```
 
+#### `VerdictPolicy`
+
+How the producer judges the verdicts the agent hands out.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerdictPolicy {
+    /// kext_tester's fixed rules ([`FlowPlan::expect`]): a different verdict, or
+    /// none within [`FLOW_TIMEOUT`], is a failure.
+    Expected,
+    /// A real agent deciding by its own policy: any verdict is legal and
+    /// [`FlowPlan::expect`] is only a hint. Checks that the driver enforces the
+    /// verdict it got remain fatal; a verdict that never comes is only counted.
+    Any,
+}
+```
+
+#### `Run`
+
+Shared state of one [`drive`] run.
+
+```rust
+struct Run {
+    summary: Summary,
+    policy: VerdictPolicy,
+    stop: Arc<AtomicBool>,
+}
+```
+
+```rust
+impl Run {
+    fn any_verdict(&self) -> bool;
+    fn stopped(&self) -> bool;
+    fn verdict_timeout(&self, msg: String);
+}
+```
+
 ### Functions
 
-Generate random flows forever across [`THREADS`] workers. Never returns: a
-healthy run ends when the user stops it, and a broken invariant ends it via
+Generate random flows across [`THREADS`] workers until `stop` is set, then
+join every producer thread and return. A broken invariant ends the process via
 the monitor's non-zero `process::exit`. Each worker owns a disjoint IP/port
 window and a private RNG stream, and runs one flow fully -- ALE authorization,
 the agent's verdict, data bursts, closure, release -- before starting the
 next, so a worker can never outpace the agent it waits on.
 
 ```rust
-pub fn drive();
+pub fn drive(policy: VerdictPolicy, stop: Arc<AtomicBool>);
 ```
 
 Print a liveness line every [`HEARTBEAT`]; the moment an invariant breaks,
@@ -479,11 +715,11 @@ dump the full summary and exit non-zero. The seed is fixed, so a failing run
 reproduces exactly on the next launch.
 
 ```rust
-fn monitor_loop(summary: &Summary) -> !;
+fn monitor_loop(run: &Run);
 ```
 
 ```rust
-fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant);
+fn run_flow(plan: &FlowPlan, run: &Run, deadline: Instant);
 ```
 
 Data exchange for an authorized flow. A permanent accept permits packets
@@ -492,7 +728,16 @@ packet until the agent upgrades the verdict, so both outcomes are legal --
 what's illegal is a hard block or a missing action.
 
 ```rust
-fn run_bursts(plan: &FlowPlan, summary: &Summary, deadline: Instant) -> bool;
+fn run_bursts(plan: &FlowPlan, run: &Run, deadline: Instant) -> bool;
+```
+
+Data exchange under [`VerdictPolicy::Any`]: whatever verdict the agent gave,
+each packet must get the action the driver owes that verdict. Temporary
+verdicts pend the packet for a per-packet answer, so nothing waits for an
+upgrade; a pended packet is resolved by the agent and the reinjector.
+
+```rust
+fn run_bursts_any_verdict(plan: &FlowPlan, run: &Run) -> bool;
 ```
 
 ```rust
@@ -520,13 +765,18 @@ fn current_verdict(plan: &FlowPlan) -> Option<u8>;
 ```
 
 ```rust
-fn wait_verdict(plan: &FlowPlan, deadline: Instant) -> Option<u8>;
+fn wait_verdict(plan: &FlowPlan, run: &Run, deadline: Instant) -> Option<u8>;
 ```
 
-Poll `cond` until it yields `Some` or the deadline passes.
+Poll `cond` until it yields `Some`, the deadline passes, or the run is
+stopped (check [`Run::stopped`] to tell the last apart from a timeout).
 
 ```rust
-fn wait_for<T>(deadline: Instant, mut cond: impl FnMut() -> Option<T>) -> Option<T>;
+fn wait_for<T>(
+    run: &Run,
+    deadline: Instant,
+    mut cond: impl FnMut() -> Option<T>,
+) -> Option<T>;
 ```
 
 ```rust
@@ -534,7 +784,7 @@ fn count_packet(summary: &Summary, payload: &[u8]);
 ```
 
 ```rust
-fn reinject_loop(summary: &Summary) -> !;
+fn reinject_loop(run: &Run);
 ```
 
 Best-effort one-line identity for a drained injected packet: parses the IP
@@ -916,14 +1166,26 @@ verdicts -- each pass is the same scenario run afresh, not a continuation.
 pub fn run_loop(path: &str) -> !;
 ```
 
-Ctrl+C handler: print the loop's running totals once, then exit. Registered by
-[`run_loop`] via `SetConsoleCtrlHandler` (raw FFI, like the pipe server).
+Ctrl+C: print the loop's running totals once, then exit. Reached from the
+OS-specific hook installed by [`install_ctrl_handler`].
 
 ```rust
-unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> i32;
+fn report_and_exit() -> !;
 ```
 
+Windows: `SetConsoleCtrlHandler` (raw FFI, like the pipe server). The handler
+runs on its own thread, so it can report and exit directly.
+
 ```rust
+#[cfg(windows)]
+fn install_ctrl_handler();
+```
+
+Unix: a `SIGINT` handler. Printing and exiting aren't async-signal-safe, so
+the handler only raises a flag and a watcher thread does the reporting.
+
+```rust
+#[cfg(unix)]
 fn install_ctrl_handler();
 ```
 

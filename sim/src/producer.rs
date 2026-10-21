@@ -4,7 +4,8 @@
 //! the way the OS does: ALE authorization first (which pends and emits an event
 //! the agent answers over the pipe), then data packets through the IP packet
 //! layer, then endpoint closure and resource release. The default run generates
-//! seeded random flows ([`crate::scenarios::random_flow`]) forever.
+//! seeded random flows ([`crate::scenarios::random_flow`]) until the agent
+//! disconnects.
 //!
 //! Concurrency mirrors the kernel: several producer workers classify flows at
 //! the same time (WFP classify callbacks fire on many threads), and one
@@ -14,10 +15,14 @@
 //! injects re-indicate upward and never pass the network layer again).
 //!
 //! Everything is reproducible from the fixed [`SEED`]: just rerun.
+//!
+//! Verdicts are judged per [`VerdictPolicy`]: against kext_tester's fixed rules
+//! by default, or -- for a real agent with its own policy -- accepting any
+//! verdict and checking only that the driver enforces the one it got.
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +36,8 @@ use crate::scenarios::{self, Expect, FlowPlan, Tuple};
 
 const VERDICT_POLL: Duration = Duration::from_millis(5);
 const REINJECT_POLL: Duration = Duration::from_millis(2);
+/// How often the monitor checks whether the run was stopped.
+const STOP_POLL: Duration = Duration::from_millis(50);
 
 // ---- Hardcoded run parameters ------------------------------------------------
 
@@ -92,9 +99,10 @@ impl Summary {
         }
     }
 
+    /// No failures recorded. Verdict timeouts are recorded as failures only
+    /// under [`VerdictPolicy::Expected`] (see [`Run::verdict_timeout`]).
     pub fn is_ok(&self) -> bool {
-        self.verdict_timeouts.load(Ordering::Relaxed) == 0
-            && self.failures.lock().map(|f| f.is_empty()).unwrap_or(false)
+        self.failures.lock().map(|f| f.is_empty()).unwrap_or(false)
     }
 
     /// Compact one-line liveness snapshot for the periodic monitor.
@@ -133,68 +141,113 @@ impl Summary {
     }
 }
 
+/// How the producer judges the verdicts the agent hands out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerdictPolicy {
+    /// kext_tester's fixed rules ([`FlowPlan::expect`]): a different verdict, or
+    /// none within [`FLOW_TIMEOUT`], is a failure.
+    Expected,
+    /// A real agent deciding by its own policy: any verdict is legal and
+    /// [`FlowPlan::expect`] is only a hint. Checks that the driver enforces the
+    /// verdict it got remain fatal; a verdict that never comes is only counted.
+    Any,
+}
+
+/// Shared state of one [`drive`] run.
+struct Run {
+    summary: Summary,
+    policy: VerdictPolicy,
+    stop: Arc<AtomicBool>,
+}
+
+impl Run {
+    fn any_verdict(&self) -> bool {
+        self.policy == VerdictPolicy::Any
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    fn verdict_timeout(&self, msg: String) {
+        self.summary.verdict_timeouts.fetch_add(1, Ordering::Relaxed);
+        if !self.any_verdict() {
+            self.summary.fail(msg);
+        }
+    }
+}
+
 // ---- Driving ---------------------------------------------------------------------
 
-/// Generate random flows forever across [`THREADS`] workers. Never returns: a
-/// healthy run ends when the user stops it, and a broken invariant ends it via
+/// Generate random flows across [`THREADS`] workers until `stop` is set, then
+/// join every producer thread and return. A broken invariant ends the process via
 /// the monitor's non-zero `process::exit`. Each worker owns a disjoint IP/port
 /// window and a private RNG stream, and runs one flow fully -- ALE authorization,
 /// the agent's verdict, data bursts, closure, release -- before starting the
 /// next, so a worker can never outpace the agent it waits on.
-pub fn drive() {
+pub fn drive(policy: VerdictPolicy, stop: Arc<AtomicBool>) {
     println!(
-        "[sim] producer: seed=0x{SEED:016x} threads={THREADS}; generating random flows forever (Ctrl+C to stop)"
+        "[sim] producer: seed=0x{SEED:016x} threads={THREADS} verdicts={policy:?}; generating random flows until the agent disconnects"
     );
 
-    let summary = Arc::new(Summary::default());
+    let run = Arc::new(Run {
+        summary: Summary::default(),
+        policy,
+        stop,
+    });
+
+    let mut threads = Vec::new();
 
     // Reinjector: models the OS re-presenting driver-injected packets.
     {
-        let summary = Arc::clone(&summary);
-        thread::spawn(move || reinject_loop(&summary));
+        let run = Arc::clone(&run);
+        threads.push(thread::spawn(move || reinject_loop(&run)));
     }
 
     // Monitor: periodic liveness line + fail-fast on the first broken invariant.
     {
-        let summary = Arc::clone(&summary);
-        thread::spawn(move || monitor_loop(&summary));
+        let run = Arc::clone(&run);
+        threads.push(thread::spawn(move || monitor_loop(&run)));
     }
 
-    let workers: Vec<_> = (0..THREADS)
-        .map(|worker| {
-            let summary = Arc::clone(&summary);
-            thread::spawn(move || {
-                let mut rng = SplitMix64::new(mix(SEED ^ worker as u64));
-                let mut counter: u64 = 0;
-                loop {
-                    // Keep the sequence inside the worker's 2048-port window; a
-                    // flow closes and releases its port before that port recurs,
-                    // so the reuse is always safe.
-                    let seq = (counter % 2048) as u16;
-                    let plan = scenarios::random_flow(&mut rng, worker, seq);
-                    let deadline = Instant::now() + FLOW_TIMEOUT;
-                    run_flow(&plan, &summary, deadline);
-                    counter = counter.wrapping_add(1);
-                }
-            })
+    threads.extend((0..THREADS).map(|worker| {
+        let run = Arc::clone(&run);
+        thread::spawn(move || {
+            let mut rng = SplitMix64::new(mix(SEED ^ worker as u64));
+            let mut counter: u64 = 0;
+            while !run.stopped() {
+                // Keep the sequence inside the worker's 2048-port window; a
+                // flow closes and releases its port before that port recurs,
+                // so the reuse is always safe.
+                let seq = (counter % 2048) as u16;
+                let plan = scenarios::random_flow(&mut rng, worker, seq);
+                let deadline = Instant::now() + FLOW_TIMEOUT;
+                run_flow(&plan, &run, deadline);
+                counter = counter.wrapping_add(1);
+            }
         })
-        .collect();
+    }));
 
-    // Blocks forever: the workers never return.
-    for worker in workers {
-        let _ = worker.join();
+    for thread in threads {
+        let _ = thread.join();
     }
+    run.summary.print();
 }
 
 /// Print a liveness line every [`HEARTBEAT`]; the moment an invariant breaks,
 /// dump the full summary and exit non-zero. The seed is fixed, so a failing run
 /// reproduces exactly on the next launch.
-fn monitor_loop(summary: &Summary) -> ! {
-    loop {
-        thread::sleep(HEARTBEAT);
-        summary.heartbeat();
-        if !summary.is_ok() {
-            summary.print();
+fn monitor_loop(run: &Run) {
+    let mut last = Instant::now();
+    while !run.stopped() {
+        thread::sleep(STOP_POLL);
+        if last.elapsed() < HEARTBEAT {
+            continue;
+        }
+        last = Instant::now();
+        run.summary.heartbeat();
+        if !run.summary.is_ok() {
+            run.summary.print();
             eprintln!("[sim] FAIL: traffic invariant violated (seed=0x{SEED:016x}); exiting");
             std::process::exit(1);
         }
@@ -203,7 +256,8 @@ fn monitor_loop(summary: &Summary) -> ! {
 
 // ---- One flow's life ------------------------------------------------------------
 
-fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
+fn run_flow(plan: &FlowPlan, run: &Run, deadline: Instant) {
+    let summary = &run.summary;
     summary.count_scenario(plan.name);
 
     // 1. ALE authorization: connect (outbound) or accept (inbound).
@@ -230,7 +284,9 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
 
     // 2. Wait for the agent's verdict (like the OS holding the pended classify).
     if ok && matches!(plan.expect, Expect::Accepted | Expect::Blocked) {
-        match wait_verdict(plan, deadline) {
+        match wait_verdict(plan, run, deadline) {
+            // Any verdict is legal; the data phase checks it is enforced.
+            Some(_) if run.any_verdict() => {}
             Some(verdict) => {
                 let expected_block = plan.expect == Expect::Blocked;
                 let got_block = verdict == Verdict::PermanentBlock as u8;
@@ -244,16 +300,23 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
                     ok = false;
                 }
             }
+            None if run.stopped() => return,
             None => {
-                summary.verdict_timeouts.fetch_add(1, Ordering::Relaxed);
-                summary.fail(format!("{}: verdict timed out", plan.describe()));
-                return;
+                run.verdict_timeout(format!("{}: verdict timed out", plan.describe()));
+                if !run.any_verdict() {
+                    return;
+                }
+                // The agent left the flow pending; the application gives up and
+                // closes the socket.
+                ok = false;
             }
         }
     }
 
     // 3. Data packets.
-    if ok {
+    if ok && run.any_verdict() && plan.expect != Expect::NoVerdict {
+        ok &= run_bursts_any_verdict(plan, run);
+    } else if ok {
         match plan.expect {
             Expect::Blocked => {
                 // The OS wouldn't send more on a blocked outbound flow, but a
@@ -283,7 +346,7 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
                 }
             }
             Expect::Accepted | Expect::ImmediateAccept => {
-                ok &= run_bursts(plan, summary, deadline);
+                ok &= run_bursts(plan, run, deadline);
             }
         }
     }
@@ -302,7 +365,9 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
 
     // 5. Optional port-reuse follow-up: a fresh flow on the just-released port.
     if let Some(follow_up) = scenarios::reuse_follow_up(plan) {
-        run_flow(&follow_up, summary, deadline);
+        if !run.stopped() {
+            run_flow(&follow_up, run, deadline);
+        }
     }
 }
 
@@ -310,7 +375,8 @@ fn run_flow(plan: &FlowPlan, summary: &Summary, deadline: Instant) {
 /// outright; a temporary Accept (inbound loopback's initial state) pends each
 /// packet until the agent upgrades the verdict, so both outcomes are legal --
 /// what's illegal is a hard block or a missing action.
-fn run_bursts(plan: &FlowPlan, summary: &Summary, deadline: Instant) -> bool {
+fn run_bursts(plan: &FlowPlan, run: &Run, deadline: Instant) -> bool {
+    let summary = &run.summary;
     for (i, burst) in plan.bursts.iter().enumerate() {
         if plan.reauth_after == Some(i) && !reauthorize(plan, summary) {
             return false;
@@ -330,19 +396,64 @@ fn run_bursts(plan: &FlowPlan, summary: &Summary, deadline: Instant) -> bool {
             // Temporary verdict: the packet pended; wait for the agent to
             // upgrade the flow before sending more (the pended clone itself is
             // delivered by injection, observed by the reinjector).
-            if wait_for(deadline, || {
+            if wait_for(run, deadline, || {
                 current_verdict(plan).filter(|&v| v == Verdict::PermanentAccept as u8)
             })
             .is_none()
             {
-                summary.verdict_timeouts.fetch_add(1, Ordering::Relaxed);
-                summary.fail(format!("{}: burst {i} verdict timed out", plan.describe()));
+                if !run.stopped() {
+                    run.verdict_timeout(format!("{}: burst {i} verdict timed out", plan.describe()));
+                }
                 return false;
             }
         } else if result.action != FWP_ACTION_PERMIT {
             summary.fail(format!(
                 "{}: burst {i} neither permitted nor pended (action={:#x})",
                 plan.describe(), result.action
+            ));
+            return false;
+        }
+        count_packet(summary, &burst.payload);
+    }
+    true
+}
+
+/// Data exchange under [`VerdictPolicy::Any`]: whatever verdict the agent gave,
+/// each packet must get the action the driver owes that verdict. Temporary
+/// verdicts pend the packet for a per-packet answer, so nothing waits for an
+/// upgrade; a pended packet is resolved by the agent and the reinjector.
+fn run_bursts_any_verdict(plan: &FlowPlan, run: &Run) -> bool {
+    let summary = &run.summary;
+    for (i, burst) in plan.bursts.iter().enumerate() {
+        let verdict = current_verdict(plan);
+        // Reauthorizing is only defined for a flow the agent accepted for good.
+        if plan.reauth_after == Some(i)
+            && verdict == Some(Verdict::PermanentAccept as u8)
+            && !reauthorize(plan, summary)
+        {
+            return false;
+        }
+
+        let result = run_packet(plan, burst.direction, &burst.payload);
+        let enforced = match verdict {
+            Some(v) if v == Verdict::PermanentAccept as u8 => result.action == FWP_ACTION_PERMIT,
+            Some(v) if v == Verdict::PermanentBlock as u8 => {
+                result.action == FWP_ACTION_BLOCK && !result.absorb
+            }
+            Some(v)
+                if v == Verdict::PermanentDrop as u8
+                    || v == Verdict::Undeterminable as u8
+                    || v == Verdict::Failed as u8 =>
+            {
+                result.action == FWP_ACTION_BLOCK && result.absorb
+            }
+            // Temporary and redirect verdicts: the driver decides per packet.
+            _ => true,
+        };
+        if !enforced {
+            summary.fail(format!(
+                "{}: burst {i} not enforced under verdict {verdict:?} (action={:#x} absorb={})",
+                plan.describe(), result.action, result.absorb
             ));
             return false;
         }
@@ -412,19 +523,20 @@ fn current_verdict(plan: &FlowPlan) -> Option<u8> {
     }
 }
 
-fn wait_verdict(plan: &FlowPlan, deadline: Instant) -> Option<u8> {
-    wait_for(deadline, || {
+fn wait_verdict(plan: &FlowPlan, run: &Run, deadline: Instant) -> Option<u8> {
+    wait_for(run, deadline, || {
         current_verdict(plan).filter(|&v| v != Verdict::Undecided as u8)
     })
 }
 
-/// Poll `cond` until it yields `Some` or the deadline passes.
-fn wait_for<T>(deadline: Instant, mut cond: impl FnMut() -> Option<T>) -> Option<T> {
+/// Poll `cond` until it yields `Some`, the deadline passes, or the run is
+/// stopped (check [`Run::stopped`] to tell the last apart from a timeout).
+fn wait_for<T>(run: &Run, deadline: Instant, mut cond: impl FnMut() -> Option<T>) -> Option<T> {
     loop {
         if let Some(value) = cond() {
             return Some(value);
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || run.stopped() {
             return None;
         }
         thread::sleep(VERDICT_POLL);
@@ -446,8 +558,9 @@ fn count_packet(summary: &Summary, payload: &[u8]) {
 //   * inbound transport injects re-indicate upward from the transport layer and
 //     never traverse the network layer again.
 
-fn reinject_loop(summary: &Summary) -> ! {
-    loop {
+fn reinject_loop(run: &Run) {
+    let summary = &run.summary;
+    while !run.stopped() {
         let injected = api::drain_injected();
         if injected.is_empty() {
             thread::sleep(REINJECT_POLL);
@@ -463,11 +576,13 @@ fn reinject_loop(summary: &Summary) -> ! {
                 } else {
                     api::run_packet_bytes_v4(&packet.data, Direction::Outbound, false)
                 };
-                // The agent only hands out permanent verdicts, so by the time
-                // the defer was released the flow is permanently accepted.
+                // kext_tester only hands out permanent verdicts, so by the time
+                // the defer was released the flow is permanently accepted. A
+                // real agent may hold a temporary verdict (the replay pends
+                // again) or have changed it since, so any action is legal then.
                 if result.action == FWP_ACTION_PERMIT {
                     summary.transport_replays.fetch_add(1, Ordering::Relaxed);
-                } else {
+                } else if !run.any_verdict() {
                     summary.fail(format!(
                         "transport re-inject not permitted: {} (action={:#x} absorb={})",
                         describe_injected(&packet),

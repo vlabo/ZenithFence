@@ -8,7 +8,7 @@
 
 ## `github.com/vlabo/zenithfence/kext_interface`
 
-Files: `command.go`, `info.go`, `ioctl.go`, `kext.go`, `kext_file.go`, `mock_service.go`, `pipe_connection.go`
+Files: `command.go`, `info.go`, `ioctl.go`, `kext.go`, `kext_file.go`, `mock_service.go`, `pipe_connection.go`, `sim_conn.go`, `sim_conn_unix.go`, `sim_conn_windows.go`, `version.go`
 
 ### Variables
 
@@ -223,14 +223,17 @@ type KextFile struct {
 }
 ```
 
-OpenPipe connects to a userspace fake-driver named pipe (\\.\pipe\<pipeName>)
-and returns a *KextFile whose Read/Write behave exactly as they do against the
-kernel device. This is the "different loading" path for the real-world
-simulation harness; production uses KextService.OpenFile instead.
+OpenPipe connects to a userspace fake-driver named pipe and returns a
+*KextFile that is interchangeable with the one KextService.OpenFile returns
+for the kernel device. pipeName is either a full pipe path (\\.\pipe\...) or a
+bare name, which maps to \\.\pipe\<pipeName> (see SimEndpoint). This is the
+"different loading" path for the simulation harness; production uses
+KextService.OpenFile instead.
 
-The handle is opened synchronously (no FILE_FLAG_OVERLAPPED) so Read/Write
-block to completion. The client's default read mode is byte-stream, which is
-what the event parser (RecvInfo) expects, so message boundaries on the
+The handle is opened with FILE_FLAG_OVERLAPPED, exactly like the device, so a
+pending Read on one goroutine does not block Writes from others and Close can
+cancel the pending Read. The client's default read mode is byte-stream, which
+is what the event parser (RecvInfo) expects, so message boundaries on the
 command direction don't affect event reassembly. CreateFile is retried while
 the server is still coming up, so daemon-first ordering is not required.
 
@@ -340,18 +343,19 @@ type LogLine struct {
 MockKextService is a drop-in stand-in for KextService that is backed by the
 userspace `zf-sim` daemon instead of a kernel driver service. The daemon loads
 the *real* driver over the host WDK mock (mock_wdk) and runs its actual
-driver_entry, then exposes it on a named pipe.
+driver_entry, then exposes it on a named pipe (a Unix socket on Unix; see
+SimConn).
 
 It mirrors the KextService lifecycle so the agent drives the mock exactly as it
 drives a kernel driver:
 
   - CreateMockKextService -> CreateKextService (register the driver image)
   - Start                 -> StartService      (kernel loads driver.sys, DriverEntry runs)
-  - OpenFile              -> OpenFile          (open the device / pipe)
+  - OpenFile              -> OpenFile          (open the device / endpoint)
   - Stop / Delete         -> Stop / Delete     (unload / deregister the driver)
 
 The mock "load and start" is spawning the daemon process; the OS reclaims the
-driver, its I/O pumps and the pipe when that process exits, so Stop/Delete are
+driver, its I/O pumps and the endpoint when that process exits, so Stop/Delete are
 a hard process termination rather than a graceful service stop.
 
 ```go
@@ -361,7 +365,7 @@ type MockKextService struct {
 ```
 
 CreateMockKextService prepares (but does not start) a simulated kext service
-backed by the `zf-sim` daemon at daemonPath, reachable on \\.\pipe\<pipeName>.
+backed by the `zf-sim` daemon at daemonPath, reachable on SimEndpoint(pipeName).
 Any extra args are passed to the daemon; the daemon also inherits this
 process's environment (ZF_SIM_SCENARIO, ZF_SIM_SEED, ...). Mirrors
 CreateKextService: it validates the daemon image exists, analogous to the SCM
@@ -378,12 +382,14 @@ It is idempotent (delegates to Stop), so deferring both Stop and Delete is safe.
 func (s *MockKextService) Delete() error
 ```
 
-OpenFile connects to the daemon's named pipe and returns a *KextFile whose
-Read/Write behave as they do against the kernel device. OpenPipe retries while
-the daemon finishes coming up, so Start need not block until the pipe is ready.
+OpenFile connects to the daemon's endpoint and returns a SimConn whose
+Read/Write behave as they do against the kernel device (on Windows it is the
+*KextFile from OpenPipe; use OpenPipe directly where a *KextFile is needed,
+e.g. for ReadVersion). It retries while the
+daemon finishes coming up, so Start need not block until the endpoint is ready.
 
 ```go
-func (s *MockKextService) OpenFile(readBufferSize int) (*KextFile, error)
+func (s *MockKextService) OpenFile(readBufferSize int) (SimConn, error)
 ```
 
 Start spawns the daemon, which loads the driver over mock_wdk and runs its
@@ -397,9 +403,10 @@ func (s *MockKextService) Start(wait bool) error
 ```
 
 Stop terminates the daemon if it is still running -- the mock analog of
-stopping the service. The producer runs forever, so a hard TerminateProcess is
-how the agent stops it; the OS reclaims the driver, pumps and pipe with the
-process. Idempotent, and a no-op once the daemon has already exited. With wait
+stopping the service. The producer runs forever, so a hard kill
+(TerminateProcess / SIGKILL) is how the agent stops it; the OS reclaims the
+driver, pumps and endpoint with the process (the daemon replaces a stale Unix
+socket file on its next start). Idempotent, and a no-op once the daemon has already exited. With wait
 set it blocks until the process is fully reaped.
 
 ```go
@@ -435,6 +442,31 @@ type RedirectV6 struct {
 	RemotePort    uint16
 	// contains filtered or unexported fields
 }
+```
+
+#### `SimConn`
+
+SimConn is a connection to the userspace fake-driver daemon (`zf-sim`, see
+sim/). Read/Write behave like a *KextFile against the kernel device: Read
+fills the whole buffer from the event stream, and each Write delivers exactly
+one command to the driver.
+
+The daemon's endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
+per OS by SimEndpoint. The rule must match `endpoint` in sim/src/pipe/mod.rs:
+  - Windows: <name> itself if it is a full \\.\pipe\ path, else the named
+    pipe \\.\pipe\<name>
+  - Unix:    <name> itself if it contains '/', else $XDG_RUNTIME_DIR/<name>.sock,
+    falling back to /tmp/<name>.sock
+
+```go
+type SimConn = io.ReadWriteCloser
+```
+
+OpenSimConn connects to the daemon endpoint for name, retrying while the
+daemon is still coming up, so daemon-first ordering is not required.
+
+```go
+func OpenSimConn(name string, readBufferSize int) (SimConn, error)
 ```
 
 #### `UpdateV4`
@@ -477,6 +509,10 @@ type Verdict struct {
 
 ### Functions
 
+ReadVersion queries the driver's version. A simulation pipe (OpenPipe) has no
+IOCTL channel; the daemon runs the driver built from this same tree, so the
+interface version is reported instead.
+
 ```go
 func ReadVersion(file *KextFile) ([]uint8, error)
 ```
@@ -517,11 +553,17 @@ func SendUpdateV6Command(writer io.Writer, update UpdateV6) error
 func SendVerdictCommand(writer io.Writer, verdict Verdict) error
 ```
 
+SimEndpoint returns the Unix socket path for the logical endpoint name.
+
+```go
+func SimEndpoint(name string) string
+```
+
 ---
 
 ## `kext_tester`
 
-Files: `main.go`
+Files: `main_unix.go`, `main_windows.go`, `sim.go`
 
 ### Variables
 
@@ -549,7 +591,7 @@ handleInfo applies the agent's verdict policy to one event. Shared by the
 production and simulation paths so the decision logic is identical.
 
 ```go
-func handleInfo(file *kext_interface.KextFile, info kext_interface.Info)
+func handleInfo(file io.ReadWriter, info kext_interface.Info)
 ```
 
 installInterrupt runs cleanup on the first Ctrl+C, then exits. Producer mode
@@ -563,6 +605,9 @@ func installInterrupt(cleanup func())
 func logInterfaceVersion()
 ```
 
+Off Windows there is no kernel driver to load, so the agent only runs in
+simulation mode, against the userspace fake driver (see sim.go).
+
 ```go
 func main()
 ```
@@ -571,13 +616,13 @@ pumpEvents runs the read/verdict loop shared by every simulation mode: read one
 event, apply the verdict policy, repeat until the connection closes.
 
 ```go
-func pumpEvents(file *kext_interface.KextFile)
+func pumpEvents(file io.ReadWriter)
 ```
 
 runSimulation drives the same read/verdict loop as production against a
 userspace fake driver. When ZF_SIM_DAEMON names the `zf-sim` binary the agent
 *loads and starts the mock driver itself* -- it spawns the daemon (which runs
-the real driver over mock_wdk via driver_entry), opens its pipe, and stops it
+the real driver over mock_wdk via driver_entry), opens its endpoint, and stops it
 on exit -- mirroring how production loads and starts the kernel driver before
 opening the device. With ZF_SIM_DAEMON unset it attaches to a daemon started
 separately. Returns the process exit code.

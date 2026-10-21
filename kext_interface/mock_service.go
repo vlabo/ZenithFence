@@ -113,7 +113,9 @@ func (s *MockKextService) Start(wait bool) error {
 }
 
 // OpenFile connects to the daemon's endpoint and returns a SimConn whose
-// Read/Write behave as they do against the kernel device. It retries while the
+// Read/Write behave as they do against the kernel device (on Windows it is the
+// *KextFile from OpenPipe; use OpenPipe directly where a *KextFile is needed,
+// e.g. for ReadVersion). It retries while the
 // daemon finishes coming up, so Start need not block until the endpoint is ready.
 func (s *MockKextService) OpenFile(readBufferSize int) (SimConn, error) {
 	return OpenSimConn(s.pipeName, readBufferSize)
