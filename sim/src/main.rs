@@ -1,8 +1,9 @@
 //! Real-world userspace simulation: a *fake driver* the real Go agent connects
-//! to over a Windows named pipe.
+//! to over a Windows named pipe or, on Unix, a Unix domain socket (see [`pipe`]).
 //!
 //! Loads the real driver over `mock_wdk` ([`driver::sim::Simulation`]), exposes
-//! it on `\\.\pipe\ZenithFence`, and bridges the pipe to the driver's user-space
+//! it on the endpoint named by `ZF_SIM_PIPE` (default `ZenithFence`, i.e.
+//! `\\.\pipe\ZenithFence` on Windows), and bridges the pipe to the driver's user-space
 //! channel ([`DriverConnection`] read/write). A producer injects fake OS network
 //! events through the driver's callout entry points; the agent reads the
 //! resulting events and writes verdicts back, exactly as it does against the
@@ -36,7 +37,8 @@ use mock_wdk::kernel_types::{STATUS_END_OF_FILE, STATUS_SUCCESS};
 
 use pipe::PipeServer;
 
-const PIPE_NAME: &str = r"\\.\pipe\ZenithFence";
+/// Logical endpoint name when `ZF_SIM_PIPE` is unset; mapped per OS by [`pipe::endpoint`].
+const DEFAULT_PIPE_NAME: &str = "ZenithFence";
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -85,18 +87,22 @@ fn main() -> std::process::ExitCode {
     }
     println!("[sim] filter engine committed; all callouts registered");
 
-    println!("[sim] creating pipe {PIPE_NAME}");
-    let server = match PipeServer::create(PIPE_NAME) {
+    // The agent-spawned daemon inherits ZF_SIM_PIPE from the agent, so both
+    // sides agree on the endpoint.
+    let pipe_name = std::env::var("ZF_SIM_PIPE").unwrap_or_else(|_| DEFAULT_PIPE_NAME.into());
+    let endpoint = pipe::endpoint(&pipe_name);
+    println!("[sim] creating endpoint {endpoint}");
+    let server = match PipeServer::create(&endpoint) {
         Ok(server) => Arc::new(server),
         Err(err) => {
-            eprintln!("[sim] CreateNamedPipe failed: {err}");
+            eprintln!("[sim] creating endpoint {endpoint} failed: {err}");
             return std::process::ExitCode::FAILURE;
         }
     };
 
     println!("[sim] waiting for agent to connect ...");
     if let Err(err) = server.wait_for_client() {
-        eprintln!("[sim] ConnectNamedPipe failed: {err}");
+        eprintln!("[sim] waiting for agent failed: {err}");
         return std::process::ExitCode::FAILURE;
     }
     println!("[sim] agent connected");

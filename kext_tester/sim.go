@@ -1,10 +1,11 @@
-//go:build windows
-
 package main
 
+// The simulation mode and the verdict policy, shared by every OS. On Windows the
+// same policy also drives the real kernel driver (see main_windows.go).
+
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -24,74 +25,10 @@ var protocols = map[int]string{
 	58: "ipv6-icmp",
 }
 
-func main() {
-	// Real-world simulation mode: the same agent, but driving a userspace fake
-	// driver instead of a kernel service. Switched purely by the environment, so
-	// the production binary is otherwise unchanged. runSimulation returns the
-	// mock driver's exit code so a scenario's pass/fail propagates out.
-	if pipeName := os.Getenv("ZF_SIM_PIPE"); pipeName != "" {
-		os.Exit(runSimulation(pipeName))
-	}
-
-	driverName := "ZenithFence"
-	sysPath := "C:\\Dev\\driver.sys"
-	kext, err := kext_interface.CreateKextService(driverName, sysPath)
-	if err != nil {
-		log.Panicf("failed to create driver service: %s", err)
-	}
-	defer kext.Delete()
-
-	err = kext.Start(true)
-	if err != nil {
-		log.Panicf("failed to start service: %s", err)
-	}
-	defer kext.Stop(true)
-
-	file, err := kext.OpenFile(1024)
-	if err != nil {
-		log.Panicf("failed to open driver file: %s", err)
-	}
-	defer file.Close()
-
-	version, err := kext_interface.ReadVersion(file)
-	if err == nil {
-		log.Printf("Kext  version: %d.%d.%d.%d\n", version[0], version[1], version[2], version[3])
-		log.Printf("KextI version: %d.%d.%d.%d\n", kext_interface.InterfaceVersion[0], kext_interface.InterfaceVersion[1], kext_interface.InterfaceVersion[2], kext_interface.InterfaceVersion[3])
-	} else {
-		log.Printf("Error reading version: %s\n", err)
-	}
-
-	ticker := time.NewTicker(1 * time.Second)
-	go func() {
-		for range ticker.C {
-			err := kext_interface.SendGetLogsCommand(file)
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	go func() {
-		for {
-			info, err := kext_interface.RecvInfo(file)
-			if err != nil {
-				log.Printf("error reading from file %s", err)
-				return
-			}
-			handleInfo(file, info)
-		}
-	}()
-
-	fmt.Print("Press enter to exit\n")
-	input := bufio.NewScanner(os.Stdin)
-	input.Scan()
-	kext_interface.SendShutdownCommand(file)
-}
-
 // runSimulation drives the same read/verdict loop as production against a
 // userspace fake driver. When ZF_SIM_DAEMON names the `zf-sim` binary the agent
 // *loads and starts the mock driver itself* -- it spawns the daemon (which runs
-// the real driver over mock_wdk via driver_entry), opens its pipe, and stops it
+// the real driver over mock_wdk via driver_entry), opens its endpoint, and stops it
 // on exit -- mirroring how production loads and starts the kernel driver before
 // opening the device. With ZF_SIM_DAEMON unset it attaches to a daemon started
 // separately. Returns the process exit code.
@@ -117,17 +54,17 @@ func runSimulation(pipeName string) int {
 		log.Panicf("sim: failed to start mock driver: %s", err)
 	}
 
-	log.Printf("sim: opening fake driver \\\\.\\pipe\\%s", pipeName)
+	log.Printf("sim: opening fake driver %s", kext_interface.SimEndpoint(pipeName))
 	file, err := svc.OpenFile(1024)
 	if err != nil {
-		log.Panicf("sim: failed to open driver pipe: %s", err)
+		log.Panicf("sim: failed to open driver endpoint: %s", err)
 	}
 	defer file.Close()
 
 	logInterfaceVersion()
 	pumpEvents(file)
 
-	// The pipe closed because the daemon exited on its own (a scenario finished).
+	// The endpoint closed because the daemon exited on its own (a scenario finished).
 	// Reap it and propagate its pass/fail exit code.
 	code, _ := svc.Wait()
 	log.Printf("sim: mock driver exited with code %d", code)
@@ -139,10 +76,10 @@ func runSimulation(pipeName string) int {
 // debugger). The read/verdict loop is identical; only the driver's lifecycle is
 // out of the agent's hands.
 func runSimulationAttached(pipeName string) int {
-	log.Printf("sim: attaching to fake driver \\\\.\\pipe\\%s", pipeName)
-	file, err := kext_interface.OpenPipe(pipeName, 1024)
+	log.Printf("sim: attaching to fake driver %s", kext_interface.SimEndpoint(pipeName))
+	file, err := kext_interface.OpenSimConn(pipeName, 1024)
 	if err != nil {
-		log.Panicf("sim: failed to open pipe: %s", err)
+		log.Panicf("sim: failed to open driver endpoint: %s", err)
 	}
 	defer file.Close()
 
@@ -153,7 +90,7 @@ func runSimulationAttached(pipeName string) int {
 
 // pumpEvents runs the read/verdict loop shared by every simulation mode: read one
 // event, apply the verdict policy, repeat until the connection closes.
-func pumpEvents(file *kext_interface.KextFile) {
+func pumpEvents(file io.ReadWriter) {
 	for {
 		info, err := kext_interface.RecvInfo(file)
 		if err != nil {
@@ -185,7 +122,7 @@ func installInterrupt(cleanup func()) {
 
 // handleInfo applies the agent's verdict policy to one event. Shared by the
 // production and simulation paths so the decision logic is identical.
-func handleInfo(file *kext_interface.KextFile, info kext_interface.Info) {
+func handleInfo(file io.ReadWriter, info kext_interface.Info) {
 	switch info := info.(type) {
 	case *kext_interface.ConnectionV4:
 		if info.Direction == 1 {

@@ -739,13 +739,14 @@ pub fn run_loop(path: &str) -> ! {
     }
 }
 
-/// Ctrl+C handler: print the loop's running totals once, then exit. Registered by
-/// [`run_loop`] via `SetConsoleCtrlHandler` (raw FFI, like the pipe server).
-unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> i32 {
+/// Ctrl+C: print the loop's running totals once, then exit. Reached from the
+/// OS-specific hook installed by [`install_ctrl_handler`].
+fn report_and_exit() -> ! {
     let code = match LOOP_TOTAL.get() {
         Some(total) => {
             println!(
-                "\n[scenario] stopped after {} iteration(s) -- totals:",
+                "
+[scenario] stopped after {} iteration(s) -- totals:",
                 LOOP_ITERS.load(Ordering::Relaxed)
             );
             total.print();
@@ -761,7 +762,14 @@ unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> i32 {
     std::process::exit(code);
 }
 
+/// Windows: `SetConsoleCtrlHandler` (raw FFI, like the pipe server). The handler
+/// runs on its own thread, so it can report and exit directly.
+#[cfg(windows)]
 fn install_ctrl_handler() {
+    unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> i32 {
+        report_and_exit()
+    }
+
     #[link(name = "kernel32")]
     extern "system" {
         fn SetConsoleCtrlHandler(
@@ -772,6 +780,34 @@ fn install_ctrl_handler() {
     unsafe {
         SetConsoleCtrlHandler(Some(ctrl_handler), 1);
     }
+}
+
+/// Unix: a `SIGINT` handler. Printing and exiting aren't async-signal-safe, so
+/// the handler only raises a flag and a watcher thread does the reporting.
+#[cfg(unix)]
+fn install_ctrl_handler() {
+    use std::sync::atomic::AtomicBool;
+
+    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_sigint(_signum: i32) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    }
+
+    extern "C" {
+        fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+    const SIGINT: i32 = 2;
+
+    unsafe {
+        signal(SIGINT, on_sigint);
+    }
+    std::thread::spawn(|| loop {
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            report_and_exit();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
 }
 
 /// A lazy stream of records; each `next()` parses exactly one record from the

@@ -8,8 +8,9 @@
 //! traffic. Touching the network makes `dns` records non-deterministic and
 //! dependent on connectivity; a failed lookup is reported, never silently faked.
 //!
-//! The OS default resolver is read via `GetNetworkParams` (iphlpapi) -- raw FFI in
-//! the same spirit as the named-pipe server, pulling in no `windows-sys`.
+//! The OS default resolver is read via `GetNetworkParams` (iphlpapi) on Windows --
+//! raw FFI in the same spirit as the named-pipe server, pulling in no
+//! `windows-sys` -- and from `/etc/resolv.conf` on Unix.
 
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::Duration;
@@ -110,6 +111,7 @@ fn query_id(domain: &str) -> u16 {
 // the C padding, so reading `dns_server_list` lands on the bytes the API wrote.
 // The server addresses arrive as NUL-terminated ASCII (e.g. "192.168.1.1").
 
+#[cfg(windows)]
 #[repr(C)]
 struct IpAddrString {
     next: *mut IpAddrString,
@@ -118,6 +120,7 @@ struct IpAddrString {
     context: u32,
 }
 
+#[cfg(windows)]
 #[repr(C)]
 struct FixedInfo {
     host_name: [u8; 132],   // MAX_HOSTNAME_LEN + 4
@@ -131,16 +134,20 @@ struct FixedInfo {
     enable_dns: u32,
 }
 
+#[cfg(windows)]
 #[link(name = "iphlpapi")]
 extern "system" {
     fn GetNetworkParams(fixed_info: *mut FixedInfo, out_buf_len: *mut u32) -> u32;
 }
 
+#[cfg(windows)]
 const ERROR_SUCCESS: u32 = 0;
+#[cfg(windows)]
 const ERROR_BUFFER_OVERFLOW: u32 = 111;
 
 /// The machine's primary configured DNS server, or `None` if none can be read.
 /// Walks `DnsServerList`, skipping any unspecified (0.0.0.0) placeholder entry.
+#[cfg(windows)]
 fn os_default_resolver() -> Option<IpAddr> {
     unsafe {
         // First call sizes the buffer (extra servers chain inside it).
@@ -169,6 +176,20 @@ fn os_default_resolver() -> Option<IpAddr> {
         }
         None
     }
+}
+
+// ---- OS default resolver (Unix, /etc/resolv.conf) -----------------------------
+
+/// The first usable `nameserver` in `/etc/resolv.conf`, or `None` if there is
+/// none. A zone-scoped IPv6 entry (`fe80::1%eth0`) doesn't parse as `IpAddr` and
+/// is skipped.
+#[cfg(unix)]
+fn os_default_resolver() -> Option<IpAddr> {
+    let conf = std::fs::read_to_string("/etc/resolv.conf").ok()?;
+    conf.lines()
+        .filter_map(|line| line.trim().strip_prefix("nameserver"))
+        .filter_map(|rest| parse_ascii_ip(rest.trim().as_bytes()))
+        .find(|ip| !ip.is_unspecified())
 }
 
 /// Parse a NUL-terminated ASCII address string (as `GetNetworkParams` fills in).

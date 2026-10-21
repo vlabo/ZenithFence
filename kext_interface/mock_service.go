@@ -1,6 +1,3 @@
-//go:build windows
-// +build windows
-
 package kext_interface
 
 import (
@@ -12,26 +9,27 @@ import (
 )
 
 // startupGrace is how long Start waits after spawning the daemon to catch an
-// immediate death (driver_entry / registration / pipe creation failing). If the
-// daemon is still alive after this, the real "is the pipe up yet" wait is left to
-// OpenFile, whose OpenPipe retries while the server comes up.
+// immediate death (driver_entry / registration / endpoint creation failing). If the
+// daemon is still alive after this, the real "is the endpoint up yet" wait is
+// left to OpenFile, which retries while the server comes up.
 const startupGrace = 300 * time.Millisecond
 
 // MockKextService is a drop-in stand-in for KextService that is backed by the
 // userspace `zf-sim` daemon instead of a kernel driver service. The daemon loads
 // the *real* driver over the host WDK mock (mock_wdk) and runs its actual
-// driver_entry, then exposes it on a named pipe.
+// driver_entry, then exposes it on a named pipe (a Unix socket on Unix; see
+// SimConn).
 //
 // It mirrors the KextService lifecycle so the agent drives the mock exactly as it
 // drives a kernel driver:
 //
 //   - CreateMockKextService -> CreateKextService (register the driver image)
 //   - Start                 -> StartService      (kernel loads driver.sys, DriverEntry runs)
-//   - OpenFile              -> OpenFile          (open the device / pipe)
+//   - OpenFile              -> OpenFile          (open the device / endpoint)
 //   - Stop / Delete         -> Stop / Delete     (unload / deregister the driver)
 //
 // The mock "load and start" is spawning the daemon process; the OS reclaims the
-// driver, its I/O pumps and the pipe when that process exits, so Stop/Delete are
+// driver, its I/O pumps and the endpoint when that process exits, so Stop/Delete are
 // a hard process termination rather than a graceful service stop.
 type MockKextService struct {
 	pipeName   string
@@ -49,7 +47,7 @@ type MockKextService struct {
 }
 
 // CreateMockKextService prepares (but does not start) a simulated kext service
-// backed by the `zf-sim` daemon at daemonPath, reachable on \\.\pipe\<pipeName>.
+// backed by the `zf-sim` daemon at daemonPath, reachable on SimEndpoint(pipeName).
 // Any extra args are passed to the daemon; the daemon also inherits this
 // process's environment (ZF_SIM_SCENARIO, ZF_SIM_SEED, ...). Mirrors
 // CreateKextService: it validates the daemon image exists, analogous to the SCM
@@ -108,17 +106,17 @@ func (s *MockKextService) Start(wait bool) error {
 		case <-s.done:
 			return fmt.Errorf("mock driver daemon exited during startup (code %d)", s.exitCode)
 		case <-time.After(startupGrace):
-			// Still alive; OpenFile handles the pipe-available wait.
+			// Still alive; OpenFile handles the endpoint-available wait.
 		}
 	}
 	return nil
 }
 
-// OpenFile connects to the daemon's named pipe and returns a *KextFile whose
-// Read/Write behave as they do against the kernel device. OpenPipe retries while
-// the daemon finishes coming up, so Start need not block until the pipe is ready.
-func (s *MockKextService) OpenFile(readBufferSize int) (*KextFile, error) {
-	return OpenPipe(s.pipeName, readBufferSize)
+// OpenFile connects to the daemon's endpoint and returns a SimConn whose
+// Read/Write behave as they do against the kernel device. It retries while the
+// daemon finishes coming up, so Start need not block until the endpoint is ready.
+func (s *MockKextService) OpenFile(readBufferSize int) (SimConn, error) {
+	return OpenSimConn(s.pipeName, readBufferSize)
 }
 
 // Wait blocks until the daemon exits on its own (e.g. a scenario finished
@@ -136,9 +134,10 @@ func (s *MockKextService) Wait() (int, error) {
 }
 
 // Stop terminates the daemon if it is still running -- the mock analog of
-// stopping the service. The producer runs forever, so a hard TerminateProcess is
-// how the agent stops it; the OS reclaims the driver, pumps and pipe with the
-// process. Idempotent, and a no-op once the daemon has already exited. With wait
+// stopping the service. The producer runs forever, so a hard kill
+// (TerminateProcess / SIGKILL) is how the agent stops it; the OS reclaims the
+// driver, pumps and endpoint with the process (the daemon replaces a stale Unix
+// socket file on its next start). Idempotent, and a no-op once the daemon has already exited. With wait
 // set it blocks until the process is fully reaped.
 func (s *MockKextService) Stop(wait bool) error {
 	if s.cmd == nil {

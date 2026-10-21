@@ -1,0 +1,41 @@
+//! The daemon's agent-facing endpoint, one implementation per OS behind the same
+//! `PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`):
+//!
+//! * Windows: an overlapped, message-mode named pipe (`\\.\pipe\<name>`).
+//! * Unix: a stream Unix domain socket. Stream sockets don't preserve message
+//!   boundaries, so on this transport the agent prefixes each command with a
+//!   `u32` little-endian length, which restores "one command message = one
+//!   `Device::write`". The event direction stays an unframed byte stream on both.
+//!
+//! [`endpoint`] maps the logical name (`ZF_SIM_PIPE`) to the OS address. The Go
+//! side (`kext_interface/sim_conn*.go`) applies the same rule.
+
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(unix)]
+pub use unix::PipeServer;
+#[cfg(windows)]
+pub use windows::PipeServer;
+
+/// The OS address for the logical endpoint `name`.
+#[cfg(windows)]
+pub fn endpoint(name: &str) -> String {
+    format!(r"\\.\pipe\{name}")
+}
+
+/// The OS address for the logical endpoint `name`: `name` itself if it is a
+/// path (contains `/`), else `$XDG_RUNTIME_DIR/<name>.sock`, falling back to
+/// `/tmp/<name>.sock`.
+#[cfg(unix)]
+pub fn endpoint(name: &str) -> String {
+    if name.contains('/') {
+        return name.to_string();
+    }
+    match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(dir) if !dir.is_empty() => format!("{}/{name}.sock", dir.trim_end_matches('/')),
+        _ => format!("/tmp/{name}.sock"),
+    }
+}

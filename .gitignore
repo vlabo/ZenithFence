@@ -408,3 +408,6 @@ driver/fuzz/corpus
 # parsers — see protocol-test.yml).
 kext_interface/go_command_test.bin
 protocol/rust_info_test.bin
+
+# Unix build of the Go agent (`just sim-build`); the Windows one is covered by *.exe.
+/kext_tester/kext_tester

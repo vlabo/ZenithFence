@@ -6,10 +6,9 @@ edition = "2021"
 
 # Real-world userspace simulation harness. A host binary that loads the *real*
 # driver over `mock_wdk` (via `driver::sim::Simulation`) and exposes it on a
-# Windows named pipe so the real Go agent can connect to it exactly as it would
-# to the kernel device. Windows-only by design (named pipes + the agent's
-# Windows transport). The libFuzzer targets under driver/fuzz remain the
-# cross-platform coverage path and are untouched.
+# Windows named pipe (or, on Unix, a Unix domain socket) so the real Go agent
+# can connect to it exactly as it would to the kernel device. The libFuzzer
+# targets under driver/fuzz remain the coverage-guided path and are untouched.
 
 [[bin]]
 name = "zf-sim"
