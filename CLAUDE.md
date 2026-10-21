@@ -53,6 +53,7 @@ cd kext_interface && go test -run <TestName>
 | `driver/` | Rust (`no_std`) | Kernel driver core library — WFP callouts, packet decisions, I/O with user space |
 | `driver/kernel/` | Rust (`no_std`) | Production build root — the only crate that produces the shipped `driver.lib` (allocator, panic handler, `DriverEntry` export); links `driver` against the real `wdk` only. Keep it free of logic |
 | `mock/` | Rust (host) | Test-only: the real `driver/src` compiled against `mock/wdk` (a host mock of the Windows kernel API) as `mock/driver`; `mock/harness` (loader, callout/command fuzzing API, in-process sim, property tests); `mock/fuzz` (cargo-fuzz targets). Nothing in `driver/` or `wdk/` refers to it |
+| `sim/` | Rust (host) | `zf-sim` daemon: loads the real driver through `mock/harness` and serves it on a named pipe (Unix socket on Linux/macOS) so the real Go agent can drive it; random traffic or CBOR scenarios (`just sim-run`, `just sim-scenario`) |
 | `protocol/` | Rust | Shared serialization of commands (user→kernel) and info events (kernel→user) |
 | `wdk/` | Rust (unsafe) | Thin wrappers over Windows kernel APIs (NDIS, WFP, IRP, etc.) |
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |

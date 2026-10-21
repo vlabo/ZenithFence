@@ -1,0 +1,9 @@
+go 1.20
+
+// Build kext_tester against the local kext_interface (incl. pipe_connection.go)
+// instead of the pinned remote pseudo-version in kext_tester/go.mod. Required by
+// the real-world simulation harness (see sim/ and the Justfile `sim-*` recipes).
+use (
+	./kext_interface
+	./kext_tester
+)
