@@ -44,7 +44,7 @@ pub enum Packet {
 /// only ever runs on the thread holding the `filter_reset_queue` drain claim, and the teardown
 /// runs from `shutdown`. WFP itself rejects overlapping transactions with
 /// `STATUS_FWP_TXN_IN_PROGRESS`, which both paths retry on.
-pub(crate) struct FilterEngineCell {
+pub struct FilterEngineCell {
     inner: core::cell::UnsafeCell<FilterEngine>,
 }
 
@@ -60,7 +60,7 @@ impl FilterEngineCell {
 
     /// Runs `f` with mutable access to the filter engine. Must only be called at PASSIVE_LEVEL,
     /// from the paths described on the type, and never re-entered from within `f`.
-    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
+    pub fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
         // SAFETY: see the type documentation.
         f(unsafe { &mut *self.inner.get() })
     }
@@ -71,12 +71,12 @@ pub struct Device {
     // The device-facing API is `&self` (see `get_device`) so producer (callout)
     // and consumer (read) threads can share one `&Device` soundly. Every field
     // is interior-mutable; the filter engine through `FilterEngineCell`.
-    pub(crate) filter_engine: FilterEngineCell,
+    pub filter_engine: FilterEngineCell,
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) event_queue: IOQueue<Info>,
-    pub(crate) packet_cache: IdCache,
-    pub(crate) connection_cache: ConnectionCache,
-    pub(crate) injector: Injector,
+    pub packet_cache: IdCache,
+    pub connection_cache: ConnectionCache,
+    pub injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
     /// Connections that were deferred without a completion handle and are waiting for the filter
     /// reset that releases them. See `reset_filters_and_inject`.

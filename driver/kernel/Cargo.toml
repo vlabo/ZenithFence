@@ -20,5 +20,5 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-driver = { path = "..", default-features = false, features = ["real_wdk"] }
+driver = { path = ".." }
 wdk = { path = "../../wdk" }

@@ -3,21 +3,26 @@
 
 extern crate alloc;
 
-mod ale_callouts;
+// The modules marked `pub` are the driver's public API: the callout entry
+// points, the device and its caches, the packet helpers. The kernel image
+// (kernel/) only needs `driver_entry`; the rest is public so the host test
+// harness (mock/harness) can drive and observe the very same code over the
+// mock WDK.
+pub mod ale_callouts;
 mod array_holder;
 pub mod mpsc_queue;
 mod callouts;
 mod common;
-mod connection;
-mod connection_cache;
+pub mod connection;
+pub mod connection_cache;
 mod rcu_port;
-mod device;
-mod entry;
+pub mod device;
+pub mod entry;
 mod filter_reset_queue;
-mod id_cache;
+pub mod id_cache;
 pub mod logger;
-mod packet_callouts;
-mod packet_util;
+pub mod packet_callouts;
+pub mod packet_util;
 
 // The driver entry point. The production build root (kernel/) exports it as
 // `DriverEntry`.

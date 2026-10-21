@@ -467,6 +467,12 @@ impl ConnectionCache {
     }
 }
 
+impl Default for ConnectionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for ConnectionCache {
     fn drop(&mut self) {
         // Clear the cache

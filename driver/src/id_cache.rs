@@ -76,12 +76,24 @@ impl IdCache {
         return values.len();
     }
 
+    /// Ids of the packets currently waiting for a verdict, oldest first.
+    pub fn pending_ids(&self) -> alloc::vec::Vec<u64> {
+        let values = self.values.read_lock();
+        return values.iter().map(|entry| entry.id).collect();
+    }
+
     pub fn pop_all(&self) -> VecDeque<Entry<(Key, Packet)>> {
         let mut new_values = VecDeque::with_capacity(1);
         let mut values = self.values.write_lock();
         mem::swap(&mut *values, &mut new_values);
 
         return new_values;
+    }
+}
+
+impl Default for IdCache {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -10,6 +10,8 @@ name = "driver"
 path = "src/lib.rs"
 # A plain Rust library. The shipped driver.lib is produced by kernel/ (the
 # production build root), which links this crate against the real `wdk`.
+# mock/driver compiles these same sources against a host mock of `wdk` for
+# testing; keep its dependency list in sync with this one.
 
 [profile.dev]
 panic = "abort"
@@ -17,13 +19,8 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
-[features]
-# Production build (default): link the real kernel `wdk` + windows-sys.
-default = ["real_wdk"]
-real_wdk = ["dep:wdk", "dep:windows-sys"]
-
 [dependencies]
-wdk = { path = "../wdk", optional = true }
+wdk = { path = "../wdk" }
 protocol = { path = "../protocol" }
 num = { version = "0.4", default-features = false }
 num-derive = { version = "0.5", default-features = false }
@@ -34,5 +31,4 @@ smoltcp = { version = "0.13", default-features = false, features = ["proto-ipv4"
 [dependencies.windows-sys]
 git = "https://github.com/microsoft/windows-rs"
 rev = "41ad38d8c42c92fd23fe25ba4dca76c2d861ca06"
-optional = true
 features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Security", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_WindowsProgramming", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_WindowsFilteringPlatform"]
