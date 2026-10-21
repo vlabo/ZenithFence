@@ -26,6 +26,8 @@ just test
 just test-protocol          # Rust serialization tests (protocol/)
 just test-kext-interface    # Go parsing tests (kext_interface/)
 just kext-interface-gen     # Regenerate binary test fixtures
+just test-mock              # Real driver over the mock WDK (mock/): unit, property, harness tests
+just fuzz-replay callouts   # Fuzz-target smoke loop (Windows); `just fuzz <target>` on Linux
 
 # One-time: generate test signing certificate
 just generate-cert
@@ -34,7 +36,7 @@ just generate-cert
 To run a single Rust test:
 ```bash
 cd protocol && cargo test <test_name>
-cd driver   && cargo test <test_name>
+cd mock     && cargo test <test_name>   # driver tests, over the mock WDK
 ```
 
 To run a single Go test:
@@ -50,6 +52,7 @@ cd kext_interface && go test -run <TestName>
 |-----------|----------|------|
 | `driver/` | Rust (`no_std`) | Kernel driver core library — WFP callouts, packet decisions, I/O with user space |
 | `driver/kernel/` | Rust (`no_std`) | Production build root — the only crate that produces the shipped `driver.lib` (allocator, panic handler, `DriverEntry` export); links `driver` against the real `wdk` only. Keep it free of logic |
+| `mock/` | Rust (host) | Test-only: the real `driver/src` compiled against `mock/wdk` (a host mock of the Windows kernel API) as `mock/driver`; `mock/harness` (loader, callout/command fuzzing API, in-process sim, property tests); `mock/fuzz` (cargo-fuzz targets). Nothing in `driver/` or `wdk/` refers to it |
 | `protocol/` | Rust | Shared serialization of commands (user→kernel) and info events (kernel→user) |
 | `wdk/` | Rust (unsafe) | Thin wrappers over Windows kernel APIs (NDIS, WFP, IRP, etc.) |
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |

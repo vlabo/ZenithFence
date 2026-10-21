@@ -407,3 +407,8 @@ release/config.json
 # parsers — see protocol-test.yml).
 kext_interface/go_command_test.bin
 protocol/rust_info_test.bin
+
+# Mock driver (mock/): fuzz corpus and crash artifacts are local; the replay
+# runner source must stay tracked despite the Visual Studio `[Bb]in/` rule above.
+mock/fuzz/corpus
+!mock/fuzz/src/bin/
