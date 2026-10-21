@@ -33,9 +33,45 @@ pub enum Packet {
     AleLayer(ClassifyDefer),
 }
 
+/// Gives `&self` access to the `FilterEngine`, which needs `&mut` for its WFP transactions.
+///
+/// It cannot sit behind the `rw_spin_lock::Mutex` like the rest of the shared state: acquiring
+/// that raises the IRQL to DISPATCH_LEVEL, while the filter engine calls (`FwpmTransaction*`,
+/// filter and callout (un)registration) must run at PASSIVE_LEVEL, and the reset and teardown
+/// paths wait between attempts (`wdk::utils::sleep_ms` refuses to above APC_LEVEL).
+///
+/// In the kernel build the mutable access is serialized by the driver instead: a filter reset
+/// only ever runs on the thread holding the `filter_reset_queue` drain claim, and the teardown
+/// runs from `shutdown`. WFP itself rejects overlapping transactions with
+/// `STATUS_FWP_TXN_IN_PROGRESS`, which both paths retry on.
+pub(crate) struct FilterEngineCell {
+    inner: core::cell::UnsafeCell<FilterEngine>,
+}
+
+// See the type documentation for how access is serialized.
+unsafe impl Sync for FilterEngineCell {}
+
+impl FilterEngineCell {
+    fn new(filter_engine: FilterEngine) -> Self {
+        Self {
+            inner: core::cell::UnsafeCell::new(filter_engine),
+        }
+    }
+
+    /// Runs `f` with mutable access to the filter engine. Must only be called at PASSIVE_LEVEL,
+    /// from the paths described on the type, and never re-entered from within `f`.
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
+        // SAFETY: see the type documentation.
+        f(unsafe { &mut *self.inner.get() })
+    }
+}
+
 // Device Context
 pub struct Device {
-    pub(crate) filter_engine: FilterEngine,
+    // The device-facing API is `&self` (see `get_device`) so producer (callout)
+    // and consumer (read) threads can share one `&Device` soundly. Every field
+    // is interior-mutable; the filter engine through `FilterEngineCell`.
+    pub(crate) filter_engine: FilterEngineCell,
     pub(crate) read_leftover: ArrayHolder,
     pub(crate) event_queue: IOQueue<Info>,
     pub(crate) packet_cache: IdCache,
@@ -65,7 +101,7 @@ impl Device {
         }
 
         Ok(Self {
-            filter_engine,
+            filter_engine: FilterEngineCell::new(filter_engine),
             read_leftover: ArrayHolder::default(),
             event_queue: IOQueue::new(),
             packet_cache: IdCache::new(),
@@ -87,7 +123,7 @@ impl Device {
     /// Cleanup is called just before drop.
     // pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&mut self, read_request: &mut ReadRequest, info: Info) {
+    fn write_buffer(&self, read_request: &mut ReadRequest, info: Info) {
         let bytes = info.as_bytes();
         let count = read_request.write(bytes);
 
@@ -99,7 +135,7 @@ impl Device {
     }
 
     /// Called when handle. Read is called from user-space.
-    pub fn read(&mut self, read_request: &mut ReadRequest) {
+    pub fn read(&self, read_request: &mut ReadRequest) {
         if let Some(data) = self.read_leftover.load() {
             // There are leftovers from previous request.
             let count = read_request.write(&data);
@@ -144,12 +180,12 @@ impl Device {
     }
 
     // Called when handle.Write is called from user-space.
-    pub fn write(&mut self, write_request: &mut WriteRequest) {
+    pub fn write(&self, write_request: &mut WriteRequest) {
         // Try parsing the command.
         let mut buffer = write_request.get_buffer();
         let command = protocol::command::parse_type(buffer);
         let Some(command) = command else {
-            err!("Unknown command number: {}", buffer[0]);
+            err!("unknown or empty command ({} bytes)", buffer.len());
             return;
         };
 
@@ -164,7 +200,10 @@ impl Device {
                 self.shutdown();
             }
             CommandType::Verdict => {
-                let verdict = protocol::command::parse_verdict(buffer);
+                let Some(verdict) = protocol::command::parse_verdict(buffer) else {
+                    err!("verdict command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
@@ -207,7 +246,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV4 => {
-                let update = protocol::command::parse_update_v4(buffer);
+                let Some(update) = protocol::command::parse_update_v4(buffer) else {
+                    err!("updateV4 command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -229,7 +271,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV6 => {
-                let update = protocol::command::parse_update_v6(buffer);
+                let Some(update) = protocol::command::parse_update_v6(buffer) else {
+                    err!("updateV6 command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -258,7 +303,10 @@ impl Device {
                 self.reset_filters_and_inject(None);
             }
             CommandType::GetConnectionsUpdate => {
-                let update = protocol::command::parse_update_info(buffer);
+                let Some(update) = protocol::command::parse_update_info(buffer) else {
+                    err!("getConnectionsUpdate command too short ({} bytes)", buffer.len());
+                    return;
+                };
                 let timestamp = update.timestamp;
                 wdk::dbg!("GetConnectionsUpdate command");
 
@@ -422,8 +470,6 @@ impl Device {
                     _ = self.event_queue.push(info);
                 }
 
-                conn_v4.clear();
-
                 // Process ended ipv6 connections
                 for conn in conn_v6.iter() {
                     let info = protocol::info::connection_end_event_v6_info(
@@ -441,7 +487,6 @@ impl Device {
                     );
                     _ = self.event_queue.push(info);
                 }
-                conn_v6.clear();
             }
         }
     }
@@ -452,12 +497,12 @@ impl Device {
     /// Reachable from the shutdown command (write and device-control) and from the unload path,
     /// and safe to call more than once: the one-time part runs once, the rest runs on every call
     /// so anything that raced in afterwards is still resolved.
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         if !self.shutdown_started.swap(true, Ordering::SeqCst) {
             // Remove the filters before anything else. Once they are gone no new classify call can
             // reach the callouts, so no new connection can be pended while the teardown runs. The
             // flag set above covers the classify calls that are already in flight.
-            if let Err(err) = self.filter_engine.unregister_filters() {
+            if let Err(err) = self.filter_engine.with(|fe| fe.unregister_filters()) {
                 err!("failed to unregister filters on shutdown: {}", err);
             }
 
@@ -471,7 +516,7 @@ impl Device {
         // Nothing is pended anymore, so the callouts can be removed. This has to happen here and
         // not be left to the filter engine being dropped: unregistering a callout fails while an
         // operation is still pended on it, and the drop has no way to complete one.
-        if let Err(err) = self.filter_engine.unregister_callouts() {
+        if let Err(err) = self.filter_engine.with(|fe| fe.unregister_callouts()) {
             err!("failed to unregister callouts on shutdown: {}", err);
         }
     }
@@ -481,7 +526,7 @@ impl Device {
     /// IRP can never be completed, the thread that owns it never leaves kernel mode, and its
     /// process can no longer be terminated. Everything is resolved with a verdict here so the
     /// callouts can be unregistered cleanly.
-    fn complete_pending_packets(&mut self) {
+    fn complete_pending_packets(&self) {
         for _ in 0..10 {
             // Wait before every pass, including the first one, so a classify that was still on its
             // way to pend_operation when the filters were removed has time to land in the cache.
@@ -508,7 +553,7 @@ impl Device {
         }
     }
 
-    pub fn inject_packet(&mut self, packet: Packet, blocked: bool) -> Result<(), String> {
+    pub fn inject_packet(&self, packet: Packet, blocked: bool) -> Result<(), String> {
         match packet {
             Packet::PacketLayer(nbl, inject_info) => {
                 if !blocked {
@@ -558,7 +603,7 @@ impl Device {
     ///
     /// Reports failures through the log rather than to the caller: a reset serves a whole batch, so
     /// a failed one is not attributable to the connection that happened to trigger it.
-    fn reset_filters_and_inject(&mut self, pending: PendingReset) {
+    fn reset_filters_and_inject(&self, pending: PendingReset) {
         if !self.filter_reset_queue.push_and_claim(pending) {
             return;
         }
@@ -577,7 +622,7 @@ impl Device {
                 return;
             };
 
-            match self.filter_engine.reset_all_filters() {
+            match self.filter_engine.with(|fe| fe.reset_all_filters()) {
                 Ok(()) => {
                     attempts = 0;
                     let len = batch.len();

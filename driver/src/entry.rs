@@ -9,9 +9,12 @@ use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
+// Global device pointer. `get_device` hands out a shared `&'static` so callout
+// and read/write threads can share one device soundly (every `Device` field is
+// interior-mutable).
 static mut DEVICE: *mut device::Device = core::ptr::null_mut();
-pub fn get_device() -> Option<&'static mut device::Device> {
-    return unsafe { DEVICE.as_mut() };
+pub fn get_device() -> Option<&'static device::Device> {
+    return unsafe { DEVICE.as_ref() };
 }
 
 // DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
@@ -49,7 +52,7 @@ pub extern "system" fn driver_entry(
             Ok(device) => Box::new(device),
             Err(err) => {
                 wdk::err!("filed to initialize device: {}", err);
-                return -1;
+                return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
             }
         };
         DEVICE = Box::into_raw(device);

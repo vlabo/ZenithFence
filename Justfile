@@ -28,10 +28,10 @@ test-protocol:
 
 [working-directory: './kext_interface']
 test-kext-interface:
-	go test -run TestRustInfoFile
+	go test -run 'TestRustInfoFile|TestInfoDiffFile'
 
 [working-directory: './kext_interface']
 kext-interface-gen:
-	go test -run TestGenerateCommandFile
+	go test -run 'TestGenerateCommandFile|TestGenerateCommandDiff'
 
 test: kext-interface-gen test-protocol test-kext-interface
