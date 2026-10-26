@@ -11,3 +11,4 @@ mock/fuzz
 protocol/*.bin
 sim/python/zfsim/_native.*
 sim/docker/.env
+!sim/python/zfsim/_native.pyi

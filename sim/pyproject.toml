@@ -1,5 +1,36 @@
-# Tool configuration for the zfsim Python package (sim/python/zfsim) and its
-# scripts and tests. The extension itself is built by build.py, not from here.
+# The zfsim Python package (sim/python/zfsim) and its tool configuration.
+#
+# Wheels: `just sim-wheels` (sim/docker/wheels.Dockerfile) builds the Windows,
+# Linux and macOS x86_64 wheels with maturin; CI attaches them to each GitHub
+# release. Day-to-day development builds the extension with build.py instead
+# (`just sim-build`), which needs no maturin.
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "zfsim"
+# Set from the release tag / kext_interface/version.txt when wheels are built.
+version = "0.0.0"
+description = "The ZenithFence driver over a mock Windows kernel, driven from Python and served to a real agent"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Typing :: Typed",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "zfsim._native"
+# A dev build (build.py) leaves the extension of the host OS in the package
+# directory; it must not ride along in a wheel for another platform.
+exclude = ["python/zfsim/_native.pyd", "python/zfsim/_native.so", "python/zfsim/__pycache__/**"]
 
 [tool.ruff]
 line-length = 110

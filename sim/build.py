@@ -1,6 +1,7 @@
 """Build the `zfsim._native` extension and place it in python/zfsim/.
 
     python sim/build.py [--release]
+    python sim/build.py --version     # print the wheel version, see driver_version()
 
 Plain cargo + copy, so no maturin is needed: the cdylib is just a renamed
 Python extension (`_native.pyd` on Windows, `_native.so` elsewhere; the module
@@ -14,7 +15,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def driver_version() -> str:
+    """The driver version from kext_interface/version.txt (`[2, 0, 2, 0]`) as a
+    wheel version: `2.0.2`, keeping the fourth number only when it is set."""
+    text = (HERE.parent / "kext_interface" / "version.txt").read_text()
+    parts = [int(n) for n in text.strip().strip("[]").split(",")]
+    if len(parts) == 4 and parts[3] == 0:
+        parts = parts[:3]
+    return ".".join(map(str, parts))
+
+
 def main() -> int:
+    if "--version" in sys.argv[1:]:
+        print(driver_version())
+        return 0
     release = "--release" in sys.argv[1:]
     cmd = ["cargo", "build", "--manifest-path", str(HERE / "Cargo.toml")]
     if release:

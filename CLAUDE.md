@@ -32,6 +32,7 @@ just test-kext-interface    # Go parsing tests (kext_interface/)
 just kext-interface-gen     # Regenerate binary test fixtures
 just test-driver            # The driver's own unit tests, built for the host over the mock WDK
 just sim-test               # Python scenario tests (sim/): the mock driver served to a PipeAgent / kext_tester
+just sim-wheels             # zfsim wheels for Windows/Linux/macOS into sim/dist/ (Docker); CI attaches them to each release
 
 # Regenerate the LLM reference files in docs/LLMs/
 just gen-llm-docs

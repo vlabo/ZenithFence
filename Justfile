@@ -68,6 +68,14 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 sim-build *args:
 	{{python}} ./sim/build.py {{args}}
 
+# All in Docker (sim/docker/wheels.Dockerfile); CI does the same for each GitHub
+# release. `version` defaults to the driver version (kext_interface/version.txt).
+#   just sim-wheels
+#   just sim-wheels 2.0.3rc1
+# Build the zfsim wheels for Windows, Linux and macOS (x86_64) into sim/dist/.
+sim-wheels version=`python ./sim/build.py --version`:
+	docker build -f ./sim/docker/wheels.Dockerfile --build-arg VERSION={{version}} --target wheels --output type=local,dest=./sim/dist .
+
 # Build the Go test agent. The repo-root go.work makes it build against the
 # local kext_interface (incl. the sim transports).
 [windows]

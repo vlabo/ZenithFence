@@ -6,10 +6,10 @@ edition = "2021"
 
 # The Python extension module `zfsim._native`: the *real* driver over the mock
 # WDK (loaded through `driver_harness`, see mock/), driven from Python through
-# plain function calls. Scripts inject traffic, act as the agent or serve the
-# driver to the real Go agent on a named pipe (a Unix socket on Linux/macOS),
-# and assert on what happens. Built by `just sim-py-build` (build.py), which
-# copies the cdylib into python/zfsim/. Own cargo root like the other crates, so
+# plain function calls. Scripts inject traffic and serve the driver to a real
+# agent on a named pipe (a Unix socket on Linux/macOS), and assert on what
+# happens. Built by `just sim-build` (build.py), which copies the cdylib into
+# python/zfsim/; release wheels by `just sim-wheels` (maturin, see pyproject.toml). Own cargo root like the other crates, so
 # its (pyo3) dependencies stay out of the driver build.
 
 [lib]
@@ -18,7 +18,9 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.30", features = ["abi3-py39", "extension-module"] }
+# generate-import-lib: link against python3.dll without a Windows Python
+# install, so the Windows wheel cross-builds in the wheels container.
+pyo3 = { version = "0.30", features = ["abi3-py39", "extension-module", "generate-import-lib"] }
 driver_harness = { package = "driver-harness", path = "../mock/harness" }
 # The user-space connection type and its status constants. This resolves to the
 # same `mock_wdk` instance the driver links, so `DriverConnection` matches.

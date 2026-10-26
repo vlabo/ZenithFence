@@ -12,15 +12,35 @@ python script ── import zfsim ──▶ _native (PyO3, src/lib.rs) ─▶ mo
                                 pipe / Unix socket ◀──▶ agent (nexufend, kext_tester, PipeAgent)
 ```
 
+## Install
+
+Every GitHub release carries a wheel per platform (Windows, Linux and macOS,
+x86_64), for any CPython 3.9+. Install the one for your OS:
+
+```bash
+pip install https://github.com/vlabo/ZenithFence/releases/download/v2.0.3/zfsim-2.0.3-cp39-abi3-win_amd64.whl
+```
+
+The file names are `zfsim-<version>-cp39-abi3-<platform>.whl` with platform
+`win_amd64`, `manylinux_2_17_x86_64.manylinux2014_x86_64` or
+`macosx_10_12_x86_64`. Nothing else is needed: the driver, the mock kernel and
+the harness are compiled into the wheel.
+
 ## Build and test
 
 ```bash
-just sim-build      # cargo build + copy to python/zfsim/_native.pyd (.so)
+just sim-build      # dev build: cargo build + copy to python/zfsim/_native.pyd (.so)
 just sim-test       # builds the extension and kext_tester, runs tests/
+just sim-wheels     # all three release wheels into sim/dist/, built in Docker
 ```
 
-No maturin and no install step: put `sim/python` on `PYTHONPATH`. The module
-uses the stable ABI, so any Python 3.9+ works.
+For development there is no install step: put `sim/python` on `PYTHONPATH`.
+`just sim-wheels` needs only Docker (sim/docker/wheels.Dockerfile cross-builds
+every platform on Linux with maturin, zig and cargo-xwin) and takes an optional
+version, defaulting to the driver's (`kext_interface/version.txt`). CI runs the
+same build on each published release (`.github/workflows/zfsim-wheels.yml`),
+tests the Windows and Linux wheels from a clean install, and attaches all three
+to the release.
 
 ## A scenario
 
