@@ -382,9 +382,14 @@ pub fn connection_update_event_v6_info(
     info
 }
 
-// connection_update_end_info signals the end of connection updates.
-pub fn connection_update_end_info() -> Info {
-    let info = Info::new(InfoType::ConnectionUpdateEnd, 0);
+// connection_update_end_info signals the end of connection updates. `timestamp` is the
+// driver's clock when the update was taken; user space passes it back unchanged with the
+// next GetConnectionsUpdate request.
+pub fn connection_update_end_info(timestamp: u64) -> Info {
+    let size = get_combined_size!(timestamp);
+    let mut info = Info::new(InfoType::ConnectionUpdateEnd, size);
+    let vec = &mut info.0;
+    push_bytes!(vec, timestamp);
     info
 }
 
@@ -542,7 +547,7 @@ fn generate_test_info_file() -> Result<(), std::io::Error> {
                 info.0
             }
             InfoType::ConnectionUpdateEnd => {
-                let info = connection_update_end_info();
+                let info = connection_update_end_info(1);
                 info.assert_size();
                 info.0
             }

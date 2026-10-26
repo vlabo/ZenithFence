@@ -307,12 +307,20 @@ impl Device {
                     err!("getConnectionsUpdate command too short ({} bytes)", buffer.len());
                     return;
                 };
-                let timestamp = update.timestamp;
+                // Report the connections that saw traffic since the previous update. The
+                // request carries the timestamp the driver sent in that update's end event
+                // (0 for the first); user space stores it without interpreting it. Ended
+                // connections are left out: their end event already carried the final
+                // counters, and the agent has dropped them.
+                let since = update.timestamp;
+                // Taken before the walk, and `since` is inclusive: a connection touched
+                // while the walk runs is reported again next time rather than missed.
+                let now = wdk::utils::get_system_timestamp_ms();
                 wdk::dbg!("GetConnectionsUpdate command");
 
                 let send_event_v4 = |conn: &ConnectionV4| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
+                    if conn.has_ended() || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since {
                         return;
                     }
 
@@ -332,7 +340,7 @@ impl Device {
 
                 let send_event_v6 = |conn: &ConnectionV6| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.last_accessed_timestamp.load(Ordering::SeqCst) > timestamp {
+                    if conn.has_ended() || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since {
                         return;
                     }
 
@@ -357,7 +365,7 @@ impl Device {
 
                 _ = self
                     .event_queue
-                    .push(protocol::info::connection_update_end_info());
+                    .push(protocol::info::connection_update_end_info(now));
             }
             CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");

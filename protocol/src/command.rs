@@ -56,6 +56,8 @@ pub struct UpdateV6 {
 #[repr(C, packed)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct ConnectionsUpdate {
+    /// Opaque driver timestamp from the `ConnectionUpdateEnd` event of the previous
+    /// update (0 for the first): connections active since then are reported.
     pub timestamp: u64,
 }
 
