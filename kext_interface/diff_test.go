@@ -110,7 +110,7 @@ func TestInfoDiffFile(t *testing.T) {
 			t.Fatalf("record %d: %s", i, err)
 		}
 
-		switch i % 6 {
+		switch i % 7 {
 		case 0:
 			v, ok := info.(*ConnectionEndV4)
 			if !ok {
@@ -217,6 +217,14 @@ func TestInfoDiffFile(t *testing.T) {
 				t.Fatalf("record %d ConnectionV6 header mismatch: %+v", i, v)
 			}
 			checkPayload(t, i, v.Payload)
+		case 6:
+			v, ok := info.(*ConnectionUpdateEnd)
+			if !ok {
+				t.Fatalf("record %d: expected *ConnectionUpdateEnd, got %T", i, info)
+			}
+			if v.Timestamp != diffMix(i, 0) {
+				t.Fatalf("record %d ConnectionUpdateEnd: got %d want %d", i, v.Timestamp, diffMix(i, 0))
+			}
 		}
 		i++
 	}

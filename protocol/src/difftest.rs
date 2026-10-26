@@ -22,7 +22,8 @@ use crate::command::{
 };
 use crate::info::{
     connection_end_event_v4_info, connection_end_event_v6_info, connection_info_v4,
-    connection_info_v6, connection_update_event_v4_info, connection_update_event_v6_info,
+    connection_info_v6, connection_update_end_info, connection_update_event_v4_info,
+    connection_update_event_v6_info,
 };
 
 const COMMAND_DIFF_FILE: &str = "../kext_interface/go_command_diff.bin";
@@ -69,7 +70,7 @@ fn diff_payload(i: u32) -> Vec<u8> {
 fn generate_info_diff_file() {
     let mut file = File::create(INFO_DIFF_FILE).expect("create info_diff.bin");
     for i in 0..INFO_RECORDS {
-        let info = match i % 6 {
+        let info = match i % 7 {
             0 => connection_end_event_v4_info(
                 diff_mix(i, 0),
                 diff_mix(i, 1) as u8,
@@ -133,7 +134,7 @@ fn generate_info_diff_file() {
                     &payload,
                 )
             }
-            _ => {
+            5 => {
                 let payload = diff_payload(i);
                 connection_info_v6(
                     diff_mix(i, 0),
@@ -148,6 +149,7 @@ fn generate_info_diff_file() {
                     &payload,
                 )
             }
+            _ => connection_update_end_info(diff_mix(i, 0)),
         };
         file.write_all(info.as_bytes()).expect("write info record");
     }

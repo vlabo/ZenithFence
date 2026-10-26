@@ -171,10 +171,12 @@ pub fn build_info(
         _ => (0, 0),
     };
 
-    let payload_layer = if ale_layer {
-        4 // Transport layer
-    } else {
-        3 // Network layer
+    // Where the payload starts. Outbound ALE hands over the packet from its
+    // transport header; inbound ALE is cloned after retreating over the IP and
+    // transport headers (ale_callouts), and the packet layers see the IP header.
+    let payload_layer = match (ale_layer, direction) {
+        (true, Direction::Outbound) => 4, // Transport layer
+        _ => 3,                           // Network layer
     };
 
     let mut payload = &[][..];
