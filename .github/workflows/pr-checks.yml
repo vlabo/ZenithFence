@@ -19,6 +19,11 @@ jobs:
         with:
           go-version: stable
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Install just
         uses: taiki-e/install-action@v2
         with:
@@ -31,15 +36,14 @@ jobs:
       #   - kext-interface-gen   (regenerate Go command fixture)
       #   - test-protocol        (Rust protocol parsers + bounds regression tests)
       #   - test-kext-interface  (Go <-> Rust differential on the .bin fixtures)
-      #   - test-mock            (the real driver over the mock WDK: property tests + harness)
+      #   - test-driver          (the driver's own unit tests, over the mock WDK)
       # None of these need the WDK / a kernel.
       - name: Run tests
         run: just test
 
-  # End-to-end simulation on Linux: the real driver over mock_wdk in the zf-sim
-  # daemon, driven by the real Go agent over a Unix domain socket. The agent
-  # spawns the daemon and exits with its pass/fail code. mixed_v4v6_parallel has
-  # no `dns` op, so the run stays offline and deterministic.
+  # Simulation on Linux: the scenario tests in sim/tests, the real driver over
+  # mock_wdk driven from Python in-process, with agents (PipeAgent and the Go
+  # test agent) attached over a Unix socket.
   sim-linux:
     runs-on: ubuntu-latest
     steps:
@@ -53,6 +57,11 @@ jobs:
         with:
           go-version: stable
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Install just
         uses: taiki-e/install-action@v2
         with:
@@ -63,10 +72,5 @@ jobs:
         with:
           workspaces: sim
 
-      - name: Sim unit tests
-        run: just sim-test
-
-      - name: Replay scenario end-to-end
-        run: |
-          just sim-emit-samples
-          timeout 300 just sim-scenario ./sim/scenarios/mixed_v4v6_parallel.cbor
+      - name: Scenario tests
+        run: timeout 300 just sim-test

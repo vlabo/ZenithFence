@@ -6,254 +6,495 @@
 
 ---
 
-## `sim/src/dns.rs`
+## `sim/src/lib.rs`
 
-Live DNS resolution for the high-level `dns` scenario op.
-Unlike the rest of the harness -- which fabricates packets so a run stays
-offline and reproducible -- this module performs a REAL DNS query against the
-machine's default resolver (or an explicit one) and hands back the actual
-query and response datagrams that crossed the socket. The `dns` op feeds those
-real bytes to the driver's callouts, so a domain-aware policy sees genuine DNS
-traffic. Touching the network makes `dns` records non-deterministic and
-dependent on connectivity; a failed lookup is reported, never silently faked.
-The OS default resolver is read via `GetNetworkParams` (iphlpapi) on Windows --
-raw FFI in the same spirit as the named-pipe server, pulling in no
-`windows-sys` -- and from `/etc/resolv.conf` on Unix.
+`zfsim._native`: the real ZenithFence driver (over the mock WDK) loaded
+in-process and driven from Python through plain function calls.
+This crate is only the interface: scenarios, traffic, seeds and assertions
+live in Python scripts. A [`Sim`] owns the one global driver and serves it on
+the agent's named pipe / Unix socket (`serve()`); the agent is always a real
+one connected there. The pumps tee the events the agent receives and the
+commands it sends into queues the script reads.
+Traffic is injected through the driver's callout entry points (`ale_connect`,
+`packet`, ...), exactly like the OS would. The wire protocol never reaches
+Python: events are decoded by `driver_harness::sim`.
 
 ### Constants & statics
 
-Per-attempt timeout waiting for the resolver to answer.
+Whether a [`Sim`] currently holds the driver (it is a process-wide global).
 
 ```rust
-const RECV_TIMEOUT: Duration = Duration::from_secs(2);
-```
-
-How many times to (re)send the query before giving up.
-
-```rust
-const ATTEMPTS: usize = 2;
+static OPEN: AtomicBool = AtomicBool::new(false);
 ```
 
 ```rust
-#[cfg(windows)]
-const ERROR_SUCCESS: u32 = ...;
-```
-
-```rust
-#[cfg(windows)]
-const ERROR_BUFFER_OVERFLOW: u32 = ...;
+const COMMAND_NAMES: [&str; 9] = ...;
 ```
 
 ### Types
 
-#### `Resolution`
-
-A completed lookup: the server actually queried, the first address of the
-requested family (if the reply carried one), and the raw query/response
-datagrams exactly as they went over the wire.
+#### `Queue`
 
 ```rust
-pub struct Resolution {
-    pub resolver: IpAddr,
-    pub resolved: Option<IpAddr>,
-    pub query: Vec<u8>,
-    pub response: Vec<u8>,
+struct Queue<T> {
+    state: Mutex<(VecDeque<T>, bool)>,
+    ready: Condvar,
 }
 ```
 
-#### `IpAddrString`
-
 ```rust
-#[cfg(windows)]
-#[repr(C)]
-struct IpAddrString {
-    next: *mut IpAddrString,
-    ip_address: [u8; 16],
-    ip_mask: [u8; 16],
-    context: u32,
+impl<T> Queue<T> {
+    fn new() -> Self;
+    fn push(&self, item: T);
+    fn close(&self);
+    /// Next item, waiting up to `timeout` (`None`: until closed). `None` on
+    /// timeout, or when closed and drained.
+    fn pop(&self, timeout: Option<Duration>) -> Option<T>;
+    fn len(&self) -> usize;
 }
 ```
 
-#### `FixedInfo`
+#### `Flow`
+
+An IPv4 or IPv6 5-tuple. `protocol` is an IP protocol number or one of
+`"tcp"`, `"udp"`, `"icmp"`; both addresses must be the same family.
 
 ```rust
-#[cfg(windows)]
-#[repr(C)]
-struct FixedInfo {
-    host_name: [u8; 132],
-    domain_name: [u8; 132],
-    current_dns_server: *mut IpAddrString,
-    dns_server_list: IpAddrString,
-    node_type: u32,
-    scope_id: [u8; 260],
-    enable_routing: u32,
-    enable_proxy: u32,
-    enable_dns: u32,
+#[derive(Clone)]
+struct Flow(InfoTuple);
+```
+
+```rust
+impl Flow {
+    fn v4(&self) -> Option<TupleSpecV4>;
+    fn v6(&self) -> Option<TupleSpecV6>;
 }
+```
+
+```rust
+impl Flow {
+    fn new(
+        protocol: &Bound<'_, PyAny>,
+        local: &str,
+        local_port: u16,
+        remote: &str,
+        remote_port: u16,
+    ) -> PyResult<Self>;
+    fn protocol(&self) -> u8;
+    fn local(&self) -> String;
+    fn local_port(&self) -> u16;
+    fn remote(&self) -> String;
+    fn remote_port(&self) -> u16;
+    fn is_v6(&self) -> bool;
+    /// Constructor syntax, as Python convention has it: `Flow('tcp', '10.0.0.5', 50000, ...)`.
+    fn __repr__(&self) -> String;
+    fn __eq__(&self, other: &Self) -> bool;
+    fn __hash__(&self) -> u64;
+}
+```
+
+#### `Event`
+
+One event the driver sent towards the agent. `kind` is `"connection"` (a
+pended packet awaiting a verdict), `"connection_end"`, `"connection_update"`,
+`"update_end"` or `"log"`; the attributes that don't apply to a kind are
+`None`. A frame that doesn't decode is kept as `"unknown"` with its raw
+bytes rather than dropped, so a script can see a driver bug.
+
+```rust
+#[derive(Clone)]
+struct Event {
+    info_type: u8,
+    info: Option<Info>,
+    raw: Vec<u8>,
+}
+```
+
+```rust
+impl Event {
+    fn tuple(&self) -> Option<&InfoTuple>;
+    fn counters(&self) -> Option<&hsim::Counters>;
+}
+```
+
+```rust
+impl Event {
+    fn kind(&self) -> &'static str;
+    fn info_type(&self) -> u8;
+    /// Packet id a `Verdict` command refers to (`"connection"` events).
+    fn id(&self) -> Option<u64>;
+    fn pid(&self) -> Option<u64>;
+    /// `"outbound"` / `"inbound"`.
+    fn direction(&self) -> Option<&'static str>;
+    fn flow(&self) -> Option<Flow>;
+    fn payload_layer(&self) -> Option<u8>;
+    fn payload<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>>;
+    fn rx_bytes(&self) -> Option<u64>;
+    fn rx_packets(&self) -> Option<u64>;
+    fn tx_bytes(&self) -> Option<u64>;
+    fn tx_packets(&self) -> Option<u64>;
+    fn severity(&self) -> Option<u8>;
+    fn message(&self) -> Option<String>;
+    /// The driver's cursor (`"update_end"` events): send it unchanged with the
+    /// next `GetConnectionsUpdate` to get the connections active since.
+    fn timestamp(&self) -> Option<u64>;
+    /// The frame's payload bytes as the driver wrote them.
+    fn raw<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes>;
+    fn __repr__(&self) -> String;
+}
+```
+
+#### `EventStream`
+
+Splits the driver's event byte stream into [`Event`]s, for a script that
+reads the pipe itself (a hand-written agent): `feed(bytes)` returns every
+event completed so far; a frame may span several reads.
+
+```rust
+#[derive(Default)]
+struct EventStream(EventParser);
+```
+
+```rust
+impl EventStream {
+    fn new() -> Self;
+    fn feed(&mut self, data: &[u8]) -> Vec<Event>;
+}
+```
+
+#### `Command`
+
+One command written towards the driver (`name` e.g. `"verdict"`; for a
+verdict, `id` and `verdict` are set).
+
+```rust
+#[derive(Clone)]
+struct Command {
+    raw: Vec<u8>,
+}
+```
+
+```rust
+impl Command {
+    fn name(&self) -> &'static str;
+    fn id(&self) -> Option<u64>;
+    fn verdict(&self) -> Option<u8>;
+    fn raw<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes>;
+    fn __repr__(&self) -> String;
+}
+```
+
+#### `CalloutOutcome`
+
+What a callout decided: `action` is `FWP_ACTION_PERMIT` / `FWP_ACTION_BLOCK`
+(0 if it set none) and `absorb` says it took ownership of the packet (pended,
+awaiting a verdict, or dropped).
+
+```rust
+#[derive(Clone)]
+struct CalloutOutcome {
+    action: u32,
+    absorb: bool,
+}
+```
+
+```rust
+impl CalloutOutcome {
+    /// Let through (permitted and not absorbed).
+    fn permit(&self) -> bool;
+    fn block(&self) -> bool;
+    fn __repr__(&self) -> String;
+}
+```
+
+#### `Injected`
+
+A packet the driver re-injected (the mock records instead of injecting).
+`transport` injects carry no IP header on inbound; `data` is what the driver
+handed to the inject call.
+
+```rust
+struct Injected {
+    inbound: bool,
+    ipv6: bool,
+    transport: bool,
+    loopback: bool,
+    data: Vec<u8>,
+}
+```
+
+```rust
+impl Injected {
+    fn __repr__(&self) -> String;
+}
+```
+
+#### `OwnerMsg`
+
+```rust
+enum OwnerMsg {
+    /// Run down the event queue (readers see end-of-file) and ack.
+    Shutdown(mpsc::Sender<()>),
+    /// Unload the driver and exit.
+    Close,
+}
+```
+
+#### `Owner`
+
+The thread that holds the harness' driver lock for the sim's lifetime. The
+lock guard isn't `Send`, so load and unload happen on one dedicated thread
+and the Python object (usable from any thread) just messages it.
+
+```rust
+struct Owner {
+    tx: mpsc::Sender<OwnerMsg>,
+    join: JoinHandle<()>,
+}
+```
+
+#### `Serving`
+
+```rust
+struct Serving {
+    server: Arc<PipeServer>,
+    endpoint: String,
+    state: Arc<(Mutex<ServeState>, Condvar)>,
+    acceptor: JoinHandle<()>,
+}
+```
+
+#### `ServeState`
+
+```rust
+#[derive(Default)]
+struct ServeState {
+    /// Set by `close()`: the acceptor must not start pumps any more.
+    closed: bool,
+    connected: bool,
+    /// Set by the pumps once the agent is gone.
+    stop: Option<Arc<AtomicBool>>,
+    pumps: Option<Pumps>,
+}
+```
+
+#### `Inner`
+
+```rust
+struct Inner {
+    owner: Option<Owner>,
+    cmd_conn: Option<DriverConnection>,
+    serving: Option<Serving>,
+}
+```
+
+#### `Sim`
+
+The real driver, loaded in-process. Use as a context manager; only one `Sim`
+can be open per process at a time (the driver is a process-wide global).
+
+```rust
+struct Sim {
+    inner: Mutex<Inner>,
+    events: Arc<Queue<Event>>,
+    commands: Arc<Queue<Command>>,
+}
+```
+
+```rust
+impl Sim {
+    fn tap(&self) -> Tap;
+    /// Run `f` on the command connection (created on first use).
+    fn with_cmd<R>(&self, f: impl FnOnce(&mut DriverConnection) -> R) -> PyResult<R>;
+    fn require_open(&self) -> PyResult<()>;
+}
+```
+
+```rust
+impl Sim {
+    /// Load the real driver (its `driver_entry`) and verify it registered the
+    /// production callout set.
+    fn new(py: Python<'_>) -> PyResult<Self>;
+    fn __enter__(slf: Py<Self>) -> Py<Self>;
+    fn __exit__(
+        &self,
+        py: Python<'_>,
+        _args: &Bound<'_, pyo3::types::PyTuple>,
+    ) -> PyResult<bool>;
+    /// Run down the driver, stop the pumps (the agent sees the endpoint close)
+    /// and unload the driver. Idempotent. Pending packets are resolved by the
+    /// driver's shutdown.
+    fn close(&self, py: Python<'_>) -> PyResult<()>;
+    /// Write a raw command message (`[CommandType, ...]`) to the driver, like
+    /// the agent would (e.g. `ClearCache`). Replies go to the agent; the tee
+    /// shows them in `next_event()`.
+    fn send(&self, py: Python<'_>, command: &[u8]) -> PyResult<()>;
+    /// Expose the driver on an agent endpoint: a logical name (default
+    /// `ZenithFence`, the agent's `ZF_SIM_PIPE`) or a full path. Returns the OS
+    /// endpoint. Returns immediately; the agent may connect later (see
+    /// `wait_agent`). Events the agent receives and commands it sends land in
+    /// `next_event()` / `next_command()`. One agent per `serve()`.
+    fn serve(&self, name: Option<String>) -> PyResult<String>;
+    /// Wait until an agent connects to the endpoint opened by `serve()`.
+    /// Returns whether it did within `timeout` seconds (`None`: wait forever).
+    fn wait_agent(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<bool>;
+    /// Whether the agent attached by `serve()` is connected right now (false
+    /// before it connects and once it hung up).
+    fn agent_connected(&self) -> bool;
+    /// The OS endpoint opened by `serve()`, if any.
+    fn endpoint(&self) -> Option<String>;
+    /// Next event the driver sent the agent (the `serve()` tee),
+    /// waiting up to `timeout` seconds (`None`: forever). `None` on timeout or
+    /// after `close()`.
+    fn next_event(
+        &self,
+        py: Python<'_>,
+        timeout: Option<f64>,
+    ) -> PyResult<Option<Event>>;
+    /// Next command the attached agent sent (`serve()` mode), see `next_event`.
+    fn next_command(
+        &self,
+        py: Python<'_>,
+        timeout: Option<f64>,
+    ) -> PyResult<Option<Command>>;
+    /// Number of queued, not yet consumed events.
+    fn pending_events(&self) -> usize;
+    /// ALE outbound-connect classify (the first packet of a new outbound flow).
+    fn ale_connect(
+        &self,
+        py: Python<'_>,
+        flow: &Flow,
+        pid: u64,
+        reauth: bool,
+        payload: Option<&[u8]>,
+    ) -> PyResult<CalloutOutcome>;
+    /// ALE inbound-accept classify.
+    fn ale_accept(
+        &self,
+        py: Python<'_>,
+        flow: &Flow,
+        pid: u64,
+        reauth: bool,
+        payload: Option<&[u8]>,
+    ) -> PyResult<CalloutOutcome>;
+    /// IP-packet-layer classify for a structured packet around `payload`.
+    /// `direction` is `"outbound"` / `"inbound"`.
+    fn packet(
+        &self,
+        py: Python<'_>,
+        flow: &Flow,
+        direction: &Bound<'_, PyAny>,
+        payload: Option<&[u8]>,
+    ) -> PyResult<CalloutOutcome>;
+    /// IP-packet-layer classify for raw IP bytes (starting at the IP header),
+    /// verbatim -- including malformed ones. The family comes from the version
+    /// nibble. `injected_by_self` marks it as a packet the driver injected.
+    fn packet_bytes(
+        &self,
+        py: Python<'_>,
+        data: &[u8],
+        direction: &Bound<'_, PyAny>,
+        injected_by_self: bool,
+    ) -> PyResult<CalloutOutcome>;
+    /// ALE endpoint-closure for `flow` (the connection ended).
+    fn endpoint_close(&self, py: Python<'_>, flow: &Flow, pid: u64) -> PyResult<()>;
+    /// ALE resource-release (a local port was released).
+    fn resource_release(
+        &self,
+        protocol: &Bound<'_, PyAny>,
+        port: u16,
+        v6: bool,
+    ) -> PyResult<()>;
+    /// The verdict the connection cache holds for `flow` (the agent's decision
+    /// once applied) as a `zfsim.Verdict`, or `None`.
+    fn verdict_for<'py>(
+        &self,
+        py: Python<'py>,
+        flow: &Flow,
+    ) -> PyResult<Option<Bound<'py, PyAny>>>;
+    /// Take every packet the driver injected since the last call.
+    fn drain_injected(&self) -> PyResult<Vec<Injected>>;
+    /// Packets currently pended in the packet cache (awaiting a verdict).
+    fn packet_cache_len(&self) -> usize;
+    /// Active (not yet ended) connections in the connection cache.
+    fn active_conn_count(&self) -> usize;
+    /// Ids of the packets currently pended.
+    fn live_ids(&self) -> Vec<u64>;
+    /// Drop every tracked connection and pended packet and discard recorded
+    /// injects, keeping the driver loaded.
+    fn reset(&self) -> PyResult<()>;
+    /// Filter-engine registration: `{"committed": bool, "callouts": [(name,
+    /// layer, filter_id), ...]}`.
+    fn filter_engine<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>>;
+}
+```
+
+### Trait implementations
+
+```rust
+impl From<hsim::Event> for Event
+
+impl From<CalloutResult> for CalloutOutcome
+
+impl Drop for Sim
 ```
 
 ### Functions
 
-Resolve `domain` for real. `want_v6` selects the record type (AAAA vs A), and
-hence the family of `resolved`; the query itself travels to `resolver` (the
-explicit override, else the OS default) over whatever family that server is.
-Returns the wire bytes on success, or a human-readable reason on failure.
-
 ```rust
-pub fn resolve(
-    domain: &str,
-    want_v6: bool,
-    resolver: Option<IpAddr>,
-) -> Result<Resolution, String>;
-```
-
-Parse a 4- or 16-byte address into an [`IpAddr`]; `None` for any other width.
-
-```rust
-pub fn ip_from_bytes(bytes: &[u8]) -> Option<IpAddr>;
-```
-
-A DNS transaction id derived from the name (FNV-1a), so a query is stable for
-a given domain without needing a random source.
-
-```rust
-fn query_id(domain: &str) -> u16;
-```
-
-The machine's primary configured DNS server, or `None` if none can be read.
-Walks `DnsServerList`, skipping any unspecified (0.0.0.0) placeholder entry.
-
-```rust
-#[cfg(windows)]
-fn os_default_resolver() -> Option<IpAddr>;
-```
-
-The first usable `nameserver` in `/etc/resolv.conf`, or `None` if there is
-none. A zone-scoped IPv6 entry (`fe80::1%eth0`) doesn't parse as `IpAddr` and
-is skipped.
-
-```rust
-#[cfg(unix)]
-fn os_default_resolver() -> Option<IpAddr>;
-```
-
-Parse a NUL-terminated ASCII address string (as `GetNetworkParams` fills in).
-
-```rust
-fn parse_ascii_ip(bytes: &[u8]) -> Option<IpAddr>;
-```
-
-### Extern blocks
-
-```rust
-#[cfg(windows)]
-#[link(name = "iphlpapi")]
-extern "system" {
-    fn GetNetworkParams(fixed_info: *mut FixedInfo, out_buf_len: *mut u32) -> u32;
-}
-```
-
----
-
-## `sim/src/main.rs`
-
-Real-world userspace simulation: a *fake driver* the real Go agent connects
-to over a Windows named pipe or, on Unix, a Unix domain socket (see [`pipe`]).
-Loads the real driver over `mock_wdk` ([`driver_harness::sim::Simulation`]), exposes
-it on the endpoint named by `ZF_SIM_PIPE` (default `ZenithFence`, i.e.
-`\\.\pipe\ZenithFence` on Windows; a full `\\.\pipe\...` path is used as is),
-waits for an agent to connect, and bridges the pipe to the driver's
-user-space channel ([`DriverConnection`] read/write). A producer injects fake
-OS network events through the driver's callout entry points; the agent reads
-the resulting events and writes verdicts back, exactly as it does against the
-kernel device.
-Threads (genuine concurrency, all funnelling to the one global `Device`):
-  - producer ("kernel"): runs callouts that pend packets and emit events
-  - event pump: blocks on `DriverConnection::read`, ships bytes to the pipe
-  - command pump: reads command messages from the pipe, applies them
-With no scenario file the daemon serves agents one after another until the
-user stops it (Ctrl+C): each agent session gets a freshly loaded driver and
-seeded-random traffic, and when the agent disconnects the driver is unloaded
-and the daemon waits for the next agent -- the way the agent's Start/Stop load
-and unload the kernel driver. A broken invariant ends the process via the
-monitor thread's non-zero `process::exit`. `--any-verdict` /
-`ZF_SIM_ANY_VERDICT` lets a real agent decide verdicts by its own policy (see
-[`producer::VerdictPolicy`]). Given a scenario file (positional arg or
-`ZF_SIM_SCENARIO`, see [`scenario`]) the daemon instead serves one agent,
-replays that file on a worker pool and exits when it finishes. Either way the
-OS reclaims the driver, the pumps, and the pipe.
-
-### Constants & statics
-
-Logical endpoint name when `ZF_SIM_PIPE` is unset; mapped per OS by [`pipe::endpoint`].
-
-```rust
-const DEFAULT_PIPE_NAME: &str = "ZenithFence";
-```
-
-### Types
-
-#### `Pumps`
-
-The two threads bridging the pipe and the driver's user-space channel. Both
-set `stop` once the agent is gone.
-
-```rust
-struct Pumps {
-    events: JoinHandle<()>,
-    commands: JoinHandle<()>,
-}
+fn timeout_of(secs: Option<f64>) -> PyResult<Option<Duration>>;
 ```
 
 ```rust
-impl Pumps {
-    fn spawn(sim: &Simulation, server: &Arc<PipeServer>, stop: Arc<AtomicBool>) -> Self;
-    fn join(self);
-}
-```
-
-### Functions
-
-```rust
-fn main() -> ExitCode;
-```
-
-Random-traffic mode: serve agents one after another until the process is
-stopped. Each session mirrors the agent's Start/Stop of the kernel driver: the
-producer runs while the agent is connected; once it disconnects the driver is
-shut down and unloaded, and a fresh one is loaded for the next agent.
-
-```rust
-fn serve_agents(
-    mut sim: Simulation,
-    server: &Arc<PipeServer>,
-    policy: VerdictPolicy,
-) -> ExitCode;
-```
-
-Load the real driver over mock_wdk and check it registered like a kernel
-load would.
-
-```rust
-fn load_driver() -> Result<Simulation, ExitCode>;
+fn parse_proto(obj: &Bound<'_, PyAny>) -> PyResult<u8>;
 ```
 
 ```rust
-fn wait_for_agent(server: &PipeServer) -> Result<(), ExitCode>;
+fn parse_ip(text: &str) -> PyResult<IpAddr>;
 ```
 
-Assert the driver's load registered exactly the production callout set, on
-the expected layers, inside a committed filter-engine transaction.
+```rust
+fn direction_name(d: u8) -> &'static str;
+```
 
 ```rust
-fn check_registration() -> Result<(), String>;
+fn parse_direction(obj: &Bound<'_, PyAny>) -> PyResult<Direction>;
+```
+
+The wire form of a `Verdict` command, for a script writing to the pipe itself.
+
+```rust
+fn py_verdict_command<'py>(
+    py: Python<'py>,
+    packet_id: u64,
+    verdict: u8,
+) -> Bound<'py, PyBytes>;
+```
+
+`value` as a `zfsim.Verdict` (the Python enum, so scripts get names, not
+numbers).
+
+```rust
+fn to_verdict<'py>(py: Python<'py>, value: u8) -> PyResult<Bound<'py, PyAny>>;
+```
+
+```rust
+fn not_open() -> PyErr;
+```
+
+```rust
+fn connect() -> PyResult<DriverConnection>;
+```
+
+```rust
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()>;
 ```
 
 ---
 
 ## `sim/src/pipe/mod.rs`
 
-The daemon's agent-facing endpoint, one implementation per OS behind the same
+The agent-facing endpoint, one implementation per OS behind the same
 `PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`,
 `disconnect`). One client is served at a time; after `disconnect` the server
 can `wait_for_client` again for the next one:
@@ -262,8 +503,8 @@ can `wait_for_client` again for the next one:
   boundaries, so on this transport the agent prefixes each command with a
   `u32` little-endian length, which restores "one command message = one
   `Device::write`". The event direction stays an unframed byte stream on both.
-[`endpoint`] maps the logical name (`ZF_SIM_PIPE`) to the OS address. The Go
-side (`kext_interface/sim_conn*.go`) applies the same rule.
+[`endpoint`] maps the logical name (`ZF_SIM_PIPE` on the Go side) to the OS
+address. The Go side (`kext_interface/sim_conn*.go`) applies the same rule.
 
 ### Re-exports
 
@@ -291,6 +532,13 @@ path (contains `/`), else `$XDG_RUNTIME_DIR/<name>.sock`, falling back to
 ```rust
 #[cfg(unix)]
 pub fn endpoint(name: &str) -> String;
+```
+
+Connect to `endpoint` and hang up at once. Wakes a server of ours blocked in
+`wait_for_client` when nobody else is going to connect (shutting down).
+
+```rust
+pub fn poke(endpoint: &str);
 ```
 
 ---
@@ -561,1024 +809,96 @@ extern "system" {
 
 ---
 
-## `sim/src/producer.rs`
+## `sim/src/pumps.rs`
 
-Fake OS-side network traffic.
-Drives semi-realistic flows through the real driver callout entry points,
-the way the OS does: ALE authorization first (which pends and emits an event
-the agent answers over the pipe), then data packets through the IP packet
-layer, then endpoint closure and resource release. The default run generates
-seeded random flows ([`crate::scenarios::random_flow`]) until the agent
-disconnects.
-Concurrency mirrors the kernel: several producer workers classify flows at
-the same time (WFP classify callbacks fire on many threads), and one
-reinjector thread models the OS re-presenting driver-injected packets to the
-packet-layer callouts (network injects re-enter marked injected-by-self;
-outbound transport injects descend the stack unmarked; inbound transport
-injects re-indicate upward and never pass the network layer again).
-Everything is reproducible from the fixed [`SEED`]: just rerun.
-Verdicts are judged per [`VerdictPolicy`]: against kext_tester's fixed rules
-by default, or -- for a real agent with its own policy -- accepting any
-verdict and checking only that the driver enforces the one it got.
+Loading the driver and bridging it to an agent on the pipe.
+[`Pumps`] are the two threads between the pipe and the driver's user-space
+channel (events out, commands in). They can *tee* what flows through them
+([`Tap`]), which is how a script sees the events a real agent receives and
+the commands (verdicts) it sends back.
 
 ### Constants & statics
 
-```rust
-const VERDICT_POLL: Duration = Duration::from_millis(5);
-```
+Default logical endpoint name; mapped per OS by [`crate::pipe::endpoint`].
 
 ```rust
-const REINJECT_POLL: Duration = Duration::from_millis(2);
-```
-
-How often the monitor checks whether the run was stopped.
-
-```rust
-const STOP_POLL: Duration = Duration::from_millis(50);
-```
-
-Fixed run seed. The traffic is fully reproducible across runs -- rerun to
-reproduce a failure. The RNG stream is infinite, so one seed still yields
-endless distinct flows.
-
-```rust
-const SEED: u64 = 0x0BAD_C0DE_5EED_1234;
-```
-
-Producer worker threads (WFP classify fires on many threads at once). Kept
-small so each worker's disjoint local-port window -- 2048 ports starting at
-`20000 + worker * 2048` -- stays inside a u16.
-
-```rust
-const THREADS: usize = 4;
-```
-
-Per-flow budget for the agent's verdict and any mid-burst upgrades before the
-flow is counted as a timeout/failure.
-
-```rust
-const FLOW_TIMEOUT: Duration = Duration::from_secs(15);
-```
-
-How often the monitor thread prints a liveness line and checks invariants.
-
-```rust
-const HEARTBEAT: Duration = Duration::from_secs(5);
+pub const DEFAULT_PIPE_NAME: &str = "ZenithFence";
 ```
 
 ### Types
 
-#### `Summary`
+#### `TapMessage`
+
+One observation made by a pump.
 
 ```rust
-#[derive(Default)]
-pub struct Summary {
-    pub flows_ok: AtomicU64,
-    pub packets: AtomicU64,
-    pub bytes: AtomicU64,
-    /// Network-injected packets that re-entered the packet layer marked
-    /// injected-by-self and were permitted (the driver's self-inject branch).
-    pub loopback_permits: AtomicU64,
-    /// Outbound transport injects replayed down the stack and permitted.
-    pub transport_replays: AtomicU64,
-    pub verdict_timeouts: AtomicU64,
-    pub by_scenario: Mutex<BTreeMap<&'static str, u64>>,
-    pub failures: Mutex<Vec<String>>,
+pub enum TapMessage {
+    /// A whole event frame the driver sent towards the agent.
+    Event(Event),
+    /// One command message the agent wrote towards the driver (raw bytes,
+    /// `[CommandType, ...]`).
+    Command(Vec<u8>),
+}
+```
+
+#### `Tap`
+
+Callback receiving everything that passes through the pumps. Called on the
+pump threads, so it must not block for long.
+
+```rust
+pub type Tap = Arc<dyn Fn(TapMessage) + Send + Sync>;
+```
+
+#### `Pumps`
+
+The two threads bridging the pipe and the driver's user-space channel. Both
+set `stop` once the agent is gone.
+
+```rust
+pub struct Pumps {
+    events: JoinHandle<()>,
+    commands: JoinHandle<()>,
 }
 ```
 
 ```rust
-impl Summary {
-    fn fail(&self, msg: String);
-    fn count_scenario(&self, name: &'static str);
-    /// No failures recorded. Verdict timeouts are recorded as failures only
-    /// under [`VerdictPolicy::Expected`] (see [`Run::verdict_timeout`]).
-    pub fn is_ok(&self) -> bool;
-    /// Compact one-line liveness snapshot for the periodic monitor.
-    pub fn heartbeat(&self);
-    pub fn print(&self);
-}
-```
-
-#### `VerdictPolicy`
-
-How the producer judges the verdicts the agent hands out.
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VerdictPolicy {
-    /// kext_tester's fixed rules ([`FlowPlan::expect`]): a different verdict, or
-    /// none within [`FLOW_TIMEOUT`], is a failure.
-    Expected,
-    /// A real agent deciding by its own policy: any verdict is legal and
-    /// [`FlowPlan::expect`] is only a hint. Checks that the driver enforces the
-    /// verdict it got remain fatal; a verdict that never comes is only counted.
-    Any,
-}
-```
-
-#### `Run`
-
-Shared state of one [`drive`] run.
-
-```rust
-struct Run {
-    summary: Summary,
-    policy: VerdictPolicy,
-    stop: Arc<AtomicBool>,
-}
-```
-
-```rust
-impl Run {
-    fn any_verdict(&self) -> bool;
-    fn stopped(&self) -> bool;
-    fn verdict_timeout(&self, msg: String);
+impl Pumps {
+    /// `evt_conn` / `cmd_conn` are two fresh connections to the loaded driver
+    /// ([`connect`], or `Simulation::connect`); each pump owns one.
+    pub fn spawn(
+        mut evt_conn: DriverConnection,
+        mut cmd_conn: DriverConnection,
+        server: &Arc<PipeServer>,
+        stop: Arc<AtomicBool>,
+        tap: Option<Tap>,
+    ) -> Self;
+    pub fn join(self);
 }
 ```
 
 ### Functions
 
-Generate random flows across [`THREADS`] workers until `stop` is set, then
-join every producer thread and return. A broken invariant ends the process via
-the monitor's non-zero `process::exit`. Each worker owns a disjoint IP/port
-window and a private RNG stream, and runs one flow fully -- ALE authorization,
-the agent's verdict, data bursts, closure, release -- before starting the
-next, so a worker can never outpace the agent it waits on.
+Load the real driver over mock_wdk and check it registered like a kernel
+load would.
 
 ```rust
-pub fn drive(policy: VerdictPolicy, stop: Arc<AtomicBool>);
+pub fn load_driver() -> Result<Simulation, String>;
 ```
 
-Print a liveness line every [`HEARTBEAT`]; the moment an invariant breaks,
-dump the full summary and exit non-zero. The seed is fixed, so a failing run
-reproduces exactly on the next launch.
+Open a fresh user-space connection to the loaded driver, from any thread
+(the same as `Simulation::connect`, which needs the `Simulation` handle).
+`None` if no driver is loaded.
 
 ```rust
-fn monitor_loop(run: &Run);
+pub fn connect() -> Option<DriverConnection>;
 ```
 
-```rust
-fn run_flow(plan: &FlowPlan, run: &Run, deadline: Instant);
-```
-
-Data exchange for an authorized flow. A permanent accept permits packets
-outright; a temporary Accept (inbound loopback's initial state) pends each
-packet until the agent upgrades the verdict, so both outcomes are legal --
-what's illegal is a hard block or a missing action.
-
-```rust
-fn run_bursts(plan: &FlowPlan, run: &Run, deadline: Instant) -> bool;
-```
-
-Data exchange under [`VerdictPolicy::Any`]: whatever verdict the agent gave,
-each packet must get the action the driver owes that verdict. Temporary
-verdicts pend the packet for a per-packet answer, so nothing waits for an
-upgrade; a pended packet is resolved by the agent and the reinjector.
-
-```rust
-fn run_bursts_any_verdict(plan: &FlowPlan, run: &Run) -> bool;
-```
-
-```rust
-fn reauthorize(plan: &FlowPlan, summary: &Summary) -> bool;
-```
-
-```rust
-fn run_ale(plan: &FlowPlan, reauthorize: bool) -> CalloutResult;
-```
-
-```rust
-fn run_packet(plan: &FlowPlan, direction: Direction, payload: &[u8]) -> CalloutResult;
-```
-
-```rust
-fn close_flow(plan: &FlowPlan);
-```
-
-```rust
-fn release_port(plan: &FlowPlan);
-```
-
-```rust
-fn current_verdict(plan: &FlowPlan) -> Option<u8>;
-```
-
-```rust
-fn wait_verdict(plan: &FlowPlan, run: &Run, deadline: Instant) -> Option<u8>;
-```
-
-Poll `cond` until it yields `Some`, the deadline passes, or the run is
-stopped (check [`Run::stopped`] to tell the last apart from a timeout).
-
-```rust
-fn wait_for<T>(
-    run: &Run,
-    deadline: Instant,
-    mut cond: impl FnMut() -> Option<T>,
-) -> Option<T>;
-```
-
-```rust
-fn count_packet(summary: &Summary, payload: &[u8]);
-```
-
-```rust
-fn reinject_loop(run: &Run);
-```
-
-Best-effort one-line identity for a drained injected packet: parses the IP
-header for the 5-tuple, falling back to flags + length when the bytes are not
-a parsable IP packet (e.g. a raw transport segment).
-
-```rust
-fn describe_injected(packet: &api::InjectedPacket) -> String;
-```
-
-Pull "PROTO src=addr:port dst=addr:port" out of a raw IP packet, or `None` if
-the header is too short or its version nibble does not match `ipv6`.
-
-```rust
-fn describe_ip_packet(data: &[u8], ipv6: bool) -> Option<String>;
-```
-
-The source/destination ports at `offset` for TCP/UDP, if the bytes are there.
-
-```rust
-fn ports_at(data: &[u8], offset: usize, proto: u8) -> Option<(u16, u16)>;
-```
-
----
-
-## `sim/src/rng.rs`
-
-Tiny deterministic PRNG (SplitMix64) so the traffic generator is fully
-reproducible from one printed seed, with no external dependencies.
-
-### Types
-
-#### `SplitMix64`
-
-```rust
-pub struct SplitMix64 {
-    state: u64,
-}
-```
-
-```rust
-impl SplitMix64 {
-    pub fn new(seed: u64) -> Self;
-    pub fn next_u64(&mut self) -> u64;
-    /// Uniform-ish value in `[lo, hi)`. `hi` must be greater than `lo`.
-    pub fn range(&mut self, lo: u64, hi: u64) -> u64;
-    /// True with probability `percent`/100.
-    pub fn chance(&mut self, percent: u64) -> bool;
-}
-```
-
-### Functions
-
-The SplitMix64 finalizer, also used standalone to derive per-worker seeds
-from the run seed.
-
-```rust
-pub fn mix(x: u64) -> u64;
-```
-
----
-
-## `sim/src/scenario.rs`
-
-CBOR scenario-file executor.
-Replays an authored scenario file against the driver instead of the seeded
-random [`crate::producer`]. The file is either **CBOR** (`.cbor`: a sequence
-of record maps per RFC 8742, compact) or **JSON Lines** (`.json`: one record
-object per line / NDJSON, human-readable for debugging) -- chosen by extension.
-Both are decoded as a LAZY STREAM: exactly one record is parsed at a time and
-dispatched before the next is read, so the whole file is never buffered and a
-scenario can be arbitrarily long. Each record carries an absolute timestamp
-(`ts`, microseconds since scenario start) and one command.
-Execution is *global-timeline dispatch*: a single scheduler thread reads the
-file in order, sleeps the delta between consecutive records' timestamps, then
-hands each command to the next free worker in a pool. Workers run the matching
-[`driver_harness::fuzz_api`] callout entry point immediately, so records that share a
-timestamp (delta 0) are injected in parallel -- genuine OS threads hammering
-the one global device, which is what surfaces concurrency bugs.
-Verdicts are out of scope here: the real Go agent still answers them over the
-pipe (see [`crate::main`]); this module only *injects* the scenario.
-Each record is a flat map/object so it is trivial to author from any language
--- Python CBOR: `cbor2.dump({"ts": 0, "op": "ale_connect", ...}, f)` per record;
-or just hand-write one JSON object per line. Only the fields relevant to `op`
-need be present; the rest default. `ts` and `op` are always required. Byte
-fields (`local`/`remote`/`payload`/`bytes`/`resolver`) are CBOR byte strings,
-and arrays of byte values in JSON.
-## High-level `dns` op
-Beyond the one-callout-per-record ops above, `dns` is a *live* macro op: one
-record names a `domain` and, at replay time, performs a REAL DNS lookup
-against the machine's default resolver (the OS-configured server, auto-detected;
-override with `resolver`), then expands into the callout sequence that lookup
-is made of -- ALE connect (UDP, carrying the real query so a domain-aware policy
-sees it on the pended event), the real query datagram outbound, the real
-response datagram inbound, then endpoint close + resource release. Set
-`tcp_connect` to append a TCP session (`tcp_port`, default 443) to the address
-the response actually resolved to. `v6` asks for AAAA and connects over IPv6;
-the query itself reaches the resolver over whatever family that server uses.
-The sub-steps run through [`execute`] like hand-authored records, so they
-validate and tally identically. Unlike every other op this one touches the
-network: it is non-deterministic, needs connectivity, and a failed lookup is
-recorded as a failure rather than faked. Because the lookup blocks on the
-network (tens of ms) on its worker, space `dns` records by more than that in
-`ts` (milliseconds) if you want them paced distinctly -- tighter deltas just
-overlap on the worker pool. See [`run_dns`].
-
-### Constants & statics
-
-```rust
-const TCP: u8 = 6;
-```
-
-```rust
-const UDP: u8 = 17;
-```
-
-The running total across every loop pass, published for [`ctrl_handler`].
-
-```rust
-static LOOP_TOTAL: OnceLock<Arc<ScenarioSummary>> = OnceLock::new();
-```
-
-Passes started so far, so the Ctrl+C summary can report the count.
-
-```rust
-static LOOP_ITERS: AtomicU64 = AtomicU64::new(0);
-```
-
-### Types
-
-#### `Record`
-
-One scenario command ("line"). See the module docs for the field vocabulary.
-
-```rust
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-struct Record {
-    /// Miliseconds since scenario start (absolute point on the timeline).
-    ts: u64,
-    /// Command selector: `ale_connect` | `ale_accept` | `packet` |
-    /// `packet_bytes` | `endpoint_close` | `resource_release` | `dns`.
-    op: String,
-    /// Address family: `false` => IPv4, `true` => IPv6. For `dns`, selects the
-    /// record type asked for (AAAA vs A) and the family of the `tcp_connect`.
-    v6: bool,
-    /// IP protocol number (6 TCP, 17 UDP, 1 ICMP, ...).
-    proto: u8,
-    /// Local address, as a byte string (4 bytes for v4, 16 for v6).
-    local: Vec<u8>,
-    lport: u16,
-    /// Remote address, as a byte string (4 bytes for v4, 16 for v6).
-    remote: Vec<u8>,
-    rport: u16,
-    /// Process id carried into `ale_*` / `endpoint_close` callouts.
-    pid: u64,
-    /// `ale_*`: reauthorization flag.
-    reauth: bool,
-    /// `packet` / `packet_bytes`: direction, 0 = Outbound, 1 = Inbound.
-    dir: u8,
-    /// `ale_*` / `packet`: upper-layer payload a structured packet is built around.
-    payload: Vec<u8>,
-    /// `packet_bytes`: full raw packet bytes, starting at the IP header.
-    bytes: Vec<u8>,
-    /// `packet_bytes`: mark the NBL as network-injected by the driver itself.
-    injected_by_self: bool,
-    /// `resource_release`: the local port to release.
-    port: u16,
-    /// `dns`: the domain to look up for real. A non-empty `domain` is all a `dns`
-    /// record needs; every other field below has a default. It is resolved live
-    /// against the default resolver, and the address that comes back is what
-    /// `tcp_connect` then dials -- see [`run_dns`].
-    domain: String,
-    /// `dns`: the DNS server to query, as a byte string (4 bytes for v4, 16 for
-    /// v6). Defaults to the machine's OS-configured default resolver.
-    resolver: Vec<u8>,
-    /// `dns`: after the lookup, also open a TCP session to the address the
-    /// response resolved to.
-    tcp_connect: bool,
-    /// `dns`: destination port for `tcp_connect` (defaults to 443).
-    tcp_port: u16,
-}
-```
-
-#### `Tuple`
-
-An explicit 5-tuple resolved from a record, ready for the `*_tuple` runners.
-
-```rust
-enum Tuple {
-    V4(TupleSpecV4),
-    V6(TupleSpecV6),
-}
-```
-
-#### `ScenarioSummary`
-
-Counters gathered across the run, plus any failures (validation errors, parse
-errors, worker panics). Shared behind an `Arc` across the worker pool.
-
-```rust
-#[derive(Default)]
-pub struct ScenarioSummary {
-    dispatched: AtomicU64,
-    executed: AtomicU64,
-    pended: AtomicU64,
-    permitted: AtomicU64,
-    blocked: AtomicU64,
-    /// High-level `dns` records expanded, and TCP sessions appended to them.
-    dns_lookups: AtomicU64,
-    tcp_sessions: AtomicU64,
-    by_op: Mutex<BTreeMap<String, u64>>,
-    failures: Mutex<Vec<String>>,
-}
-```
-
-```rust
-impl ScenarioSummary {
-    fn tally(&self, op: &str, result: Option<CalloutResult>);
-    fn fail(&self, msg: String);
-    /// True if the scenario replayed with no validation errors or worker panics.
-    pub fn ok(&self) -> bool;
-    pub fn print(&self);
-}
-```
-
-#### `RecordStream`
-
-A lazy stream of records; each `next()` parses exactly one record from the
-underlying reader, so the file is never fully buffered.
-
-```rust
-type RecordStream = Box<dyn Iterator<Item = Result<Record, String>>>;
-```
-
-### Functions
-
-`skip_serializing_if` predicate: omit a field that still holds its zero value,
-so emitted sample files only carry the fields that matter for each `op`.
-
-```rust
-fn is_default<T: Default + PartialEq>(v: &T) -> bool;
-```
-
-Build the 5-tuple from a record, validating the address widths for the family.
-
-```rust
-fn tuple(rec: &Record) -> Result<Tuple, String>;
-```
-
-```rust
-fn direction(dir: u8) -> Direction;
-```
-
-Delta between the previous timestamp and this one, in microseconds. The first
-record (no previous) is 0; a non-monotonic timestamp clamps to 0 via
-`saturating_sub`, so a mis-ordered file never panics or sleeps backwards.
-
-```rust
-fn delta_milis(prev: Option<u64>, ts: u64) -> u64;
-```
-
-Run one command against the driver via the real callout entry points.
-
-```rust
-fn execute(rec: &Record, sum: &ScenarioSummary);
-```
-
-Resolve a `dns` record's domain live, build the callout sequence from the real
-query/response bytes, run each sub-step through [`execute`], then tally the
-lookup (and any TCP session). A bad record, an unreachable resolver, or a
-domain with no address of the requested family is recorded as a failure --
-this op depends on the network, so those are real, reportable outcomes.
-
-```rust
-fn run_dns(rec: &Record, sum: &ScenarioSummary);
-```
-
-Build the low-level records a completed lookup expands into, around the real
-wire bytes in `res` -- ALE connect (carrying the actual query so the agent sees
-the domain on the pended event), the query datagram outbound, the response
-datagram inbound, then endpoint close + resource release -- plus, when
-`tcp_connect` is set, a follow-on TCP session to the address the response
-resolved to. Each sub-flow's family follows the address it actually uses (the
-resolver for the lookup, the resolved host for the connect), so a v6 record can
-legitimately query a v4 resolver and then connect over IPv6. The local port is
-a per-domain ephemeral so distinct domains stay distinct connection keys.
-Pure and device-free (it only shapes records from `res`), so it is unit tested
-directly; [`run_dns`] is the part that does the live lookup and injection.
-
-```rust
-fn build_dns_records(
-    rec: &Record,
-    res: &crate::dns::Resolution,
-) -> Result<Vec<Record>, String>;
-```
-
-One low-level tuple-bearing record for the `dns` expansion; caller then fills
-in `dir`/`payload`/`pid` as the sub-step needs.
-
-```rust
-fn sub_record(
-    op: &str,
-    v6: bool,
-    proto: u8,
-    local: &[u8],
-    lport: u16,
-    remote: &[u8],
-    rport: u16,
-) -> Record;
-```
-
-A `resource_release` record (keys on protocol + local port, no tuple).
-
-```rust
-fn release_record(v6: bool, proto: u8, port: u16) -> Record;
-```
-
-The local client address for a sub-flow of the given family: the record's
-`local` override when it is set to a matching-width address, else a stable
-default. A `dns` record's ephemeral local *port* is what keeps distinct
-domains on distinct connection keys, so a shared local address is fine.
-
-```rust
-fn local_for(provided: &[u8], v6: bool) -> Vec<u8>;
-```
-
-The default local client address for the family (documentation ranges).
-
-```rust
-fn default_local(v6: bool) -> Vec<u8>;
-```
-
-An [`IpAddr`](std::net::IpAddr) as the 4- or 16-byte string a record carries.
-
-```rust
-fn ip_to_bytes(ip: std::net::IpAddr) -> Vec<u8>;
-```
-
-Fold a domain (salted by the record timestamp, so repeats of the same name
-stay distinct) into a well-mixed 64-bit value seeding the DNS transaction id,
-the local port, and any synthesized address -- all deterministic, so a
-scenario replays identically.
-
-```rust
-fn mix_domain(domain: &str, ts: u64) -> u64;
-```
-
-An ephemeral local port (49152-65151) derived from the domain hash.
-
-```rust
-fn derived_port(h: u64) -> u16;
-```
-
-Replay a CBOR scenario file. Never panics on I/O -- file and parse errors are
-recorded as failures on the returned summary. Worker panics (a driver
-invariant blowing up, which is exactly what we hunt) are caught at join and
-recorded too. Worker count comes from `ZF_SIM_THREADS` (default 4).
-
-```rust
-pub fn run(path: &str) -> Arc<ScenarioSummary>;
-```
-
-The heart of both [`run`] and [`run_loop`]: stream `path` and dispatch every
-record into `summary` on a worker pool, so a caller can accumulate across
-runs. `announce` prints the one-line "streaming ..." banner (the loop
-suppresses it, keeping per-iteration output quiet). Never panics on I/O.
-
-```rust
-fn run_into(path: &str, summary: &Arc<ScenarioSummary>, announce: bool);
-```
-
-Replay `path` on repeat until the process is stopped. Diverges: on Ctrl+C the
-[`ctrl_handler`] prints the accumulated totals once and exits. Between passes
-the driver's per-connection state is wiped (see [`api::reset_device_state`]),
-so an iteration re-pends everything instead of inheriting the last pass's
-verdicts -- each pass is the same scenario run afresh, not a continuation.
-
-```rust
-pub fn run_loop(path: &str) -> !;
-```
-
-Ctrl+C: print the loop's running totals once, then exit. Reached from the
-OS-specific hook installed by [`install_ctrl_handler`].
-
-```rust
-fn report_and_exit() -> !;
-```
-
-Windows: `SetConsoleCtrlHandler` (raw FFI, like the pipe server). The handler
-runs on its own thread, so it can report and exit directly.
-
-```rust
-#[cfg(windows)]
-fn install_ctrl_handler();
-```
-
-Unix: a `SIGINT` handler. Printing and exiting aren't async-signal-safe, so
-the handler only raises a flag and a watcher thread does the reporting.
-
-```rust
-#[cfg(unix)]
-fn install_ctrl_handler();
-```
-
-Open a scenario file as a [`RecordStream`], choosing the codec by extension:
-* `.json` => **JSON Lines** (one record object per line / whitespace-separated
-  JSON values), decoded with serde_json's streaming `StreamDeserializer`.
-  NOTE: this is NDJSON, deliberately NOT a single JSON array (arrays can't be
-  streamed a value at a time).
-* anything else (e.g. `.cbor`) => a CBOR sequence (RFC 8742) of record maps,
-  read one top-level item at a time until EOF.
-
-```rust
-fn open_records(path: &str) -> Result<RecordStream, String>;
-```
-
-Write the reference sample scenarios into `dir`, creating it if needed. They
-double as living documentation of the wire format and as round-trip fixtures.
-
-```rust
-pub fn emit_samples(dir: &str) -> io::Result<()>;
-```
-
-Write records as a CBOR sequence (compact; for real runs and Python authoring).
-
-```rust
-fn write_cbor(path: &str, records: &[Record]) -> io::Result<()>;
-```
-
-Write records as JSON Lines (one compact record object per line; NDJSON) --
-streamable and diff/grep-friendly. Byte fields render as arrays of byte values.
-
-```rust
-fn write_json(path: &str, records: &[Record]) -> io::Result<()>;
-```
-
-Base record with just the timeline point and the op set; the rest defaults.
-
-```rust
-fn at(ts: u64, op: &str) -> Record;
-```
-
-One outbound TCP flow to 1.1.1.1:443: authorize, two data packets, close, release.
-
-```rust
-fn basic_v4() -> Vec<Record>;
-```
-
-Three connections authorized at the same instant (delta 0 => injected in
-parallel on different workers), staggered data, then simultaneous closes.
-
-```rust
-fn mixed_v4v6_parallel() -> Vec<Record>;
-```
-
-A burst of 32 ICMP packets all stamped ts 0, so they are dispatched
-back-to-back and pend concurrently across the pool -- a small concurrency probe.
-
-```rust
-fn icmp_burst() -> Vec<Record>;
-```
-
-High-level `dns` records: resolve a real domain, optionally opening a TCP
-session to the resolved address. Each performs a live lookup at replay time
-and expands into a full ALE/packet/close/release callout sequence (see
-[`run_dns`]) -- the "set a domain and go" authoring path. Being live, these
-need connectivity; the domains below are chosen to actually resolve.
-
-```rust
-fn dns_flows() -> Vec<Record>;
-```
-
----
-
-## `sim/src/scenarios.rs`
-
-Traffic scenarios: what the fake OS "does" on the network.
-A [`FlowPlan`] is one connection's whole life, mirroring how the OS drives
-WFP: resource assignment -> ALE authorization (pends, the agent decides) ->
-data packets through the IP packet layer -> endpoint closure -> resource
-release.
-The default run generates seeded random flows from weighted templates
-([`random_flow`]) and never stops. The hand-authored deterministic scenarios
-(DNS, TLS, blocked remote, loopback, v6, ICMP, reauth, port reuse) each live
-as their own function in the [`deterministic`] module, currently unwired --
-kept for when we decide how to schedule them alongside the random loop.
-Payload realism: first packets carry real-looking application bytes (DNS
-query/response, TLS ClientHello, HTTP GET). Payloads that reach the agent
-(the pended first packet) are kept small (<= 256 bytes) because the agent
-reads events through a 1 KiB pipe buffer.
-
-### Constants & statics
-
-```rust
-const TCP: u8 = 6;
-```
-
-```rust
-const UDP: u8 = 17;
-```
-
-### Types
-
-#### `Expect`
-
-What the agent's policy (kext_tester `handleInfo`) is expected to decide.
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Expect {
-    /// Verdict lands asynchronously as Accept/PermanentAccept.
-    Accepted,
-    /// Outbound to 1.1.1.1: the agent replies PermanentBlock.
-    Blocked,
-    /// Inbound loopback: ALE itself sets Accept and permits, no pend.
-    ImmediateAccept,
-    /// Not connection-tracked (ICMP): every packet pends on its own, no
-    /// connection verdict ever lands in the cache.
-    NoVerdict,
-}
-```
-
-#### `Tuple`
-
-```rust
-#[derive(Clone, Copy, Debug)]
-pub enum Tuple {
-    V4(TupleSpecV4),
-    V6(TupleSpecV6),
-}
-```
-
-```rust
-impl Tuple {
-    pub fn protocol(&self) -> u8;
-    pub fn local_port(&self) -> u16;
-    /// "PROTO local=addr:port remote=addr:port" for diagnostics (v6 bracketed).
-    pub fn endpoints(&self) -> String;
-}
-```
-
-#### `Burst`
-
-One data packet after authorization.
-
-```rust
-#[derive(Clone, Debug)]
-pub struct Burst {
-    pub direction: Direction,
-    pub payload: Vec<u8>,
-}
-```
-
-#### `FlowPlan`
-
-One connection's planned life.
-
-```rust
-#[derive(Clone, Debug)]
-pub struct FlowPlan {
-    /// Scenario label for the summary (template name for random flows).
-    pub name: &'static str,
-    pub tuple: Tuple,
-    /// Direction of the authorization: Outbound = ALE connect, Inbound = ALE accept.
-    pub direction: Direction,
-    pub process_id: u64,
-    /// Payload carried by the ALE authorization packet (reaches the agent).
-    pub first_payload: Vec<u8>,
-    /// Data packets exchanged once the flow is authorized.
-    pub bursts: Vec<Burst>,
-    pub expect: Expect,
-    /// Fire a reauthorization ALE classify after this many bursts.
-    pub reauth_after: Option<usize>,
-    /// Report the local port released to the resource-release callout at the end.
-    pub release_port: bool,
-    /// After closing, open a follow-up flow reusing the local port against a
-    /// different remote (same-key reuse would hit the ended-connection cache
-    /// entry; see the connection-cache stale-lookup semantic).
-    pub follow_up_reuse: bool,
-}
-```
-
-```rust
-impl FlowPlan {
-    /// One-line identity for failure messages: scenario, 5-tuple, direction, pid.
-    pub fn describe(&self) -> String;
-}
-```
-
-### Functions
-
-A short human label for an IP protocol number, for diagnostics.
-
-```rust
-pub fn proto_label(protocol: u8) -> String;
-```
-
-```rust
-fn out(payload: Vec<u8>) -> Burst;
-```
-
-```rust
-fn inb(payload: Vec<u8>) -> Burst;
-```
-
-```rust
-fn v4(protocol: u8, local: [u8; 4], lport: u16, remote: [u8; 4], rport: u16) -> Tuple;
-```
-
-```rust
-fn v6(protocol: u8, local16: u8, lport: u16, remote16: u8, rport: u16) -> Tuple;
-```
-
-Encode a domain as a DNS QNAME: each dot-separated label prefixed by its
-length byte, terminated by a zero (root) byte. Labels are clamped to the
-63-byte label limit and empty labels (e.g. a trailing dot) are dropped.
-
-```rust
-fn encode_qname(domain: &str) -> Vec<u8>;
-```
-
-A real-shaped DNS query for `domain`: a standard recursion-desired query with
-one question, type A (`v6` false) or AAAA (`v6` true) in class IN.
-
-```rust
-pub fn dns_query_for(id: u16, domain: &str, v6: bool) -> Vec<u8>;
-```
-
-A matching DNS response for `domain`: the question echoed back plus one
-answer carrying `ip` -- a 4-byte A record or a 16-byte AAAA record (the
-record type follows `ip`'s width).
-
-```rust
-pub fn dns_response_for(id: u16, domain: &str, ip: &[u8]) -> Vec<u8>;
-```
-
-A real-shaped DNS query: header + QD for `example.com` A IN.
-
-```rust
-pub fn dns_query(id: u16) -> Vec<u8>;
-```
-
-A matching DNS response: query echo + one A answer (93.184.216.34).
-
-```rust
-pub fn dns_response(id: u16) -> Vec<u8>;
-```
-
-Read the first answer of the requested family out of a DNS response: the A
-record (`want_v6 == false`, 4 bytes) or AAAA (`want_v6 == true`, 16 bytes).
-Walks the real message -- header counts, the question section, then each
-answer -- following/skipping name compression, so it copes with CNAME chains
-and multi-record replies from a live resolver, not just our own fabricated
-ones. Returns `None` if no answer of that family is present or the buffer is
-malformed. This is how a resolved address flows from the response into a
-follow-on connection, the way a client reads the answer and dials it.
-
-```rust
-pub fn dns_answer_ip(response: &[u8], want_v6: bool) -> Option<Vec<u8>>;
-```
-
-Advance past a DNS name starting at `i`, returning the index just after it.
-Handles the three label forms: the zero root label ends the name, a `0xC0`
-compression pointer is two bytes and also ends it, and a normal label is a
-length byte plus that many octets. `None` on a truncated or reserved name.
-
-```rust
-fn skip_name(msg: &[u8], mut i: usize) -> Option<usize>;
-```
-
-The first bytes of a TLS 1.2/1.3 ClientHello record, truncated to fit the
-agent's pipe read buffer when it rides a pended packet.
-
-```rust
-pub fn tls_client_hello() -> Vec<u8>;
-```
-
-```rust
-pub fn http_get() -> Vec<u8>;
-```
-
-```rust
-pub fn http_response() -> Vec<u8>;
-```
-
-The follow-up flow for `follow_up_reuse`: same local port, different remote
-(a fresh key, like a new socket bound to the just-released port).
-
-```rust
-pub fn reuse_follow_up(plan: &FlowPlan) -> Option<FlowPlan>;
-```
-
-A seeded random flow for `worker`. Cross-worker keys stay disjoint via the
-per-worker local-port window (`20000 + worker*2048 + seq`, `seq < 2048`).
-Within a worker that window is reused every 2048 flows, so a flow's *remote*
-address must carry enough entropy that the reused (port, local) pair still
-yields a fresh key -- otherwise the driver treats the repeat as an existing
-connection and permits it without pending. The v4 remote is 3 random octets;
-the v6 remote is a random 64-bit interface id for the same reason. Templates
-are weighted toward the common real-world mix; the costly/special paths
-(blocked, loopback, ICMP) stay in the deterministic set.
-
-```rust
-pub fn random_flow(rng: &mut SplitMix64, worker: usize, seq: u16) -> FlowPlan;
-```
-
----
-
-## `sim/src/scenarios.rs` — `mod deterministic`
-
-### Constants & statics
-
-```rust
-const ICMP: u8 = 1;
-```
-
-### Functions
-
-```rust
-fn icmp_echo(seq: u16) -> Vec<u8>;
-```
-
-DNS query over UDP to a public resolver; the verdict lands asynchronously.
-
-```rust
-pub fn dns_udp() -> FlowPlan;
-```
-
-Outbound HTTPS: TLS handshake, then application data both ways.
-
-```rust
-pub fn https_tcp() -> FlowPlan;
-```
-
-Plain HTTP GET / 200 OK.
-
-```rust
-pub fn http_get_flow() -> FlowPlan;
-```
-
-Outbound to 1.1.1.1: the agent replies PermanentBlock; the packet layer
-must hard-block.
-
-```rust
-pub fn blocked_cloudflare() -> FlowPlan;
-```
-
-Loopback client half.
-
-```rust
-pub fn loopback_out() -> FlowPlan;
-```
-
-Loopback server half: ALE accepts inbound loopback immediately.
-
-```rust
-pub fn loopback_in() -> FlowPlan;
-```
-
-IPv6 HTTPS.
-
-```rust
-pub fn https_v6() -> FlowPlan;
-```
-
-IPv6 DNS.
-
-```rust
-pub fn dns_v6() -> FlowPlan;
-```
-
-ICMP echo: not connection-tracked, so every packet pends on its own.
-
-```rust
-pub fn icmp_echo_flow() -> FlowPlan;
-```
-
-Mid-flow reauthorization: an accepted connection is re-classified by ALE.
-
-```rust
-pub fn reauth_mid_flow() -> FlowPlan;
-```
-
-Port reuse: release the local port, then reopen it against a new remote
-(see [`super::reuse_follow_up`]).
-
-```rust
-pub fn port_reuse() -> FlowPlan;
-```
-
-Inbound TCP to a local listener (non-loopback).
+Assert the driver's load registered exactly the production callout set, on
+the expected layers, inside a committed filter-engine transaction.
 
 ```rust
-pub fn inbound_tcp() -> FlowPlan;
+pub fn check_registration() -> Result<(), String>;
 ```
 
 ---

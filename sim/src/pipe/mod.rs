@@ -1,4 +1,4 @@
-//! The daemon's agent-facing endpoint, one implementation per OS behind the same
+//! The agent-facing endpoint, one implementation per OS behind the same
 //! `PipeServer` API (`create`, `wait_for_client`, `write_all`, `read_message`,
 //! `disconnect`). One client is served at a time; after `disconnect` the server
 //! can `wait_for_client` again for the next one:
@@ -9,8 +9,8 @@
 //!   `u32` little-endian length, which restores "one command message = one
 //!   `Device::write`". The event direction stays an unframed byte stream on both.
 //!
-//! [`endpoint`] maps the logical name (`ZF_SIM_PIPE`) to the OS address. The Go
-//! side (`kext_interface/sim_conn*.go`) applies the same rule.
+//! [`endpoint`] maps the logical name (`ZF_SIM_PIPE` on the Go side) to the OS
+//! address. The Go side (`kext_interface/sim_conn*.go`) applies the same rule.
 
 #[cfg(unix)]
 mod unix;
@@ -45,4 +45,13 @@ pub fn endpoint(name: &str) -> String {
         Ok(dir) if !dir.is_empty() => format!("{}/{name}.sock", dir.trim_end_matches('/')),
         _ => format!("/tmp/{name}.sock"),
     }
+}
+
+/// Connect to `endpoint` and hang up at once. Wakes a server of ours blocked in
+/// `wait_for_client` when nobody else is going to connect (shutting down).
+pub fn poke(endpoint: &str) {
+    #[cfg(windows)]
+    let _ = std::fs::OpenOptions::new().read(true).write(true).open(endpoint);
+    #[cfg(unix)]
+    let _ = std::os::unix::net::UnixStream::connect(endpoint);
 }

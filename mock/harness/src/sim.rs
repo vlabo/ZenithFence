@@ -1,30 +1,24 @@
-//! Full-driver simulation harness.
+//! The loaded driver and its user-space channel.
 //!
-//! Loads the *real* driver via its `DriverEntry` (over the mocked WDK), then lets
-//! a user-space side talk to it through the same channel a real agent uses
+//! Loads the *real* driver via its `DriverEntry` (over the mocked WDK); the
+//! agent side talks to it through the same channel a real agent uses
 //! ([`wdk::connection::DriverConnection`] = `ReadFile`/`WriteFile`/`DeviceIoControl`).
-//! Callouts are driven on one thread (the "kernel" producer) while a separate
-//! user-space consumer thread blocks on `read`, parses the event stream, and
-//! replies with verdicts — exercising the asynchronous pend -> event -> verdict
-//! -> inject pipeline, the blocking event queue, and the IRP dispatch, with real
-//! OS threads (so ThreadSanitizer sees genuine concurrency).
+//! [`EventParser`] / [`Event::decode`] read the event stream it produces.
 //!
 //! Teardown order is load-bearing: `shutdown` runs down the event queue so a
-//! blocked reader wakes with end-of-file; join the consumer; only then drop the
+//! blocked reader wakes with end-of-file; join the readers; only then drop the
 //! `Simulation`, which unloads the driver through its registered `DriverUnload`.
 
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::net::IpAddr;
 
 use protocol::command::CommandType;
 use wdk::connection::DriverConnection;
-use wdk::kernel_types::{NTSTATUS, STATUS_END_OF_FILE, STATUS_SUCCESS};
+use wdk::kernel_types::{NTSTATUS, STATUS_SUCCESS};
 
-use crate::loader::{self, Reads};
+use crate::loader;
 
-/// A loaded driver instance (loaded with blocking reads, so a consumer thread
-/// blocks on `read` like a real user-space agent). Holds the harness driver lock
+/// A loaded driver instance (reads block, like a real user-space agent's).
+/// Holds the harness driver lock
 /// for its lifetime so concurrent tests don't fight over the one driver per
 /// process, and unloads the driver when dropped.
 pub struct Simulation {
@@ -36,7 +30,7 @@ impl Simulation {
     /// an earlier harness user is unloaded first, so this run starts clean.
     pub fn start() -> Result<Self, NTSTATUS> {
         let guard = loader::lock();
-        let status = loader::reload(Reads::Blocking);
+        let status = loader::reload();
         if status != STATUS_SUCCESS {
             return Err(status);
         }
@@ -52,8 +46,8 @@ impl Simulation {
     }
 
     /// Request shutdown: resolve pending packets and run down the event queue so
-    /// any blocked reader wakes with end-of-file. Idempotent; safe to call from
-    /// the producer once the op stream is done.
+    /// any blocked reader wakes with end-of-file. Idempotent; safe to call
+    /// from any thread.
     pub fn shutdown(&self) {
         if let Some(device) = driver::entry::get_device() {
             device.shutdown();
@@ -89,6 +83,137 @@ impl Event {
         } else {
             None
         }
+    }
+
+    /// Decode the payload per its `info_type` (layouts: `protocol/src/info.rs`).
+    /// `None` for an unknown type or a payload that doesn't match its layout.
+    pub fn decode(&self) -> Option<Info> {
+        let mut r = Reader(&self.payload);
+        let v6 = matches!(self.info_type, 2 | 4 | 6);
+        let info = match self.info_type {
+            0 => Info::Log {
+                severity: r.u8()?,
+                line: String::from_utf8_lossy(r.rest()).into_owned(),
+            },
+            1 | 2 => {
+                let id = r.u64()?;
+                let process_id = r.u64()?;
+                let direction = r.u8()?;
+                let tuple = r.tuple(v6)?;
+                let payload_layer = r.u8()?;
+                let len = r.u32()? as usize;
+                Info::Connection {
+                    id,
+                    process_id,
+                    direction,
+                    tuple,
+                    payload_layer,
+                    payload: r.take(len)?.to_vec(),
+                }
+            }
+            3 | 4 => Info::ConnectionEnd {
+                process_id: r.u64()?,
+                direction: r.u8()?,
+                tuple: r.tuple(v6)?,
+                counters: r.counters()?,
+            },
+            5 | 6 => Info::ConnectionUpdate {
+                tuple: r.tuple(v6)?,
+                counters: r.counters()?,
+            },
+            7 => Info::ConnectionUpdateEnd { timestamp: r.u64()? },
+            _ => return None,
+        };
+        r.rest().is_empty().then_some(info)
+    }
+}
+
+/// A connection's 5-tuple as an event carries it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InfoTuple {
+    pub protocol: u8,
+    pub local: IpAddr,
+    pub local_port: u16,
+    pub remote: IpAddr,
+    pub remote_port: u16,
+}
+
+/// Traffic counters of an end / update event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counters {
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
+}
+
+/// A decoded event ([`Event::decode`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Info {
+    Log { severity: u8, line: String },
+    /// A pended packet awaiting a verdict for `id`.
+    Connection {
+        id: u64,
+        process_id: u64,
+        direction: u8,
+        tuple: InfoTuple,
+        payload_layer: u8,
+        payload: Vec<u8>,
+    },
+    ConnectionEnd { process_id: u64, direction: u8, tuple: InfoTuple, counters: Counters },
+    ConnectionUpdate { tuple: InfoTuple, counters: Counters },
+    /// End of a connections update. `timestamp` is the driver's cursor: pass it
+    /// unchanged with the next `GetConnectionsUpdate`.
+    ConnectionUpdateEnd { timestamp: u64 },
+}
+
+/// Little-endian cursor over an event payload.
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        if self.0.len() < n {
+            return None;
+        }
+        let (head, rest) = self.0.split_at(n);
+        self.0 = rest;
+        Some(head)
+    }
+    fn rest(&mut self) -> &'a [u8] {
+        core::mem::take(&mut self.0)
+    }
+    fn u8(&mut self) -> Option<u8> {
+        self.take(1).map(|b| b[0])
+    }
+    fn u16(&mut self) -> Option<u16> {
+        self.take(2).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    }
+    fn u32(&mut self) -> Option<u32> {
+        self.take(4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> Option<u64> {
+        self.take(8).map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+    }
+    fn ip(&mut self, v6: bool) -> Option<IpAddr> {
+        Some(if v6 {
+            IpAddr::from(<[u8; 16]>::try_from(self.take(16)?).ok()?)
+        } else {
+            IpAddr::from(<[u8; 4]>::try_from(self.take(4)?).ok()?)
+        })
+    }
+    fn tuple(&mut self, v6: bool) -> Option<InfoTuple> {
+        let protocol = self.u8()?;
+        let (local, remote) = (self.ip(v6)?, self.ip(v6)?);
+        let (local_port, remote_port) = (self.u16()?, self.u16()?);
+        Some(InfoTuple { protocol, local, local_port, remote, remote_port })
+    }
+    fn counters(&mut self) -> Option<Counters> {
+        Some(Counters {
+            rx_bytes: self.u64()?,
+            rx_packets: self.u64()?,
+            tx_bytes: self.u64()?,
+            tx_packets: self.u64()?,
+        })
     }
 }
 
@@ -140,152 +265,4 @@ pub fn verdict_command(id: u64, verdict: u8) -> Vec<u8> {
     cmd.extend_from_slice(&id.to_le_bytes());
     cmd.push(verdict);
     cmd
-}
-
-/// What a finished consumer thread observed.
-pub struct ConsumerStats {
-    pub events: u64,
-    pub replies: u64,
-}
-
-/// Handle to a running user-space consumer thread.
-pub struct ConsumerHandle {
-    join: JoinHandle<ConsumerStats>,
-}
-
-impl ConsumerHandle {
-    /// Wait for the consumer to exit (it exits when the channel reaches
-    /// end-of-file, i.e. after `Simulation::shutdown`). Re-raises a consumer panic.
-    pub fn join(self) -> ConsumerStats {
-        match self.join.join() {
-            Ok(stats) => stats,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
-
-    /// Like [`join`](Self::join) but gives up after `dur`, returning `None` (used
-    /// by the no-hang test to fail fast if shutdown didn't release the reader).
-    pub fn join_timeout(self, dur: Duration) -> Option<ConsumerStats> {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(self.join.join());
-        });
-        match rx.recv_timeout(dur) {
-            Ok(Ok(stats)) => Some(stats),
-            Ok(Err(payload)) => std::panic::resume_unwind(payload),
-            Err(_) => None,
-        }
-    }
-}
-
-/// Spawn a user-space consumer thread: it blocks on `conn.read`, parses events,
-/// and for each event asks `verdict_policy` for a verdict to write back. If
-/// `processed` is set, the packet id of each replied-to event is sent on it (so a
-/// test can synchronize on "the verdict has been applied"). The thread exits when
-/// the channel reaches end-of-file (after shutdown).
-pub fn spawn_consumer<F>(
-    mut conn: DriverConnection,
-    mut verdict_policy: F,
-    processed: Option<mpsc::Sender<u64>>,
-) -> ConsumerHandle
-where
-    F: FnMut(&Event) -> Option<u8> + Send + 'static,
-{
-    let join = thread::spawn(move || {
-        let mut parser = EventParser::new();
-        let mut buf = [0u8; 4096];
-        let mut stats = ConsumerStats {
-            events: 0,
-            replies: 0,
-        };
-        loop {
-            let (n, status) = conn.read(&mut buf);
-            if status == STATUS_END_OF_FILE {
-                break;
-            }
-            // Blocking reads only return SUCCESS (with data) or end-of-file; any
-            // other status stops the loop rather than risk a spin.
-            if status != STATUS_SUCCESS {
-                break;
-            }
-            parser.feed(&buf[..n]);
-            while let Some(event) = parser.next_event() {
-                stats.events += 1;
-                let Some(verdict) = verdict_policy(&event) else {
-                    continue;
-                };
-                let Some(id) = event.packet_id() else {
-                    continue;
-                };
-                conn.write(&verdict_command(id, verdict));
-                stats.replies += 1;
-                if let Some(tx) = &processed {
-                    let _ = tx.send(id);
-                }
-            }
-        }
-        stats
-    });
-    ConsumerHandle { join }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use driver::connection::Verdict;
-
-    // End-to-end async pipeline over the real channel: a new inbound TCP
-    // connection pends and emits an event; a user-space consumer thread reads it
-    // through `DriverConnection`, replies PermanentAccept, and that verdict is
-    // observed in the connection cache.
-    #[test]
-    fn pipeline_event_to_verdict_over_channel() {
-        let sim = Simulation::start().expect("driver loads");
-
-        let (tx, rx) = mpsc::channel();
-        let consumer = spawn_consumer(
-            sim.connect(),
-            |_event| Some(Verdict::PermanentAccept as u8),
-            Some(tx),
-        );
-
-        // Producer ("kernel"): inbound TCP accept on a clean pool slot pends the
-        // connection and pushes a ConnectionIpv4 event.
-        let (conn_slot, proto_tcp) = (0u8, 0u8);
-        assert!(crate::fuzz_api::proto_is_connectable(proto_tcp));
-        let _ = crate::fuzz_api::run_ale_accept_v4(conn_slot, proto_tcp, false, 4321, &[], false);
-
-        // Wait for the consumer to read the event and write the verdict back.
-        rx.recv_timeout(Duration::from_secs(5))
-            .expect("consumer read the event and replied within the deadline");
-
-        assert_eq!(
-            crate::fuzz_api::verdict_for_v4(conn_slot, proto_tcp),
-            Some(Verdict::PermanentAccept as u8),
-            "verdict sent over the channel is applied in the connection cache"
-        );
-
-        sim.shutdown();
-        consumer
-            .join_timeout(Duration::from_secs(5))
-            .expect("consumer exits after shutdown");
-    }
-
-    // A consumer blocked in `read` with no events must unblock promptly when the
-    // driver is shut down (event queue run down -> end-of-file). Guards against a
-    // teardown hang.
-    #[test]
-    fn consumer_unblocks_on_shutdown() {
-        let sim = Simulation::start().expect("driver loads");
-        let consumer = spawn_consumer(sim.connect(), |_event| None, None);
-
-        // Let the consumer park in the blocking read, then shut down.
-        thread::sleep(Duration::from_millis(20));
-        sim.shutdown();
-
-        assert!(
-            consumer.join_timeout(Duration::from_secs(5)).is_some(),
-            "consumer thread did not exit after shutdown (hang)"
-        );
-    }
 }

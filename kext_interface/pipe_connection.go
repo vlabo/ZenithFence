@@ -23,7 +23,7 @@ import (
 // cancel the pending Read. The client's default read mode is byte-stream, which
 // is what the event parser (RecvInfo) expects, so message boundaries on the
 // command direction don't affect event reassembly. CreateFile is retried while
-// the server is still coming up, so daemon-first ordering is not required.
+// the server is still coming up, so server-first ordering is not required.
 func OpenPipe(pipeName string, readBufferSize int) (*KextFile, error) {
 	path := SimEndpoint(pipeName)
 	pathU16, err := syscall.UTF16FromString(path)
@@ -44,7 +44,7 @@ func OpenPipe(pipeName string, readBufferSize int) (*KextFile, error) {
 			return &KextFile{handle: handle, buffer: make([]byte, readBufferSize), pipe: true}, nil
 		}
 
-		// The daemon may not have created the pipe yet, or it may be momentarily
+		// The server may not have created the pipe yet, or it may be momentarily
 		// busy between instances; retry until the deadline.
 		if (err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PIPE_BUSY) && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)

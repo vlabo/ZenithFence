@@ -408,10 +408,14 @@ release/config.json
 kext_interface/go_command_test.bin
 protocol/rust_info_test.bin
 
-# Mock driver (mock/): fuzz corpus and crash artifacts are local; the replay
-# runner source must stay tracked despite the Visual Studio `[Bb]in/` rule above.
-mock/fuzz/corpus
-!mock/fuzz/src/bin/
-
 # Unix build of the Go agent (`just sim-build`); the Windows one is covered by *.exe.
 /kext_tester/kext_tester
+
+# Python extension built by `just sim-build` (its type stub is source)
+sim/python/zfsim/_native.*
+!sim/python/zfsim/_native.pyi
+__pycache__/
+
+# Local agent container (just mock-docker): bootstrap secrets and the copied agent build
+sim/docker/.env
+sim/docker/agent/

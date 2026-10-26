@@ -160,7 +160,7 @@ func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *w
 	}
 	if err != nil {
 		if f.pipe && (errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_PIPE_NOT_CONNECTED)) {
-			// The daemon went away: report it the way the device reports its
+			// The mock driver went away: report it the way the device reports its
 			// event queue running down.
 			err = windows.ERROR_HANDLE_EOF
 		}

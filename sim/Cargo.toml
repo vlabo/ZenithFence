@@ -1,35 +1,25 @@
 [package]
-name = "nexufend-sim"
+name = "zfsim"
 version = "0.0.0"
 publish = false
 edition = "2021"
 
-# Real-world userspace simulation harness. A host binary that loads the *real*
-# driver over the mock WDK (via `driver_harness::sim::Simulation`, see mock/) and
-# exposes it on a Windows named pipe (or, on Unix, a Unix domain socket) so the
-# real Go agent can connect to it exactly as it would to the kernel device. The
-# libFuzzer targets under mock/fuzz remain the coverage-guided path.
+# The Python extension module `zfsim._native`: the *real* driver over the mock
+# WDK (loaded through `driver_harness`, see mock/), driven from Python through
+# plain function calls. Scripts inject traffic, act as the agent or serve the
+# driver to the real Go agent on a named pipe (a Unix socket on Linux/macOS),
+# and assert on what happens. Built by `just sim-py-build` (build.py), which
+# copies the cdylib into python/zfsim/. Own cargo root like the other crates, so
+# its (pyo3) dependencies stay out of the driver build.
 
-[[bin]]
-name = "zf-sim"
-path = "src/main.rs"
+[lib]
+name = "_native"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
 
 [dependencies]
-# The real driver over the host mock WDK, loaded and driven through the harness
-# (same as mock/fuzz).
+pyo3 = { version = "0.30", features = ["abi3-py39", "extension-module"] }
 driver_harness = { package = "driver-harness", path = "../mock/harness" }
-# For the user-space connection's status constants (STATUS_SUCCESS / EOF). This
-# resolves to the same `mock_wdk` instance the driver links, so the
-# `DriverConnection` returned by `Simulation::connect` is the matching type.
+# The user-space connection type and its status constants. This resolves to the
+# same `mock_wdk` instance the driver links, so `DriverConnection` matches.
 mock_wdk = { path = "../mock/wdk" }
-
-# --- Scenario-file executor (see src/scenario.rs) --------------------------
-# A scenario is a CBOR sequence (`.cbor`) or JSON Lines (`.json`, one object per
-# line, for debugging) of per-command records; it is decoded as a lazy stream and
-# replayed against the driver by a worker pool. All pure host crates -- the mock
-# build stays windows-sys-free.
-ciborium = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
-serde_json = "1"
-crossbeam-channel = "0.5"

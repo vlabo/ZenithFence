@@ -16,7 +16,10 @@ pub fn advance_mock_time_ms(delta: u64) {
     MOCK_TIME_MS.fetch_add(delta, Ordering::SeqCst);
 }
 
+/// System time in milliseconds since 1601-01-01, like the kernel's
+/// `KeQuerySystemTime` (not the Unix epoch).
 pub fn get_system_timestamp_ms() -> u64 {
+    const UNIX_EPOCH_AS_SYSTEM_MS: u64 = 11_644_473_600_000;
     let pinned = MOCK_TIME_MS.load(Ordering::SeqCst);
     if pinned != 0 {
         return pinned;
@@ -24,7 +27,7 @@ pub fn get_system_timestamp_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .map(|d| d.as_millis() as u64 + UNIX_EPOCH_AS_SYSTEM_MS)
         .unwrap_or(0)
 }
 

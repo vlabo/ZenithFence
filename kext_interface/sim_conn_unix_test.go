@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Two back-to-back commands must reach the daemon as two separate frames, since
+// Two back-to-back commands must reach the server as two separate frames, since
 // the driver parses exactly one command per write.
 func TestFramedConnKeepsCommandBoundaries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "zf.sock")

@@ -2621,6 +2621,9 @@ after `set_mock_time_ms` has pinned the clock to a non-zero value.
 pub fn advance_mock_time_ms(delta: u64);
 ```
 
+System time in milliseconds since 1601-01-01, like the kernel's
+`KeQuerySystemTime` (not the Unix epoch).
+
 ```rust
 pub fn get_system_timestamp_ms() -> u64;
 ```
@@ -2638,45 +2641,29 @@ pub fn sleep_ms(milliseconds: u32) -> Result<(), String>;
 
 ---
 
-## `mock/harness/src/fuzz_api.rs`
+## `mock/harness/src/api.rs`
 
-Callout / command-channel fuzzing surface for the real driver.
-Builds mock classify inputs and drives the driver's real callout entry
-points and its user-space command channel, so the fuzz targets (mock/fuzz)
-and property tests can exercise the driver without knowing its module
-layout. The driver is loaded through its real `driver_entry` (see
-[`crate::loader`]); nothing here installs or replaces driver state.
+The real driver's callouts and state, driven like the kernel would.
+Builds mock classify inputs for an explicit 5-tuple and calls the driver's
+real callout entry points, and reads back the state a script asserts on. The
+driver is loaded through its real `driver_entry` (see [`crate::loader`]);
+nothing here installs or replaces driver state.
+All the mock-fidelity rules live here in ONE place: the classify `values`
+vector must be sized to the layer's `Fields::Max` (the mock indexes it and
+panics otherwise), each field must use the matching `Value` variant (else the
+mock silently reads 0 and keys don't match), and inbound NBLs need a
+`data_offset` that covers the headers the callout retreats past.
 
 ### Re-exports
 
 ```rust
-pub use wdk::filter_engine::layer::{self, Layer};
+pub use wdk::filter_engine::layer::Layer;
 pub use wdk::filter_engine::packet::InjectedPacket;
-pub use driver::connection::{Direction, Key, Verdict};
-pub use driver::device::{Device, Packet};
-pub use driver::entry::get_device;
-pub use driver::packet_util::{
-    get_key_from_nb_v4, get_key_from_nb_v6, recalc_header_checksums,
-};
-pub use wdk::filter_engine::net_buffer::{NetBuffer, NetBufferList, NET_BUFFER_LIST};
+pub use driver::connection::Direction;
 pub use wdk::filter_engine::classify::{FWP_ACTION_BLOCK, FWP_ACTION_PERMIT};
 ```
 
 ### Constants & statics
-
-Number of distinct connection slots the fuzzer can address. The slot index
-(op byte `conn` mod `POOL_SIZE`) selects a *stable* 5-tuple so the
-ALE-pend -> verdict -> packet-layer pipeline links up across ops (fully
-random tuples would never collide). The pool is deliberately diverse and
-spans the whole address space (see `pool_v4`/`pool_v6`) so coverage is wide
-while collisions stay common. The last slot is always a loopback connection
-(special-cased by ALE). Fully fuzzer-controlled, arbitrary-range packets are
-exercised separately via the `raw` packet path (the bytes become the packet
-verbatim, so `get_key_from_nb` parses arbitrary addresses/ports/protocols).
-
-```rust
-pub const POOL_SIZE: u8 = 64;
-```
 
 ```rust
 const IP4_HDR: u32 = 20;
@@ -2684,10 +2671,6 @@ const IP4_HDR: u32 = 20;
 
 ```rust
 const IP6_HDR: u32 = 40;
-```
-
-```rust
-const TP_HDR: u32 = 20;
 ```
 
 ### Types
@@ -2703,6 +2686,37 @@ pub struct CalloutResult {
     pub action: u32,
     /// Whether the callout set the ABSORB flag.
     pub absorb: bool,
+}
+```
+
+#### `TupleSpecV4`
+
+An IPv4 5-tuple. `protocol` is the raw IP protocol number (6 TCP, 17 UDP,
+1 ICMP, ...).
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TupleSpecV4 {
+    pub protocol: u8,
+    pub local: [u8; 4],
+    pub local_port: u16,
+    pub remote: [u8; 4],
+    pub remote_port: u16,
+}
+```
+
+#### `TupleSpecV6`
+
+An IPv6 5-tuple, see [`TupleSpecV4`].
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TupleSpecV6 {
+    pub protocol: u8,
+    pub local: [u8; 16],
+    pub local_port: u16,
+    pub remote: [u8; 16],
+    pub remote_port: u16,
 }
 ```
 
@@ -2744,38 +2758,6 @@ impl TupleV6 {
 }
 ```
 
-#### `TupleSpecV4`
-
-An explicit IPv4 5-tuple for the `*_tuple` entry points, so harnesses (the
-sim traffic producer) are not limited to the fixed fuzz pool. `protocol` is
-the raw IP protocol number (6 TCP, 17 UDP, 1 ICMP, ...).
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TupleSpecV4 {
-    pub protocol: u8,
-    pub local: [u8; 4],
-    pub local_port: u16,
-    pub remote: [u8; 4],
-    pub remote_port: u16,
-}
-```
-
-#### `TupleSpecV6`
-
-An explicit IPv6 5-tuple, see [`TupleSpecV4`].
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TupleSpecV6 {
-    pub protocol: u8,
-    pub local: [u8; 16],
-    pub local_port: u16,
-    pub remote: [u8; 16],
-    pub remote_port: u16,
-}
-```
-
 #### `FilterEngineSnapshot`
 
 Snapshot of the filter engine's registration state, for asserting the
@@ -2792,44 +2774,16 @@ pub struct FilterEngineSnapshot {
 
 ### Functions
 
-Deterministic 32-bit mix (splitmix-style), used to spread slot indices over
-the entire address/port space.
+Size of the transport header the packet builders put in front of the
+payload: TCP 20, UDP 8. Other protocols (ICMP, ...) carry their own header
+in the payload.
 
 ```rust
-fn mix32(x: u32) -> u32;
-```
-
-```rust
-fn proto_from_sel(sel: u8) -> IpProtocol;
+fn transport_header_len(proto: IpProtocol) -> u32;
 ```
 
 ```rust
 fn ports_for(proto: IpProtocol, lport: u16, rport: u16) -> (u16, u16);
-```
-
-Whether a `proto_sel` op byte maps to a connection-tracked protocol
-(TCP/UDP). Kept here so the callout fuzz oracle doesn't hard-code the private
-`proto_from_sel` mapping: a *structured* TCP/UDP packet always parses, so the
-packet callout must set an action.
-
-```rust
-pub fn proto_is_connectable(proto_sel: u8) -> bool;
-```
-
-```rust
-fn v6_prefix(p0: u8, p1: u8, last: u8) -> Ipv6Address;
-```
-
-```rust
-fn v6_from_seed(seed: u32) -> Ipv6Address;
-```
-
-```rust
-fn pool_v4(conn: u8, proto_sel: u8) -> TupleV4;
-```
-
-```rust
-fn pool_v6(conn: u8, proto_sel: u8) -> TupleV6;
 ```
 
 ```rust
@@ -2844,22 +2798,33 @@ fn key_v6(t: &TupleV6) -> Key;
 fn reauth_flag(reauthorize: bool) -> u32;
 ```
 
+The Internet checksum (RFC 1071) over `chunks` taken as one buffer (every
+chunk but the last must have an even length).
+
 ```rust
-fn build_packet_v4(
-    t: &TupleV4,
-    direction: Direction,
+fn inet_checksum(chunks: &[&[u8]]) -> u16;
+```
+
+The transport header (see [`transport_header_len`]) followed by `payload`,
+checksummed over `addresses` (source then destination, the start of the IP
+pseudo-header). Protocols without a header here get `payload` unchanged.
+
+```rust
+fn transport_segment(
+    proto: IpProtocol,
+    sport: u16,
+    dport: u16,
     payload: &[u8],
-    raw: bool,
+    addresses: &[u8],
 ) -> Vec<u8>;
 ```
 
 ```rust
-fn build_packet_v6(
-    t: &TupleV6,
-    direction: Direction,
-    payload: &[u8],
-    raw: bool,
-) -> Vec<u8>;
+fn build_packet_v4(t: &TupleV4, direction: Direction, payload: &[u8]) -> Vec<u8>;
+```
+
+```rust
+fn build_packet_v6(t: &TupleV6, direction: Direction, payload: &[u8]) -> Vec<u8>;
 ```
 
 ```rust
@@ -2891,13 +2856,13 @@ where
     F: FnOnce(CalloutData),;
 ```
 
-Load the driver (with non-blocking reads, see [`crate::loader::Reads`]) if
-it is not loaded yet. The callout fuzz target keeps one driver for the whole
-process (persistent stateful fuzzing), so this is a no-op after the first
-call.
-
 ```rust
-pub fn ensure_device();
+fn notify(
+    layer: Layer,
+    values: Vec<Value>,
+    process_id: u64,
+    callout: impl FnOnce(CalloutData),
+);
 ```
 
 Number of packets currently pending in the id/packet cache.
@@ -2912,36 +2877,24 @@ Number of active (not-yet-ended) connections in the connection cache.
 pub fn active_conn_count() -> usize;
 ```
 
-Snapshot of packet ids currently pending, for issuing matching verdicts.
+Ids of the packets currently pending.
 
 ```rust
 pub fn live_ids() -> Vec<u64>;
 ```
 
-The verdict the connection cache currently holds for pool connection
-`(conn, proto_sel)`, if any. Used as the cross-layer (Tier-3) oracle: the
-packet layer's action for this flow must agree with this verdict.
+The connection cache's verdict for `spec`, if any. This is how a harness
+observes the agent's (asynchronous) verdict landing, like the OS observes
+the ALE re-authorization outcome.
 
 ```rust
-pub fn verdict_for_v4(conn: u8, proto_sel: u8) -> Option<u8>;
+pub fn verdict_for_v4(spec: TupleSpecV4) -> Option<u8>;
 ```
 
-```rust
-pub fn verdict_for_v6(conn: u8, proto_sel: u8) -> Option<u8>;
-```
-
-The connection cache's verdict for an explicit tuple, if any. This is how a
-harness observes the agent's (asynchronous) verdict landing, like the OS
-observes the ALE re-authorization outcome.
+See [`verdict_for_v4`]; v6 flavor.
 
 ```rust
-pub fn verdict_for_key_v4(spec: TupleSpecV4) -> Option<u8>;
-```
-
-See [`verdict_for_key_v4`]; v6 flavor.
-
-```rust
-pub fn verdict_for_key_v6(spec: TupleSpecV6) -> Option<u8>;
+pub fn verdict_for_v6(spec: TupleSpecV6) -> Option<u8>;
 ```
 
 Take every packet the driver injected since the last drain (the mock
@@ -2952,18 +2905,10 @@ the packet-layer callouts to model the OS re-presenting injected packets.
 pub fn drain_injected() -> Vec<InjectedPacket>;
 ```
 
-Number of injected packets not yet drained.
-
-```rust
-pub fn injected_len() -> usize;
-```
-
 Reset the device's transient per-flow state to a clean slate: drop every
 tracked connection and any still-pended packet, and discard recorded injects.
-An independent replay then sees every connection as new again instead of
-inheriting the previous run's cached verdicts, and a long soak does not grow
-the injector without bound. Callout registration and the filter engine are
-left intact -- only transient state resets. No-op if no device is installed.
+Callout registration and the filter engine are left intact. No-op if no
+device is installed.
 
 ```rust
 pub fn reset_device_state();
@@ -2973,21 +2918,10 @@ pub fn reset_device_state();
 pub fn filter_engine_snapshot() -> Option<FilterEngineSnapshot>;
 ```
 
-```rust
-pub fn run_ale_connect_v4(
-    conn: u8,
-    proto_sel: u8,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-ALE outbound-connect against an explicit tuple (see [`TupleSpecV4`]).
+ALE outbound-connect classify: the first packet of a new outbound flow.
 
 ```rust
-pub fn run_ale_connect_v4_tuple(
+pub fn ale_connect_v4(
     spec: TupleSpecV4,
     reauthorize: bool,
     process_id: u64,
@@ -2995,31 +2929,10 @@ pub fn run_ale_connect_v4_tuple(
 ) -> CalloutResult;
 ```
 
-```rust
-fn ale_connect_v4_with(
-    t: TupleV4,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
+ALE inbound-accept classify.
 
 ```rust
-pub fn run_ale_accept_v4(
-    conn: u8,
-    proto_sel: u8,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-ALE inbound-accept against an explicit tuple (see [`TupleSpecV4`]).
-
-```rust
-pub fn run_ale_accept_v4_tuple(
+pub fn ale_accept_v4(
     spec: TupleSpecV4,
     reauthorize: bool,
     process_id: u64,
@@ -3027,31 +2940,10 @@ pub fn run_ale_accept_v4_tuple(
 ) -> CalloutResult;
 ```
 
-```rust
-fn ale_accept_v4_with(
-    t: TupleV4,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
+See [`ale_connect_v4`]; v6 flavor.
 
 ```rust
-pub fn run_ale_connect_v6(
-    conn: u8,
-    proto_sel: u8,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-ALE outbound-connect against an explicit tuple (see [`TupleSpecV6`]).
-
-```rust
-pub fn run_ale_connect_v6_tuple(
+pub fn ale_connect_v6(
     spec: TupleSpecV6,
     reauthorize: bool,
     process_id: u64,
@@ -3059,31 +2951,10 @@ pub fn run_ale_connect_v6_tuple(
 ) -> CalloutResult;
 ```
 
-```rust
-fn ale_connect_v6_with(
-    t: TupleV6,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
+See [`ale_accept_v4`]; v6 flavor.
 
 ```rust
-pub fn run_ale_accept_v6(
-    conn: u8,
-    proto_sel: u8,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-ALE inbound-accept against an explicit tuple (see [`TupleSpecV6`]).
-
-```rust
-pub fn run_ale_accept_v6_tuple(
+pub fn ale_accept_v6(
     spec: TupleSpecV6,
     reauthorize: bool,
     process_id: u64,
@@ -3091,208 +2962,85 @@ pub fn run_ale_accept_v6_tuple(
 ) -> CalloutResult;
 ```
 
-```rust
-fn ale_accept_v6_with(
-    t: TupleV6,
-    reauthorize: bool,
-    process_id: u64,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
+IP-packet-layer classify for a packet of `spec` built around `payload`.
 
 ```rust
-pub fn run_packet_in_v4(
-    conn: u8,
-    proto_sel: u8,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-```rust
-fn packet_in_v4_with(t: TupleV4, payload: &[u8], raw: bool) -> CalloutResult;
-```
-
-```rust
-pub fn run_packet_out_v4(
-    conn: u8,
-    proto_sel: u8,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-Packet-layer classify for an explicit tuple, in either direction, with a
-structured packet built around `payload`.
-
-```rust
-pub fn run_packet_v4_tuple(
+pub fn packet_v4(
     spec: TupleSpecV4,
     direction: Direction,
     payload: &[u8],
 ) -> CalloutResult;
 ```
 
-```rust
-fn packet_out_v4_with(t: TupleV4, payload: &[u8], raw: bool) -> CalloutResult;
-```
+See [`packet_v4`]; v6 flavor.
 
 ```rust
-pub fn run_packet_in_v6(
-    conn: u8,
-    proto_sel: u8,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-```rust
-fn packet_in_v6_with(t: TupleV6, payload: &[u8], raw: bool) -> CalloutResult;
-```
-
-```rust
-pub fn run_packet_out_v6(
-    conn: u8,
-    proto_sel: u8,
-    payload: &[u8],
-    raw: bool,
-) -> CalloutResult;
-```
-
-Packet-layer classify for an explicit tuple, see [`run_packet_v4_tuple`].
-
-```rust
-pub fn run_packet_v6_tuple(
+pub fn packet_v6(
     spec: TupleSpecV6,
     direction: Direction,
     payload: &[u8],
 ) -> CalloutResult;
 ```
 
-Run the v4 packet-layer callout on an already-built packet buffer, as the
-OS re-presents a packet: `injected_by_self` marks it as network-injected by
-the driver (the FWPS injection state), so the callout's self-inject permit
-branch runs. `bytes` must start at the IP header.
+Run the v4 packet-layer callout on raw bytes starting at the IP header
+(malformed ones included), as the OS re-presents a packet: `injected_by_self`
+marks it as network-injected by the driver (the FWPS injection state), so
+the callout's self-inject permit branch runs.
 
 ```rust
-pub fn run_packet_bytes_v4(
+pub fn packet_bytes_v4(
     bytes: &[u8],
     direction: Direction,
     injected_by_self: bool,
 ) -> CalloutResult;
 ```
 
-See [`run_packet_bytes_v4`]; v6 flavor.
+See [`packet_bytes_v4`]; v6 flavor.
 
 ```rust
-pub fn run_packet_bytes_v6(
+pub fn packet_bytes_v6(
     bytes: &[u8],
     direction: Direction,
     injected_by_self: bool,
 ) -> CalloutResult;
 ```
 
+ALE endpoint closure for `spec`: the connection ended.
+
 ```rust
-fn packet_out_v6_with(t: TupleV6, payload: &[u8], raw: bool) -> CalloutResult;
+pub fn endpoint_close_v4(spec: TupleSpecV4, process_id: u64);
 ```
 
+See [`endpoint_close_v4`]; v6 flavor.
+
 ```rust
-pub fn run_endpoint_close_v4(conn: u8, proto_sel: u8, process_id: u64);
+pub fn endpoint_close_v6(spec: TupleSpecV6, process_id: u64);
 ```
 
-Endpoint closure for an explicit tuple (see [`TupleSpecV4`]).
+ALE resource release: local `port` of `protocol` was released.
 
 ```rust
-pub fn run_endpoint_close_v4_tuple(spec: TupleSpecV4, process_id: u64);
+pub fn resource_release_v4(protocol: u8, port: u16);
 ```
 
-```rust
-fn endpoint_close_v4_with(t: TupleV4, process_id: u64);
-```
+See [`resource_release_v4`]; v6 flavor.
 
 ```rust
-pub fn run_endpoint_close_v6(conn: u8, proto_sel: u8, process_id: u64);
-```
-
-Endpoint closure for an explicit tuple (see [`TupleSpecV6`]).
-
-```rust
-pub fn run_endpoint_close_v6_tuple(spec: TupleSpecV6, process_id: u64);
-```
-
-```rust
-fn endpoint_close_v6_with(t: TupleV6, process_id: u64);
-```
-
-Resource assignment-discard (`kind` even) or resource release (`kind` odd).
-
-```rust
-pub fn run_resource_v4(kind: u8, proto_sel: u8, port: u16);
-```
-
-```rust
-pub fn run_resource_v6(kind: u8, proto_sel: u8, port: u16);
-```
-
-Resource release for a raw protocol number and port (unlike
-[`run_resource_v4`], which maps through the fuzz `proto_sel` distribution).
-
-```rust
-pub fn run_resource_release_v4_port(protocol: u8, port: u16);
-```
-
-See [`run_resource_release_v4_port`]; v6 flavor.
-
-```rust
-pub fn run_resource_release_v6_port(protocol: u8, port: u16);
-```
-
-```rust
-fn write_global(bytes: &[u8]);
-```
-
-Deliver a verdict for a pended packet id (mirrors a user-space `Verdict`
-command). `id` should usually come from [`live_ids`].
-
-```rust
-pub fn device_write_verdict(id: u64, verdict: u8);
-```
-
-```rust
-pub fn device_write_update_v4(conn: u8, proto_sel: u8, verdict: u8);
-```
-
-```rust
-pub fn device_write_update_v6(conn: u8, proto_sel: u8, verdict: u8);
-```
-
-```rust
-pub fn device_clear_cache();
-```
-
-```rust
-pub fn device_shutdown();
-```
-
-Drain up to `max` events from the device (mirrors user-space `Read` calls).
-`wait_and_pop` is non-blocking in the mock, so an empty queue just ends.
-
-```rust
-pub fn drain_events(max: u8);
+pub fn resource_release_v6(protocol: u8, port: u16);
 ```
 
 ---
 
 ## `mock/harness/src/lib.rs`
 
-Host test/fuzz harness for the ZenithFence driver.
+Host harness for the ZenithFence driver, used by the Python module `zfsim`
+(sim/).
 Everything here drives the REAL driver: `driver` is the `driver-mock`
 package, which compiles the production sources in driver/src against the
 host mock of the Windows kernel API (mock/wdk). The harness only uses the
 driver's public API -- it loads it through `driver_entry`, calls its callout
 entry points, talks to it through the user-space channel, and observes its
-state -- so no test or fuzz code lives in the driver itself.
+state -- so no test code lives in the driver itself.
 
 ---
 
@@ -3307,8 +3055,7 @@ registered on it. Nothing here reaches into the driver's globals directly.
 ### Constants & statics
 
 Serializes everything that loads, unloads or drives the process-wide driver
-instance. Every test (in any test binary module) that touches the loaded
-driver must hold this for its whole duration.
+instance; a [`crate::sim::Simulation`] holds it for its whole lifetime.
 
 ```rust
 pub static DRIVER_LOCK: Mutex<()> = Mutex::new(());
@@ -3330,22 +3077,6 @@ until the matching unload.
 struct LoadedDriver(Box<DRIVER_OBJECT>);
 ```
 
-#### `Reads`
-
-How user-space reads behave when the driver has no event queued.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Reads {
-    /// Block until an event arrives or the queue is run down, like the kernel.
-    /// For harnesses with a separate reader thread.
-    Blocking,
-    /// Return immediately. For single-threaded harnesses that drive the
-    /// callouts and drain the reads on the same thread.
-    NonBlocking,
-}
-```
-
 ### Trait implementations
 
 ```rust
@@ -3361,11 +3092,12 @@ not cascade into every later one).
 pub fn lock() -> MutexGuard<'static, ()>;
 ```
 
-Loads the driver unless one is already loaded. Returns the `driver_entry`
-status (`STATUS_SUCCESS` when a driver was already loaded).
+Loads the driver unless one is already loaded. User-space reads block until
+an event arrives or the queue is run down, like the kernel's. Returns the
+`driver_entry` status (`STATUS_SUCCESS` when a driver was already loaded).
 
 ```rust
-pub fn load(reads: Reads) -> NTSTATUS;
+pub fn load() -> NTSTATUS;
 ```
 
 Unloads the driver through its registered `DriverUnload`, like the kernel on
@@ -3378,7 +3110,7 @@ pub fn unload();
 Unloads any loaded driver and loads a fresh one.
 
 ```rust
-pub fn reload(reads: Reads) -> NTSTATUS;
+pub fn reload() -> NTSTATUS;
 ```
 
 Runs `f` with the loaded driver's `DRIVER_OBJECT` (e.g. to open a
@@ -3392,25 +3124,21 @@ pub fn with_driver_object<R>(f: impl FnOnce(&DRIVER_OBJECT) -> R) -> Option<R>;
 
 ## `mock/harness/src/sim.rs`
 
-Full-driver simulation harness.
-Loads the *real* driver via its `DriverEntry` (over the mocked WDK), then lets
-a user-space side talk to it through the same channel a real agent uses
+The loaded driver and its user-space channel.
+Loads the *real* driver via its `DriverEntry` (over the mocked WDK); the
+agent side talks to it through the same channel a real agent uses
 ([`wdk::connection::DriverConnection`] = `ReadFile`/`WriteFile`/`DeviceIoControl`).
-Callouts are driven on one thread (the "kernel" producer) while a separate
-user-space consumer thread blocks on `read`, parses the event stream, and
-replies with verdicts — exercising the asynchronous pend -> event -> verdict
--> inject pipeline, the blocking event queue, and the IRP dispatch, with real
-OS threads (so ThreadSanitizer sees genuine concurrency).
+[`EventParser`] / [`Event::decode`] read the event stream it produces.
 Teardown order is load-bearing: `shutdown` runs down the event queue so a
-blocked reader wakes with end-of-file; join the consumer; only then drop the
+blocked reader wakes with end-of-file; join the readers; only then drop the
 `Simulation`, which unloads the driver through its registered `DriverUnload`.
 
 ### Types
 
 #### `Simulation`
 
-A loaded driver instance (loaded with blocking reads, so a consumer thread
-blocks on `read` like a real user-space agent). Holds the harness driver lock
+A loaded driver instance (reads block, like a real user-space agent's).
+Holds the harness driver lock
 for its lifetime so concurrent tests don't fight over the one driver per
 process, and unloads the driver when dropped.
 
@@ -3429,8 +3157,8 @@ impl Simulation {
     /// its own (the dispatch handlers take `&mut` device/IRP per call).
     pub fn connect(&self) -> DriverConnection;
     /// Request shutdown: resolve pending packets and run down the event queue so
-    /// any blocked reader wakes with end-of-file. Idempotent; safe to call from
-    /// the producer once the op stream is done.
+    /// any blocked reader wakes with end-of-file. Idempotent; safe to call
+    /// from any thread.
     pub fn shutdown(&self);
 }
 ```
@@ -3450,6 +3178,90 @@ pub struct Event {
 ```rust
 impl Event {
     pub fn packet_id(&self) -> Option<u64>;
+    /// Decode the payload per its `info_type` (layouts: `protocol/src/info.rs`).
+    /// `None` for an unknown type or a payload that doesn't match its layout.
+    pub fn decode(&self) -> Option<Info>;
+}
+```
+
+#### `InfoTuple`
+
+A connection's 5-tuple as an event carries it.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InfoTuple {
+    pub protocol: u8,
+    pub local: IpAddr,
+    pub local_port: u16,
+    pub remote: IpAddr,
+    pub remote_port: u16,
+}
+```
+
+#### `Counters`
+
+Traffic counters of an end / update event.
+
+```rust
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counters {
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
+}
+```
+
+#### `Info`
+
+A decoded event ([`Event::decode`]).
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Info {
+    Log { severity: u8, line: String },
+    /// A pended packet awaiting a verdict for `id`.
+    Connection {
+        id: u64,
+        process_id: u64,
+        direction: u8,
+        tuple: InfoTuple,
+        payload_layer: u8,
+        payload: Vec<u8>,
+    },
+    ConnectionEnd {
+        process_id: u64,
+        direction: u8,
+        tuple: InfoTuple,
+        counters: Counters,
+    },
+    ConnectionUpdate { tuple: InfoTuple, counters: Counters },
+    /// End of a connections update. `timestamp` is the driver's cursor: pass it
+    /// unchanged with the next `GetConnectionsUpdate`.
+    ConnectionUpdateEnd { timestamp: u64 },
+}
+```
+
+#### `Reader`
+
+Little-endian cursor over an event payload.
+
+```rust
+struct Reader<'a>(&'a [u8]);
+```
+
+```rust
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]>;
+    fn rest(&mut self) -> &'a [u8];
+    fn u8(&mut self) -> Option<u8>;
+    fn u16(&mut self) -> Option<u16>;
+    fn u32(&mut self) -> Option<u32>;
+    fn u64(&mut self) -> Option<u64>;
+    fn ip(&mut self, v6: bool) -> Option<IpAddr>;
+    fn tuple(&mut self, v6: bool) -> Option<InfoTuple>;
+    fn counters(&mut self) -> Option<Counters>;
 }
 ```
 
@@ -3475,38 +3287,6 @@ impl EventParser {
 }
 ```
 
-#### `ConsumerStats`
-
-What a finished consumer thread observed.
-
-```rust
-pub struct ConsumerStats {
-    pub events: u64,
-    pub replies: u64,
-}
-```
-
-#### `ConsumerHandle`
-
-Handle to a running user-space consumer thread.
-
-```rust
-pub struct ConsumerHandle {
-    join: JoinHandle<ConsumerStats>,
-}
-```
-
-```rust
-impl ConsumerHandle {
-    /// Wait for the consumer to exit (it exits when the channel reaches
-    /// end-of-file, i.e. after `Simulation::shutdown`). Re-raises a consumer panic.
-    pub fn join(self) -> ConsumerStats;
-    /// Like [`join`](Self::join) but gives up after `dur`, returning `None` (used
-    /// by the no-hang test to fail fast if shutdown didn't release the reader).
-    pub fn join_timeout(self, dur: Duration) -> Option<ConsumerStats>;
-}
-```
-
 ### Trait implementations
 
 ```rust
@@ -3523,245 +3303,6 @@ to resolve a pended packet).
 ```rust
 pub fn verdict_command(id: u64, verdict: u8) -> Vec<u8>;
 ```
-
-Spawn a user-space consumer thread: it blocks on `conn.read`, parses events,
-and for each event asks `verdict_policy` for a verdict to write back. If
-`processed` is set, the packet id of each replied-to event is sent on it (so a
-test can synchronize on "the verdict has been applied"). The thread exits when
-the channel reaches end-of-file (after shutdown).
-
-```rust
-pub fn spawn_consumer<F>(
-    mut conn: DriverConnection,
-    mut verdict_policy: F,
-    processed: Option<mpsc::Sender<u64>>,
-) -> ConsumerHandle
-where
-    F: FnMut(&Event) -> Option<u8> + Send + 'static,;
-```
-
----
-
-## `mock/fuzz/src/bin/replay.rs`
-
-Windows-runnable driver for the fuzz targets.
-Unlike the libFuzzer targets in `fuzz_targets/` (which only link under
-`cargo fuzz` on Linux), this is an ordinary binary with a real `main`, so it
-builds and runs on Windows with plain `cargo run`.
-Usage:
-  cargo run --bin replay -- <target> [file ...]
-    with files : run the target on each file's bytes (replay a corpus/crash input)
-    no files   : run a random-input smoke loop (env: ITERS, SEED)
-Targets: callouts, callouts_mt, simulation
-Note: this is NOT coverage-guided -- it is random/replay testing. Use it to
-reproduce a Linux fuzzer crash on Windows or for a quick "does anything
-panic" sweep. The coverage-guided runs happen via `cargo fuzz run` on Linux.
-
-### Functions
-
-```rust
-fn next(state: &mut u64) -> u64;
-```
-
-```rust
-fn main();
-```
-
----
-
-## `mock/fuzz/src/lib.rs`
-
-Shared fuzz-target bodies for the ZenithFence driver.
-Each `targets::<name>(data: &[u8])` contains the actual logic + oracles for
-one fuzz target. The libFuzzer harnesses in `fuzz_targets/` and the
-Windows-runnable `replay` binary both call these, so there is a single
-source of truth and the same code is exercised on both platforms.
-
----
-
-## `mock/fuzz/src/targets.rs`
-
-Fuzz-target bodies. Each takes a raw `&[u8]` (what libFuzzer / the replay
-runner provide) and runs the code under test plus its oracles. A violated
-oracle panics, which libFuzzer reports as a crash and the replay runner
-surfaces as a process abort.
-
-### Constants & statics
-
-The set of valid target names (kept in sync with the functions below).
-
-```rust
-pub const NAMES: &[&str] = &["callouts", "callouts_mt", "simulation"];
-```
-
-Number of op variants the byte decoder recognizes.
-
-```rust
-const N_OPS: u8 = 18;
-```
-
-```rust
-const PACKET_CACHE_LIMIT: usize = 8192;
-```
-
-```rust
-const CONN_CACHE_LIMIT: usize = 8192;
-```
-
-```rust
-const INJECTED_LIMIT: usize = 8192;
-```
-
-Number of producer (event-generating) op variants for the simulation target.
-
-```rust
-const N_PRODUCER_OPS: u8 = 12;
-```
-
-### Types
-
-#### `Stream`
-
-Minimal byte-stream reader for the op grammar. Reads past the end yield
-`0`/empty; the loop stops once the cursor passes the end, so a truncated
-final op simply runs with zeroed fields (still fully deterministic, which
-keeps hand-authored corpus seeds stable).
-
-```rust
-struct Stream<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-```
-
-```rust
-impl<'a> Stream<'a> {
-    fn new(data: &'a [u8]) -> Self;
-    fn done(&self) -> bool;
-    fn u8(&mut self) -> u8;
-    fn u16(&mut self) -> u16;
-    fn take(&mut self, n: usize) -> &'a [u8];
-}
-```
-
-### Functions
-
-Dispatch by name. Returns `false` for an unknown target.
-
-```rust
-pub fn run(name: &str, data: &[u8]) -> bool;
-```
-
-```rust
-fn payload_len(b: u8) -> usize;
-```
-
-Stateful callout pipeline -- the main reason this harness exists. Decodes the
-input into a sequence of operations replayed against one persistent mock
-`Device`: ALE callouts pend flows, `Verdict`/`Update` commands resolve them,
-and packet-layer callouts then read the resulting verdict. Oracles:
-  * Tier 1: no panic / no OOB / no UB (libFuzzer + ASAN).
-  * Tier 2: ALE + structured packet callouts always set an action; after a
-    `Shutdown` op the packet cache is empty.
-  * Tier 3: for a structured TCP/UDP flow carrying a permanent verdict, the
-    packet-layer action matches that verdict.
-
-```rust
-pub fn callouts(data: &[u8]);
-```
-
-Multithreaded callout stress -- one shared persistent `Device`, many worker
-threads driving the callouts at the same time, in all combinations.
-Layout of `data`: byte 0 selects the worker count (2..=8); the rest is one
-op stream. Every worker runs the *whole* op stream, phase-shifted by a
-distinct rotation, so all workers hammer overlapping connection-pool slots
-concurrently with varied op orders -- maximizing contention on the same RCU
-ports / packet cache. Workers are released together by a barrier.
-Oracles under concurrency are interleaving-independent:
-  * Tier 1: no panic / no ASAN / no ThreadSanitizer report (the main one).
-  * Tier 2 (per call): ALE + structured packet callouts always set an action.
-  * Post-join quiesce: with no worker running, a `Shutdown` must fully drain
-    the packet cache.
-The Tier-3 cross-layer verdict mapping and the mid-stream "Shutdown -> empty"
-assert are dropped here: another thread can change a verdict or pend a packet
-between the observation and the check, so they are not race-stable.
-
-```rust
-pub fn callouts_mt(data: &[u8]);
-```
-
-Full-driver simulation -- the highest-fidelity target. Loads the *real*
-driver via `DriverEntry` (over the mocked WDK), then runs the asynchronous
-channel pipeline with real OS threads:
-  * a "kernel" producer (this thread) drives event-producing callouts from
-    the op stream -- ALE/packet callouts pend flows and push events, endpoint
-    closures and resource events fire;
-  * a user-space consumer thread blocks on `DriverConnection::read`, parses
-    the event stream, and writes `Verdict` commands back over the channel
-    (the verdict bytes come from the fuzz input, so all verdict kinds --
-    accept/block/drop/redirect and the permanent variants -- get explored).
-This exercises the full lifecycle (load -> dispatch -> unload), the blocking
-event queue, the IRP read/write path, and the pend -> event -> verdict ->
-inject loop under genuine producer/consumer concurrency (so ThreadSanitizer
-sees real races if any exist).
-Oracles (interleaving-independent):
-  * Tier 1: no panic / no ASAN / no ThreadSanitizer report.
-  * Tier 2 (per call): ALE + structured packet callouts always set an action.
-  * Post-shutdown quiesce: once the producer is done and the driver is shut
-    down, the packet cache is empty (every pended flow was resolved or drained).
-
-```rust
-pub fn simulation(data: &[u8]);
-```
-
-Decode and run only the event-*producing* callouts against the installed
-device. Unlike [`drive_ops`], this issues no `Verdict`/`Update`/`Shutdown`
-commands and never reads the event queue -- in the simulation those are the
-user-space consumer's job, over the channel -- so it never blocks on the
-(now blocking) event queue.
-
-```rust
-fn drive_producer(s: &mut Stream);
-```
-
-Decode and execute the op stream against the (already installed) global
-device. `concurrent` selects the oracle set: when other threads may be
-mutating the same device, race-sensitive checks (Tier-3 verdict mapping and
-the mid-stream shutdown-empties-cache assert) are skipped; everything else
-(no panic, per-call "an action was set") still holds.
-
-```rust
-fn drive_ops(s: &mut Stream, concurrent: bool);
-```
-
-```rust
-fn check_perm_verdict(op: u8, verdict: u8, r: driver_harness::fuzz_api::CalloutResult);
-```
-
----
-
-## `mock/fuzz/fuzz_targets/callouts.rs`
-
-Stateful ALE + packet-layer callout pipeline. See driver_fuzz::targets::callouts.
-
----
-
-## `mock/fuzz/fuzz_targets/callouts_mt.rs`
-
-Multithreaded ALE + packet-layer callout stress: many worker threads drive
-the callouts against one shared device at the same time. See
-driver_fuzz::targets::callouts_mt. Best run with ThreadSanitizer
-(`just fuzz-tsan callouts_mt`).
-
----
-
-## `mock/fuzz/fuzz_targets/simulation.rs`
-
-Full-driver simulation: load the real driver over the mocked WDK and drive it
-through the user-space channel with a real producer thread (callouts) and a
-real consumer thread (reads events, writes verdicts). See
-driver_fuzz::targets::simulation. Run with ThreadSanitizer for race coverage
-(`just fuzz-tsan simulation`) or ASAN (`just fuzz simulation`).
 
 ---
 

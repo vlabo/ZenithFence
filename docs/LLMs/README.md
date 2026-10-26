@@ -23,7 +23,7 @@ Do not edit the generated files by hand.
 | `RUSTDOC-driver.md` | ~38 KB | ~11k | `driver/src` (callouts, device, caches, queues) and `driver/kernel` (the kernel-image build root) |
 | `RUSTDOC-protocol.md` | ~7 KB | ~2k | `protocol/src` — command parsing (user→kernel) and info serialization (kernel→user) |
 | `RUSTDOC-wdk.md` | ~96 KB | ~28k | `wdk/src` — unsafe wrappers over WFP, NDIS, IRP, IOQueue, locks, allocator, FFI |
-| `RUSTDOC-mock.md` | ~89 KB | ~25k | `mock/` — `mock/wdk` (host mock of `wdk`), `mock/harness` (loader, fuzz API, in-process sim) and `mock/fuzz` (fuzz targets); `mock/driver` has no sources of its own, it compiles `driver/src` |
+| `RUSTDOC-mock.md` | ~89 KB | ~25k | `mock/` — `mock/wdk` (host mock of `wdk`), `mock/harness` (loader, callout API, event decoding); `mock/driver` has no sources of its own, it compiles `driver/src` |
 | `RUSTDOC-tools.md` | ~48 KB | ~14k | `sim/src` (fake-driver daemon, scenarios) and `release/src` (packaging) |
 | `GODOC.md` | ~15 KB | ~4k | Go user space: `kext_interface` (exported API) and `kext_tester` (all decls) |
 

@@ -8,7 +8,7 @@
 
 ## `github.com/vlabo/zenithfence/kext_interface`
 
-Files: `command.go`, `info.go`, `ioctl.go`, `kext.go`, `kext_file.go`, `mock_service.go`, `pipe_connection.go`, `sim_conn.go`, `sim_conn_unix.go`, `sim_conn_windows.go`, `version.go`
+Files: `command.go`, `info.go`, `ioctl.go`, `kext.go`, `kext_file.go`, `pipe_connection.go`, `sim_conn.go`, `sim_conn_unix.go`, `sim_conn_windows.go`, `version.go`
 
 ### Variables
 
@@ -127,8 +127,14 @@ type ConnectionEndV6 struct {
 
 #### `ConnectionUpdateEnd`
 
+ConnectionUpdateEnd closes the events of one GetConnectionsUpdate request.
+Timestamp is opaque (the kext's clock): pass it to the next
+SendGetConnectionsUpdateCommand.
+
 ```go
-type ConnectionUpdateEnd struct{}
+type ConnectionUpdateEnd struct {
+	Timestamp uint64
+}
 ```
 
 #### `ConnectionUpdateV4`
@@ -235,7 +241,7 @@ pending Read on one goroutine does not block Writes from others and Close can
 cancel the pending Read. The client's default read mode is byte-stream, which
 is what the event parser (RecvInfo) expects, so message boundaries on the
 command direction don't affect event reassembly. CreateFile is retried while
-the server is still coming up, so daemon-first ordering is not required.
+the server is still coming up, so server-first ordering is not required.
 
 ```go
 func OpenPipe(pipeName string, readBufferSize int) (*KextFile, error)
@@ -338,90 +344,6 @@ type LogLine struct {
 }
 ```
 
-#### `MockKextService`
-
-MockKextService is a drop-in stand-in for KextService that is backed by the
-userspace `zf-sim` daemon instead of a kernel driver service. The daemon loads
-the *real* driver over the host WDK mock (mock_wdk) and runs its actual
-driver_entry, then exposes it on a named pipe (a Unix socket on Unix; see
-SimConn).
-
-It mirrors the KextService lifecycle so the agent drives the mock exactly as it
-drives a kernel driver:
-
-  - CreateMockKextService -> CreateKextService (register the driver image)
-  - Start                 -> StartService      (kernel loads driver.sys, DriverEntry runs)
-  - OpenFile              -> OpenFile          (open the device / endpoint)
-  - Stop / Delete         -> Stop / Delete     (unload / deregister the driver)
-
-The mock "load and start" is spawning the daemon process; the OS reclaims the
-driver, its I/O pumps and the endpoint when that process exits, so Stop/Delete are
-a hard process termination rather than a graceful service stop.
-
-```go
-type MockKextService struct {
-	// contains filtered or unexported fields
-}
-```
-
-CreateMockKextService prepares (but does not start) a simulated kext service
-backed by the `zf-sim` daemon at daemonPath, reachable on SimEndpoint(pipeName).
-Any extra args are passed to the daemon; the daemon also inherits this
-process's environment (ZF_SIM_SCENARIO, ZF_SIM_SEED, ...). Mirrors
-CreateKextService: it validates the daemon image exists, analogous to the SCM
-checking the driver path, but starts nothing until Start is called.
-
-```go
-func CreateMockKextService(pipeName string, daemonPath string, args ...string) (*MockKextService, error)
-```
-
-Delete ensures the daemon is gone -- the mock analog of deleting the service.
-It is idempotent (delegates to Stop), so deferring both Stop and Delete is safe.
-
-```go
-func (s *MockKextService) Delete() error
-```
-
-OpenFile connects to the daemon's endpoint and returns a SimConn whose
-Read/Write behave as they do against the kernel device (on Windows it is the
-*KextFile from OpenPipe; use OpenPipe directly where a *KextFile is needed,
-e.g. for ReadVersion). It retries while the
-daemon finishes coming up, so Start need not block until the endpoint is ready.
-
-```go
-func (s *MockKextService) OpenFile(readBufferSize int) (SimConn, error)
-```
-
-Start spawns the daemon, which loads the driver over mock_wdk and runs its
-driver_entry -- the mock analog of StartService loading the kernel driver. The
-daemon's stdout/stderr are inherited so its logs interleave with the agent's.
-When wait is set, Start fails fast if the daemon dies during startup; otherwise
-it returns as soon as the process is launched.
-
-```go
-func (s *MockKextService) Start(wait bool) error
-```
-
-Stop terminates the daemon if it is still running -- the mock analog of
-stopping the service. The producer runs forever, so a hard kill
-(TerminateProcess / SIGKILL) is how the agent stops it; the OS reclaims the
-driver, pumps and endpoint with the process (the daemon replaces a stale Unix
-socket file on its next start). Idempotent, and a no-op once the daemon has already exited. With wait
-set it blocks until the process is fully reaped.
-
-```go
-func (s *MockKextService) Stop(wait bool) error
-```
-
-Wait blocks until the daemon exits on its own (e.g. a scenario finished
-replaying) and returns its process exit code, so a caller can propagate the
-mock driver's pass/fail result. Safe to call after Stop/Delete (returns the
-recorded code).
-
-```go
-func (s *MockKextService) Wait() (int, error)
-```
-
 #### `RedirectV4`
 
 ```go
@@ -446,12 +368,12 @@ type RedirectV6 struct {
 
 #### `SimConn`
 
-SimConn is a connection to the userspace fake-driver daemon (`zf-sim`, see
-sim/). Read/Write behave like a *KextFile against the kernel device: Read
+SimConn is a connection to the userspace mock driver, served by a Python
+script through the `zfsim` module (`Sim.serve`, see sim/). Read/Write behave like a *KextFile against the kernel device: Read
 fills the whole buffer from the event stream, and each Write delivers exactly
 one command to the driver.
 
-The daemon's endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
+The endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
 per OS by SimEndpoint. The rule must match `endpoint` in sim/src/pipe/mod.rs:
   - Windows: <name> itself if it is a full \\.\pipe\ path, else the named
     pipe \\.\pipe\<name>
@@ -462,8 +384,8 @@ per OS by SimEndpoint. The rule must match `endpoint` in sim/src/pipe/mod.rs:
 type SimConn = io.ReadWriteCloser
 ```
 
-OpenSimConn connects to the daemon endpoint for name, retrying while the
-daemon is still coming up, so daemon-first ordering is not required.
+OpenSimConn connects to the mock driver endpoint for name, retrying while the
+script is still coming up, so script-first ordering is not required.
 
 ```go
 func OpenSimConn(name string, readBufferSize int) (SimConn, error)
@@ -510,7 +432,7 @@ type Verdict struct {
 ### Functions
 
 ReadVersion queries the driver's version. A simulation pipe (OpenPipe) has no
-IOCTL channel; the daemon runs the driver built from this same tree, so the
+IOCTL channel; the mock driver is built from this same tree, so the
 interface version is reported instead.
 
 ```go
@@ -524,6 +446,11 @@ func SendCleanEndedConnectionsCommand(writer io.Writer) error
 ```go
 func SendClearCacheCommand(writer io.Writer) error
 ```
+
+SendGetConnectionsUpdateCommand asks the kext to report the connections that
+saw traffic since the previous update. timestamp is the Timestamp of that
+update's ConnectionUpdateEnd, passed back unchanged (0 for the first request).
+It is on the kext's clock: store it, don't interpret it.
 
 ```go
 func SendGetConnectionsUpdateCommand(writer io.Writer, timestamp uint64) error
@@ -553,7 +480,8 @@ func SendUpdateV6Command(writer io.Writer, update UpdateV6) error
 func SendVerdictCommand(writer io.Writer, verdict Verdict) error
 ```
 
-SimEndpoint returns the Unix socket path for the logical endpoint name.
+SimEndpoint returns the named-pipe path for the logical endpoint name. A name
+that is already a full pipe path (\\.\pipe\...) is returned unchanged.
 
 ```go
 func SimEndpoint(name string) string
@@ -594,13 +522,6 @@ production and simulation paths so the decision logic is identical.
 func handleInfo(file io.ReadWriter, info kext_interface.Info)
 ```
 
-installInterrupt runs cleanup on the first Ctrl+C, then exits. Producer mode
-never ends on its own, so without this the daemon would be orphaned.
-
-```go
-func installInterrupt(cleanup func())
-```
-
 ```go
 func logInterfaceVersion()
 ```
@@ -612,32 +533,21 @@ simulation mode, against the userspace fake driver (see sim.go).
 func main()
 ```
 
-pumpEvents runs the read/verdict loop shared by every simulation mode: read one
-event, apply the verdict policy, repeat until the connection closes.
+pumpEvents runs the read/verdict loop: read one event, apply the verdict policy, repeat until the connection closes.
 
 ```go
 func pumpEvents(file io.ReadWriter)
 ```
 
-runSimulation drives the same read/verdict loop as production against a
-userspace fake driver. When ZF_SIM_DAEMON names the `zf-sim` binary the agent
-*loads and starts the mock driver itself* -- it spawns the daemon (which runs
-the real driver over mock_wdk via driver_entry), opens its endpoint, and stops it
-on exit -- mirroring how production loads and starts the kernel driver before
-opening the device. With ZF_SIM_DAEMON unset it attaches to a daemon started
-separately. Returns the process exit code.
+runSimulation drives the same read/verdict loop as production against the
+userspace mock driver: the real driver over a mock WDK, served on a named pipe
+(a Unix socket on Unix) by a Python script (`Sim.serve`, see sim/). The script
+owns the driver's lifecycle and the traffic; this only attaches, answers events
+with the verdict policy below, and returns once the script closes the endpoint.
+Returns the process exit code.
 
 ```go
 func runSimulation(pipeName string) int
-```
-
-runSimulationAttached connects to an already-running fake-driver daemon without
-starting one (ZF_SIM_DAEMON unset, e.g. the daemon launched separately under a
-debugger). The read/verdict loop is identical; only the driver's lifecycle is
-out of the agent's hands.
-
-```go
-func runSimulationAttached(pipeName string) int
 ```
 
 ---

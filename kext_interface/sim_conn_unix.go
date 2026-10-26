@@ -26,7 +26,7 @@ func SimEndpoint(name string) string {
 	return "/tmp/" + name + ".sock"
 }
 
-// openSimConn dials the daemon's Unix socket, retrying while the daemon has not
+// openSimConn dials the mock driver's Unix socket, retrying while the server has not
 // created it yet (ENOENT) or is not accepting yet (ECONNREFUSED). The read
 // buffer size is unused: the socket buffers in the kernel.
 func openSimConn(name string, _ int) (SimConn, error) {
@@ -48,7 +48,7 @@ func openSimConn(name string, _ int) (SimConn, error) {
 
 // framedConn restores the kernel device's "one write = one command" semantics
 // over a stream socket, which has no message boundaries: each Write goes out as
-// a u32 little-endian length followed by the payload, and the daemon hands
+// a u32 little-endian length followed by the payload, and the server hands
 // each frame to the driver as one write. Events come back as an unframed byte
 // stream, as from the device.
 type framedConn struct {

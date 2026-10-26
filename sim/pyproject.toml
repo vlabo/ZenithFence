@@ -1,0 +1,20 @@
+# Tool configuration for the zfsim Python package (sim/python/zfsim) and its
+# scripts and tests. The extension itself is built by build.py, not from here.
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+src = ["python"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RUF", "RET", "PIE", "N"]
+ignore = [
+    "N801",  # ctypes structs keep their Win32 names (dns.py)
+]
+
+[tool.pyright]
+pythonVersion = "3.9"
+extraPaths = ["python"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["RET503"]  # unittest's self.fail() never returns

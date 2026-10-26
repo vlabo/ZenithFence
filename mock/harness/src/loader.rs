@@ -10,8 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use wdk::kernel_types::{DRIVER_OBJECT, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING};
 
 /// Serializes everything that loads, unloads or drives the process-wide driver
-/// instance. Every test (in any test binary module) that touches the loaded
-/// driver must hold this for its whole duration.
+/// instance; a [`crate::sim::Simulation`] holds it for its whole lifetime.
 pub static DRIVER_LOCK: Mutex<()> = Mutex::new(());
 
 /// Takes [`DRIVER_LOCK`], recovering from a poisoned lock (a failed test must
@@ -31,27 +30,17 @@ unsafe impl Send for LoadedDriver {}
 
 static LOADED: Mutex<Option<LoadedDriver>> = Mutex::new(None);
 
-/// How user-space reads behave when the driver has no event queued.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Reads {
-    /// Block until an event arrives or the queue is run down, like the kernel.
-    /// For harnesses with a separate reader thread.
-    Blocking,
-    /// Return immediately. For single-threaded harnesses that drive the
-    /// callouts and drain the reads on the same thread.
-    NonBlocking,
-}
-
-/// Loads the driver unless one is already loaded. Returns the `driver_entry`
-/// status (`STATUS_SUCCESS` when a driver was already loaded).
-pub fn load(reads: Reads) -> NTSTATUS {
+/// Loads the driver unless one is already loaded. User-space reads block until
+/// an event arrives or the queue is run down, like the kernel's. Returns the
+/// `driver_entry` status (`STATUS_SUCCESS` when a driver was already loaded).
+pub fn load() -> NTSTATUS {
     let mut loaded = LOADED.lock().unwrap_or_else(|p| p.into_inner());
     if loaded.is_some() {
         return STATUS_SUCCESS;
     }
-    // The event queue is created inside `driver_entry`, so the mode has to be
-    // chosen before it runs.
-    wdk::ioqueue::set_default_blocking(reads == Reads::Blocking);
+    // The event queue is created inside `driver_entry`, so the read mode has to
+    // be chosen before it runs.
+    wdk::ioqueue::set_default_blocking(true);
     let mut driver_object = Box::new(DRIVER_OBJECT::new());
     let mut registry = UNICODE_STRING;
     let status = driver::driver_entry(driver_object.as_mut(), &mut registry);
@@ -73,9 +62,9 @@ pub fn unload() {
 }
 
 /// Unloads any loaded driver and loads a fresh one.
-pub fn reload(reads: Reads) -> NTSTATUS {
+pub fn reload() -> NTSTATUS {
     unload();
-    load(reads)
+    load()
 }
 
 /// Runs `f` with the loaded driver's `DRIVER_OBJECT` (e.g. to open a

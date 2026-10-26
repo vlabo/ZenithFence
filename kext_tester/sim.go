@@ -8,8 +8,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"time"
 
 	"github.com/vlabo/zenithfence/kext_interface"
@@ -25,58 +23,14 @@ var protocols = map[int]string{
 	58: "ipv6-icmp",
 }
 
-// runSimulation drives the same read/verdict loop as production against a
-// userspace fake driver. When ZF_SIM_DAEMON names the `zf-sim` binary the agent
-// *loads and starts the mock driver itself* -- it spawns the daemon (which runs
-// the real driver over mock_wdk via driver_entry), opens its endpoint, and stops it
-// on exit -- mirroring how production loads and starts the kernel driver before
-// opening the device. With ZF_SIM_DAEMON unset it attaches to a daemon started
-// separately. Returns the process exit code.
+// runSimulation drives the same read/verdict loop as production against the
+// userspace mock driver: the real driver over a mock WDK, served on a named pipe
+// (a Unix socket on Unix) by a Python script (`Sim.serve`, see sim/). The script
+// owns the driver's lifecycle and the traffic; this only attaches, answers events
+// with the verdict policy below, and returns once the script closes the endpoint.
+// Returns the process exit code.
 func runSimulation(pipeName string) int {
-	daemonPath := os.Getenv("ZF_SIM_DAEMON")
-	if daemonPath == "" {
-		return runSimulationAttached(pipeName)
-	}
-
-	svc, err := kext_interface.CreateMockKextService(pipeName, daemonPath)
-	if err != nil {
-		log.Panicf("sim: %s", err)
-	}
-	defer svc.Delete()
-
-	// Ctrl+C must tear the daemon down: the random producer runs forever, so
-	// without this an interrupted agent would orphan the daemon (os.Exit on
-	// signal skips deferred cleanup).
-	installInterrupt(func() { _ = svc.Delete() })
-
-	log.Printf("sim: loading and starting mock driver (%s)", daemonPath)
-	if err := svc.Start(true); err != nil {
-		log.Panicf("sim: failed to start mock driver: %s", err)
-	}
-
-	log.Printf("sim: opening fake driver %s", kext_interface.SimEndpoint(pipeName))
-	file, err := svc.OpenFile(1024)
-	if err != nil {
-		log.Panicf("sim: failed to open driver endpoint: %s", err)
-	}
-	defer file.Close()
-
-	logInterfaceVersion()
-	pumpEvents(file)
-
-	// The endpoint closed because the daemon exited on its own (a scenario finished).
-	// Reap it and propagate its pass/fail exit code.
-	code, _ := svc.Wait()
-	log.Printf("sim: mock driver exited with code %d", code)
-	return code
-}
-
-// runSimulationAttached connects to an already-running fake-driver daemon without
-// starting one (ZF_SIM_DAEMON unset, e.g. the daemon launched separately under a
-// debugger). The read/verdict loop is identical; only the driver's lifecycle is
-// out of the agent's hands.
-func runSimulationAttached(pipeName string) int {
-	log.Printf("sim: attaching to fake driver %s", kext_interface.SimEndpoint(pipeName))
+	log.Printf("sim: attaching to mock driver %s", kext_interface.SimEndpoint(pipeName))
 	file, err := kext_interface.OpenSimConn(pipeName, 1024)
 	if err != nil {
 		log.Panicf("sim: failed to open driver endpoint: %s", err)
@@ -88,8 +42,7 @@ func runSimulationAttached(pipeName string) int {
 	return 0
 }
 
-// pumpEvents runs the read/verdict loop shared by every simulation mode: read one
-// event, apply the verdict policy, repeat until the connection closes.
+// pumpEvents runs the read/verdict loop: read one event, apply the verdict policy, repeat until the connection closes.
 func pumpEvents(file io.ReadWriter) {
 	for {
 		info, err := kext_interface.RecvInfo(file)
@@ -105,19 +58,6 @@ func logInterfaceVersion() {
 	log.Printf("sim: agent interface version %d.%d.%d.%d",
 		kext_interface.InterfaceVersion[0], kext_interface.InterfaceVersion[1],
 		kext_interface.InterfaceVersion[2], kext_interface.InterfaceVersion[3])
-}
-
-// installInterrupt runs cleanup on the first Ctrl+C, then exits. Producer mode
-// never ends on its own, so without this the daemon would be orphaned.
-func installInterrupt(cleanup func()) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
-	go func() {
-		<-ch
-		log.Println("sim: interrupt received; stopping mock driver")
-		cleanup()
-		os.Exit(130)
-	}()
 }
 
 // handleInfo applies the agent's verdict policy to one event. Shared by the

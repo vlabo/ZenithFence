@@ -12,7 +12,7 @@ import (
 func main() {
 	pipeName := os.Getenv("ZF_SIM_PIPE")
 	if pipeName == "" {
-		fmt.Fprintln(os.Stderr, "production mode is Windows-only; set ZF_SIM_PIPE to run against the simulated driver (see `just sim-run`)")
+		fmt.Fprintln(os.Stderr, "production mode is Windows-only; set ZF_SIM_PIPE to run against the simulated driver served by a zfsim script (see sim/README.md)")
 		os.Exit(2)
 	}
 	os.Exit(runSimulation(pipeName))

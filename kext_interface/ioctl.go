@@ -26,7 +26,7 @@ var (
 )
 
 // ReadVersion queries the driver's version. A simulation pipe (OpenPipe) has no
-// IOCTL channel; the daemon runs the driver built from this same tree, so the
+// IOCTL channel; the mock driver is built from this same tree, so the
 // interface version is reported instead.
 func ReadVersion(file *KextFile) ([]uint8, error) {
 	if file.pipe {
