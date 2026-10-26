@@ -2,14 +2,21 @@ name: zfsim wheels
 
 # Builds the zfsim wheels (Windows, Linux and macOS x86_64) in the same
 # container as `just sim-wheels`, installs the Windows and Linux ones into a
-# clean Python and runs the scenario tests against them, and attaches all three
-# to the GitHub release. Colleagues then install with e.g.
-#   pip install https://github.com/<owner>/<repo>/releases/download/v2.0.3/zfsim-2.0.3-cp39-abi3-win_amd64.whl
-# A manual run builds and tests only (wheels stay on the run as an artifact).
+# clean Python and runs the scenario tests against them, then:
+#   * release:      attaches the three wheels to the GitHub release;
+#   * pull request: publishes them as the pre-release `pr-<number>` (replaced on
+#                   every push, deleted when the PR closes) and comments the
+#                   `pip install` commands on the PR. Only for branches of this
+#                   repository: a fork's PR gets no write token, so it keeps
+#                   just the run artifact;
+#   * manual run:   build and test only (the wheels stay on the run as an artifact).
+# Releases made here with GITHUB_TOKEN don't trigger workflows themselves.
 
 on:
   release:
     types: [published]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
     inputs:
       version:
@@ -19,27 +26,38 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's run in progress; releases always finish.
+concurrency:
+  group: zfsim-wheels-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     name: Build wheels
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      # Release: the tag without its "v" (v2.0.3 -> 2.0.3). Manual run: the
-      # input, else the driver version.
+      # Release: the tag without its "v" (v2.0.3 -> 2.0.3). Pull request: the
+      # driver version as a dev build numbered by the run (2.0.2.dev57), so each
+      # push installs as an upgrade of the last. Manual run: the input, else the
+      # driver version.
       - name: Wheel version
         id: version
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
           TAG: ${{ github.event.release.tag_name }}
+          RUN_NUMBER: ${{ github.run_number }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ "$EVENT" = "release" ]; then
             version="${TAG#v}"
+          elif [ "$EVENT" = "pull_request" ]; then
+            version="$(python3 sim/build.py --version).dev${RUN_NUMBER}"
           elif [ -n "$INPUT_VERSION" ]; then
             version="$INPUT_VERSION"
           else
@@ -112,3 +130,96 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" dist/*.whl --clobber --repo "$GITHUB_REPOSITORY"
+
+  pr-release:
+    name: Publish PR pre-release
+    if: >-
+      github.event_name == 'pull_request' && github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zfsim-wheels
+          path: dist
+
+      - name: Replace the pr-<number> pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="pr-$PR"
+          gh release delete "$tag" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$tag" dist/*.whl --repo "$GITHUB_REPOSITORY" \
+            --prerelease --target "$SHA" \
+            --title "zfsim for PR #$PR" \
+            --notes "zfsim $VERSION built from ${SHA:0:7} (PR #$PR). Replaced on every push; deleted when the PR closes."
+
+      - name: Comment the install commands on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/pr-$PR"
+          marker="<!-- zfsim-wheels -->"
+          {
+            echo "$marker"
+            echo "### zfsim $VERSION (${SHA:0:7})"
+            echo
+            echo "Install the build of this PR for your OS (any CPython 3.9+):"
+            for wheel in dist/*.whl; do
+              name="$(basename "$wheel")"
+              case "$name" in
+                *win_amd64*) os="Windows" ;;
+                *manylinux*) os="Linux" ;;
+                *macosx*)    os="macOS (Intel)" ;;
+                *)           os="$name" ;;
+              esac
+              echo
+              echo "**$os**"
+              echo '```'
+              echo "pip install --force-reinstall $base/$name"
+              echo '```'
+            done
+            echo
+            echo "Updated on every push; removed when the PR closes."
+          } > comment.md
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
+
+  pr-cleanup:
+    name: Remove PR pre-release
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Delete the pr-<number> pre-release and its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh release delete "pr-$PR" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          marker="<!-- zfsim-wheels -->"
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
+          if [ -n "$id" ]; then
+            printf '%s\n%s\n' "$marker" "The zfsim build of this PR was removed when it closed." > comment.md
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md >/dev/null
+          fi
