@@ -57,29 +57,29 @@ jobs:
           if [ "$EVENT" = "release" ]; then
             version="${TAG#v}"
           elif [ "$EVENT" = "pull_request" ]; then
-            version="$(python3 sim/build.py --version).dev${RUN_NUMBER}"
+            version="$(python3 mock/sim/build.py --version).dev${RUN_NUMBER}"
           elif [ -n "$INPUT_VERSION" ]; then
             version="$INPUT_VERSION"
           else
-            version="$(python3 sim/build.py --version)"
+            version="$(python3 mock/sim/build.py --version)"
           fi
           echo "wheel version: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build wheels (sim/docker/wheels.Dockerfile)
+      - name: Build wheels (mock/sim/docker/wheels.Dockerfile)
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: >-
-          docker buildx build -f sim/docker/wheels.Dockerfile
+          docker buildx build -f mock/sim/docker/wheels.Dockerfile
           --build-arg "VERSION=$VERSION"
-          --target wheels --output type=local,dest=sim/dist .
+          --target wheels --output type=local,dest=mock/sim/dist .
 
       - uses: actions/upload-artifact@v4
         with:
           name: zfsim-wheels
-          path: sim/dist/*.whl
+          path: mock/sim/dist/*.whl
           if-no-files-found: error
 
   # The macOS wheel is built but not run here: the hosted macOS runners are
@@ -110,7 +110,7 @@ jobs:
 
       - name: Scenario tests against the installed wheel
         timeout-minutes: 10
-        run: python -m unittest discover -v -s sim/tests
+        run: python -m unittest discover -v -s mock/sim/tests
 
   publish:
     name: Attach to the release

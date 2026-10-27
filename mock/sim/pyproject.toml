@@ -1,6 +1,6 @@
-# The zfsim Python package (sim/python/zfsim) and its tool configuration.
+# The zfsim Python package (mock/sim/python/zfsim) and its tool configuration.
 #
-# Wheels: `just sim-wheels` (sim/docker/wheels.Dockerfile) builds the Windows,
+# Wheels: `just sim-wheels` (mock/sim/docker/wheels.Dockerfile) builds the Windows,
 # Linux and macOS x86_64 wheels with maturin; CI attaches them to each GitHub
 # release. Day-to-day development builds the extension with build.py instead
 # (`just sim-build`), which needs no maturin.

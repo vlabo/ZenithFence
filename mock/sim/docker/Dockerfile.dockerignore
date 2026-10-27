@@ -4,11 +4,12 @@
 !kext_interface/version.txt
 !protocol
 !mock
-!sim
 **/target
 **/__pycache__
-mock/fuzz
+**/.mypy_cache
+**/.ruff_cache
 protocol/*.bin
-sim/python/zfsim/_native.*
-sim/docker/.env
-!sim/python/zfsim/_native.pyi
+mock/sim/dist
+mock/sim/python/zfsim/_native.*
+!mock/sim/python/zfsim/_native.pyi
+mock/sim/docker/.env

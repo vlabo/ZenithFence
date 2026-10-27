@@ -41,7 +41,7 @@ jobs:
       - name: Run tests
         run: just test
 
-  # Simulation on Linux: the scenario tests in sim/tests, the real driver over
+  # Simulation on Linux: the scenario tests in mock/sim/tests, the real driver over
   # mock_wdk driven from Python in-process, with agents (PipeAgent and the Go
   # test agent) attached over a Unix socket.
   sim-linux:
@@ -70,7 +70,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sim
+          workspaces: mock
 
       - name: Scenario tests
         run: timeout 300 just sim-test

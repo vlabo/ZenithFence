@@ -1,4 +1,4 @@
-"""Type stubs for `zfsim._native`, the Rust extension (sim/src/lib.rs).
+"""Type stubs for `zfsim._native`, the Rust extension (mock/sim/src/lib.rs).
 
 The extension carries no type information of its own; IDEs and type checkers
 read this file instead. Keep it in sync with the `#[pymethods]` in lib.rs.
@@ -263,8 +263,9 @@ class Sim:
     # ---- Observing -----------------------------------------------------------
 
     def next_event(self, timeout: float | None = None) -> Event | None:
-        """Next event the driver sent the agent (the `serve()` tee), waiting up to `timeout` seconds (`None`: forever). `None` on
-        timeout or after `close()`."""
+        """Next event the driver sent the agent (the `serve()` tee), waiting up
+        to `timeout` seconds (`None`: forever). `None` on timeout or after
+        `close()`."""
     def next_command(self, timeout: float | None = None) -> Command | None:
         """Next command the `serve()` agent sent, see `next_event`."""
     @property
@@ -286,7 +287,9 @@ class Sim:
     def packet(self, flow: Flow, direction: _Direction, payload: bytes | None = None) -> CalloutOutcome:
         """IP-packet-layer classify for a packet built around `payload` (IP and
         TCP/UDP headers are generated)."""
-    def packet_bytes(self, data: bytes, direction: _Direction, *, injected_by_self: bool = False) -> CalloutOutcome:
+    def packet_bytes(
+        self, data: bytes, direction: _Direction, *, injected_by_self: bool = False
+    ) -> CalloutOutcome:
         """IP-packet-layer classify for raw IP bytes (from the IP header),
         verbatim, malformed ones included. The family comes from the version
         nibble. `injected_by_self` marks it as a packet the driver injected."""

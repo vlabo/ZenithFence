@@ -1,5 +1,5 @@
 # The real Linux agent (nexufend, built with -tags mockkext) attached to the
-# mock driver served by sim/scripts/serve.py, in one container so the agent can
+# mock driver served by mock/sim/scripts/serve.py, in one container so the agent can
 # resolve serve.py's PID. Debugging only. Built by `just mock-docker`; the
 # context is the ZenithFence repo root (see Dockerfile.dockerignore).
 
@@ -10,17 +10,16 @@ COPY driver/src driver/src
 COPY kext_interface/version.txt kext_interface/version.txt
 COPY protocol protocol
 COPY mock mock
-COPY sim sim
-RUN cargo build --release --manifest-path sim/Cargo.toml \
- && cp sim/target/release/lib_native.so /_native.so
+RUN cargo build --release --manifest-path mock/sim/Cargo.toml \
+ && cp mock/target/release/lib_native.so /_native.so
 
 FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps iproute2 && rm -rf /var/lib/apt/lists/*
-COPY sim/python /opt/zfsim/python
-COPY sim/scripts /opt/zfsim/scripts
+COPY mock/sim/python /opt/zfsim/python
+COPY mock/sim/scripts /opt/zfsim/scripts
 COPY --from=build /_native.so /opt/zfsim/python/zfsim/_native.so
-COPY sim/docker/agent/nexufend-agent-mock-kext /opt/nexufend/nexufend-agent
-COPY sim/docker/entrypoint.sh /entrypoint.sh
+COPY mock/sim/docker/agent/nexufend-agent-mock-kext /opt/nexufend/nexufend-agent
+COPY mock/sim/docker/entrypoint.sh /entrypoint.sh
 # The entrypoint may have Windows line endings from the checkout.
 RUN tr -d '\015' < /entrypoint.sh > /e && mv /e /entrypoint.sh \
  && chmod +x /opt/nexufend/nexufend-agent /entrypoint.sh

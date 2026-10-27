@@ -50,7 +50,7 @@ gen-llm-docs:
 	cargo run -q --manifest-path tools/rustdoc-gen/Cargo.toml -- .
 
 # ---------------------------------------------------------------------------
-# Userspace simulation (see sim/README.md).
+# Userspace simulation (see mock/sim/README.md).
 #
 # The Python module `zfsim` loads the real driver over mock_wdk in-process and
 # serves it on the agent's named pipe (a Unix socket on Linux/macOS). A script
@@ -61,20 +61,20 @@ gen-llm-docs:
 
 python := if os_family() == "windows" { "python" } else { "python3" }
 
-# Build the Python extension `zfsim._native` into sim/python/zfsim/. Plain
+# Build the Python extension `zfsim._native` into mock/sim/python/zfsim/. Plain
 # cargo + copy, no maturin.
 #   just sim-build            # debug
 #   just sim-build --release
 sim-build *args:
-	{{python}} ./sim/build.py {{args}}
+	{{python}} ./mock/sim/build.py {{args}}
 
-# All in Docker (sim/docker/wheels.Dockerfile); CI does the same for each GitHub
+# All in Docker (mock/sim/docker/wheels.Dockerfile); CI does the same for each GitHub
 # release. `version` defaults to the driver version (kext_interface/version.txt).
 #   just sim-wheels
 #   just sim-wheels 2.0.3rc1
-# Build the zfsim wheels for Windows, Linux and macOS (x86_64) into sim/dist/.
-sim-wheels version=`python ./sim/build.py --version`:
-	docker build -f ./sim/docker/wheels.Dockerfile --build-arg VERSION={{version}} --target wheels --output type=local,dest=./sim/dist .
+# Build the zfsim wheels for Windows, Linux and macOS (x86_64) into mock/sim/dist/.
+sim-wheels version=`python ./mock/sim/build.py --version`:
+	docker build -f ./mock/sim/docker/wheels.Dockerfile --build-arg VERSION={{version}} --target wheels --output type=local,dest=./mock/sim/dist .
 
 # Build the Go test agent. The repo-root go.work makes it build against the
 # local kext_interface (incl. the sim transports).
@@ -87,46 +87,46 @@ sim-build-agent:
 sim-build-agent:
 	go build -C ./kext_tester -o kext_tester
 
-# The scenario tests in sim/tests: Python plays the OS; a PipeAgent (or
+# The scenario tests in mock/sim/tests: Python plays the OS; a PipeAgent (or
 # kext_tester) attached through Sim.serve() decides.
 [windows]
 sim-test: sim-build sim-build-agent
 	#!pwsh.exe -File
-	$env:PYTHONPATH = (Resolve-Path ./sim/python).Path
-	{{python}} -m unittest discover -v -s ./sim/tests
+	$env:PYTHONPATH = (Resolve-Path ./mock/sim/python).Path
+	{{python}} -m unittest discover -v -s ./mock/sim/tests
 
 [unix]
 sim-test: sim-build sim-build-agent
-	PYTHONPATH=./sim/python {{python}} -m unittest discover -v -s ./sim/tests
+	PYTHONPATH=./mock/sim/python {{python}} -m unittest discover -v -s ./mock/sim/tests
 
 # Serve the mock driver to a REAL agent on \\.\pipe\ZenithFence (Unix: the
 # ZenithFence socket), with traffic slow enough to follow in the logs: every
 # second a real DNS lookup, then a faked HTTPS connection to the address it
-# returned, all under this script's PID (sim/scripts/serve.py). After the agent
+# returned, all under this script's PID (mock/sim/scripts/serve.py). After the agent
 # disconnects the driver is reloaded for the next one. Start this first, then
 # the agent: nexufend built with `just agent build-mock-kext`, or
 # `just sim-attach`. Ctrl+C to stop.
 mock-serve: sim-build
-	{{python}} ./sim/scripts/serve.py
+	{{python}} ./mock/sim/scripts/serve.py
 
 # The REAL Linux agent attached to the mock driver in a Docker container, for
-# debugging (sim/docker). Build the agent first in nexufend:
-# `just agent build-mock-kext-linux`; its bootstrap data goes in sim/docker/.env
+# debugging (mock/sim/docker). Build the agent first in nexufend:
+# `just agent build-mock-kext-linux`; its bootstrap data goes in mock/sim/docker/.env
 # (NX_BOOTSTRAP=...). Both processes log to the console and to /data/logs.
 #   just mock-docker            # build and run in the foreground
 #   just mock-docker -d         # in the background (docker logs -f zfsim-agent)
 [windows]
 mock-docker *args:
 	#!pwsh.exe -File
-	New-Item -ItemType Directory -Force ./sim/docker/agent | Out-Null
-	Copy-Item ../nexufend/cmds/agent/testdata/nexufend-agent-mock-kext ./sim/docker/agent/
-	docker compose -f ./sim/docker/compose.yaml up --build {{args}}
+	New-Item -ItemType Directory -Force ./mock/sim/docker/agent | Out-Null
+	Copy-Item ../nexufend/cmds/agent/testdata/nexufend-agent-mock-kext ./mock/sim/docker/agent/
+	docker compose -f ./mock/sim/docker/compose.yaml up --build {{args}}
 
 [unix]
 mock-docker *args:
-	mkdir -p ./sim/docker/agent
-	cp ../nexufend/cmds/agent/testdata/nexufend-agent-mock-kext ./sim/docker/agent/
-	docker compose -f ./sim/docker/compose.yaml up --build {{args}}
+	mkdir -p ./mock/sim/docker/agent
+	cp ../nexufend/cmds/agent/testdata/nexufend-agent-mock-kext ./mock/sim/docker/agent/
+	docker compose -f ./mock/sim/docker/compose.yaml up --build {{args}}
 
 # Attach the Go test agent (kext_tester) to a served mock driver (`just mock-serve`).
 [windows]

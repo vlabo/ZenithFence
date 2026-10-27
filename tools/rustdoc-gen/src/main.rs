@@ -58,21 +58,18 @@ const GROUPS: &[Group] = &[
     },
     Group {
         // mock/driver has no sources of its own: it compiles driver/src.
-        title: "Mock driver (host mock WDK, test harness, fuzz targets)",
+        title: "Mock driver (host mock WDK, harness, zfsim extension)",
         output: "docs/LLMs/RUSTDOC-mock.md",
         crates: &[
             Crate { dir: "mock/wdk", roots: &["src"] },
             Crate { dir: "mock/harness", roots: &["src"] },
-            Crate { dir: "mock/fuzz", roots: &["src", "fuzz_targets"] },
+            Crate { dir: "mock/sim", roots: &["src"] },
         ],
     },
     Group {
-        title: "Simulation & Release Tools",
+        title: "Release Tools",
         output: "docs/LLMs/RUSTDOC-tools.md",
-        crates: &[
-            Crate { dir: "sim", roots: &["src"] },
-            Crate { dir: "release", roots: &["src"] },
-        ],
+        crates: &[Crate { dir: "release", roots: &["src"] }],
     },
 ];
 

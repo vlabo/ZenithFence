@@ -37,11 +37,11 @@ on their CI run.
 ```bash
 just sim-build      # dev build: cargo build + copy to python/zfsim/_native.pyd (.so)
 just sim-test       # builds the extension and kext_tester, runs tests/
-just sim-wheels     # all three release wheels into sim/dist/, built in Docker
+just sim-wheels     # all three release wheels into mock/sim/dist/, built in Docker
 ```
 
-For development there is no install step: put `sim/python` on `PYTHONPATH`.
-`just sim-wheels` needs only Docker (sim/docker/wheels.Dockerfile cross-builds
+For development there is no install step: put `mock/sim/python` on `PYTHONPATH`.
+`just sim-wheels` needs only Docker (mock/sim/docker/wheels.Dockerfile cross-builds
 every platform on Linux with maturin, zig and cargo-xwin) and takes an optional
 version, defaulting to the driver's (`kext_interface/version.txt`). CI runs the
 same build on each published release (`.github/workflows/zfsim-wheels.yml`),

@@ -1,5 +1,5 @@
 //! Host harness for the ZenithFence driver, used by the Python module `zfsim`
-//! (sim/).
+//! (mock/sim).
 //!
 //! Everything here drives the REAL driver: `driver` is the `driver-mock`
 //! package, which compiles the production sources in driver/src against the

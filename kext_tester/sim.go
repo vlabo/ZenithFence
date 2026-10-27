@@ -25,7 +25,7 @@ var protocols = map[int]string{
 
 // runSimulation drives the same read/verdict loop as production against the
 // userspace mock driver: the real driver over a mock WDK, served on a named pipe
-// (a Unix socket on Unix) by a Python script (`Sim.serve`, see sim/). The script
+// (a Unix socket on Unix) by a Python script (`Sim.serve`, see mock/sim/). The script
 // owns the driver's lifecycle and the traffic; this only attaches, answers events
 // with the verdict policy below, and returns once the script closes the endpoint.
 // Returns the process exit code.

@@ -1,9 +1,11 @@
 name: Build
 
+# PRs, plus pushes to main. A push to a PR branch already runs through
+# `pull_request`; triggering on every branch push too ran each job twice.
 on:
-  push:
-    branches: ["**"]
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:

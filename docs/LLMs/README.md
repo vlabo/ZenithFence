@@ -23,8 +23,8 @@ Do not edit the generated files by hand.
 | `RUSTDOC-driver.md` | ~38 KB | ~11k | `driver/src` (callouts, device, caches, queues) and `driver/kernel` (the kernel-image build root) |
 | `RUSTDOC-protocol.md` | ~7 KB | ~2k | `protocol/src` — command parsing (user→kernel) and info serialization (kernel→user) |
 | `RUSTDOC-wdk.md` | ~96 KB | ~28k | `wdk/src` — unsafe wrappers over WFP, NDIS, IRP, IOQueue, locks, allocator, FFI |
-| `RUSTDOC-mock.md` | ~89 KB | ~25k | `mock/` — `mock/wdk` (host mock of `wdk`), `mock/harness` (loader, callout API, event decoding); `mock/driver` has no sources of its own, it compiles `driver/src` |
-| `RUSTDOC-tools.md` | ~48 KB | ~14k | `sim/src` (fake-driver daemon, scenarios) and `release/src` (packaging) |
+| `RUSTDOC-mock.md` | ~89 KB | ~25k | `mock/` — `mock/wdk` (host mock of `wdk`), `mock/harness` (loader, callout API, event decoding), `mock/sim` (the `zfsim` Python extension, PyO3); `mock/driver` has no sources of its own, it compiles `driver/src` |
+| `RUSTDOC-tools.md` | ~1.5 KB | <1k | `release/src` (packaging) |
 | `GODOC.md` | ~15 KB | ~4k | Go user space: `kext_interface` (exported API) and `kext_tester` (all decls) |
 
 Token estimates assume ~3.5 characters per token (typical for mixed code and prose).
@@ -38,8 +38,7 @@ Load only the file(s) relevant to the current task to conserve context:
 - **Driver logic** (callouts, verdicts, caches, device I/O) → `RUSTDOC-driver.md`
 - **Protocol changes** (new command or info event) → `RUSTDOC-protocol.md` + `GODOC.md` — both sides must change together
 - **Kernel API wrappers** (`wdk/`, unsafe) → `RUSTDOC-wdk.md`
-- **Fuzzing / host tests** → `RUSTDOC-driver.md` + `RUSTDOC-mock.md`
-- **Simulation harness** (`sim/`, `just sim-*`) → `RUSTDOC-tools.md` + `GODOC.md`
+- **Simulation / zfsim** (`mock/sim`, `just sim-*`) → `RUSTDOC-driver.md` + `RUSTDOC-mock.md` + `GODOC.md`
 - **Go user-space library or tester** → `GODOC.md`
 
 `RUSTDOC-wdk.md` and `RUSTDOC-mock.md` both define the WFP layer field enums;

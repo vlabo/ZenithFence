@@ -369,12 +369,12 @@ type RedirectV6 struct {
 #### `SimConn`
 
 SimConn is a connection to the userspace mock driver, served by a Python
-script through the `zfsim` module (`Sim.serve`, see sim/). Read/Write behave like a *KextFile against the kernel device: Read
+script through the `zfsim` module (`Sim.serve`, see mock/sim/). Read/Write behave like a *KextFile against the kernel device: Read
 fills the whole buffer from the event stream, and each Write delivers exactly
 one command to the driver.
 
 The endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
-per OS by SimEndpoint. The rule must match `endpoint` in sim/src/pipe/mod.rs:
+per OS by SimEndpoint. The rule must match `endpoint` in mock/sim/src/pipe/mod.rs:
   - Windows: <name> itself if it is a full \\.\pipe\ path, else the named
     pipe \\.\pipe\<name>
   - Unix:    <name> itself if it contains '/', else $XDG_RUNTIME_DIR/<name>.sock,
@@ -480,8 +480,7 @@ func SendUpdateV6Command(writer io.Writer, update UpdateV6) error
 func SendVerdictCommand(writer io.Writer, verdict Verdict) error
 ```
 
-SimEndpoint returns the named-pipe path for the logical endpoint name. A name
-that is already a full pipe path (\\.\pipe\...) is returned unchanged.
+SimEndpoint returns the Unix socket path for the logical endpoint name.
 
 ```go
 func SimEndpoint(name string) string
@@ -541,7 +540,7 @@ func pumpEvents(file io.ReadWriter)
 
 runSimulation drives the same read/verdict loop as production against the
 userspace mock driver: the real driver over a mock WDK, served on a named pipe
-(a Unix socket on Unix) by a Python script (`Sim.serve`, see sim/). The script
+(a Unix socket on Unix) by a Python script (`Sim.serve`, see mock/sim/). The script
 owns the driver's lifecycle and the traffic; this only attaches, answers events
 with the verdict policy below, and returns once the script closes the endpoint.
 Returns the process exit code.

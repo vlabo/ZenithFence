@@ -19,8 +19,8 @@ from typing import Any, Callable
 
 from ._native import Event, EventStream, verdict_command
 
-# The repository root when running from a checkout (sim/python/zfsim/agents.py).
-REPO = Path(__file__).resolve().parents[3]
+# The repository root when running from a checkout (mock/sim/python/zfsim/agents.py).
+REPO = Path(__file__).resolve().parents[4]
 
 
 def _connect(endpoint: str, timeout: float) -> Any:

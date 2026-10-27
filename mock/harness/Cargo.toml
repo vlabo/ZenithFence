@@ -5,7 +5,7 @@ edition = "2021"
 
 # Harness for the real driver running over the mock WDK: loads it through its
 # real `driver_entry`, drives its callouts and its user-space channel, and
-# observes its state. Used by the Python simulation module (sim/).
+# observes its state. Used by the Python simulation module (../sim).
 
 [lib]
 name = "driver_harness"

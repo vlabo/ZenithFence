@@ -1,10 +1,10 @@
 # `just mock-docker` builds and starts this. Put the agent's bootstrap data in
-# sim/docker/.env (gitignored):  NX_BOOTSTRAP=nxbootstrap:...
+# mock/sim/docker/.env (gitignored):  NX_BOOTSTRAP=nxbootstrap:...
 services:
   agent:
     build:
-      context: ../..
-      dockerfile: sim/docker/Dockerfile
+      context: ../../..
+      dockerfile: mock/sim/docker/Dockerfile
     image: zfsim-agent
     container_name: zfsim-agent
     init: true

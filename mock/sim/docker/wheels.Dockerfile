@@ -4,8 +4,8 @@
 # machine, so a wheel build needs nothing but Docker. Used by `just sim-wheels`
 # and by CI on every GitHub release (.github/workflows/zfsim-wheels.yml):
 #
-#   docker build -f sim/docker/wheels.Dockerfile --build-arg VERSION=2.0.2 \
-#       --target wheels --output type=local,dest=sim/dist .
+#   docker build -f mock/sim/docker/wheels.Dockerfile --build-arg VERSION=2.0.2 \
+#       --target wheels --output type=local,dest=mock/sim/dist .
 #
 # The context is the repository root (see wheels.Dockerfile.dockerignore).
 # Each wheel is an abi3 build (any CPython >= 3.9) of the same sources:
@@ -32,20 +32,19 @@ COPY driver/src driver/src
 COPY kext_interface/version.txt kext_interface/version.txt
 COPY protocol protocol
 COPY mock mock
-COPY sim sim
 
 # The wheel version (PEP 440), e.g. 2.0.2 from the release tag v2.0.2.
 ARG VERSION=0.0.0
-RUN sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" sim/pyproject.toml \
- && grep -q "^version = \"${VERSION}\"" sim/pyproject.toml
+RUN sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" mock/sim/pyproject.toml \
+ && grep -q "^version = \"${VERSION}\"" mock/sim/pyproject.toml
 
 # Cache mounts keep crates, build outputs and the downloaded Windows SDK
 # between local builds; CI starts cold.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/sim/target \
+    --mount=type=cache,target=/src/mock/target \
     --mount=type=cache,target=/root/.cache \
     set -eux; \
-    cd sim; \
+    cd mock/sim; \
     build="maturin build --release --out /dist --interpreter python3.9"; \
     $build --target x86_64-unknown-linux-gnu --zig --compatibility manylinux2014; \
     $build --target x86_64-pc-windows-msvc; \

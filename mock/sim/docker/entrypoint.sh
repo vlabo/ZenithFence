@@ -2,7 +2,7 @@
 # Runs the mock driver (serve.py) and the agent side by side. Both log to the
 # container's stdout, prefixed, and to /data/logs. Stops when either exits.
 set -u
-: "${NX_BOOTSTRAP:?set NX_BOOTSTRAP in sim/docker/.env}"
+: "${NX_BOOTSTRAP:?set NX_BOOTSTRAP in mock/sim/docker/.env}"
 mkdir -p /data/agent /data/logs
 
 python3 /opt/zfsim/scripts/serve.py \

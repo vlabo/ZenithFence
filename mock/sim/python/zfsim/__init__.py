@@ -11,7 +11,7 @@
 
 Modules: `traffic` (connections the way the OS drives them, seeded random
 flows), `payloads` (DNS / TLS / HTTP bytes), `agents` (attach a Python or the
-Go agent to `Sim.serve()`). See sim/README.md. Build the extension first with
+Go agent to `Sim.serve()`). See mock/sim/README.md. Build the extension first with
 `just sim-build`.
 """
 from __future__ import annotations

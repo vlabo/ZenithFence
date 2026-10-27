@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **Before exploring the source, read the relevant generated reference in `docs/LLMs/`** (every type, signature and doc comment; bodies stripped):
-> driver → `RUSTDOC-driver.md` · protocol → `RUSTDOC-protocol.md` · `wdk/` → `RUSTDOC-wdk.md` · `mock/` → `RUSTDOC-mock.md` · `sim/` + `release/` → `RUSTDOC-tools.md` · Go (`kext_interface`, `kext_tester`) → `GODOC.md`.
+> driver → `RUSTDOC-driver.md` · protocol → `RUSTDOC-protocol.md` · `wdk/` → `RUSTDOC-wdk.md` · `mock/` (incl. `mock/sim`) → `RUSTDOC-mock.md` · `release/` → `RUSTDOC-tools.md` · Go (`kext_interface`, `kext_tester`) → `GODOC.md`.
 > See `docs/LLMs/README.md` for sizes and when to load which. Regenerate with `just gen-llm-docs` after significant changes.
 
 ## Project Overview
@@ -31,8 +31,8 @@ just test-protocol          # Rust serialization tests (protocol/)
 just test-kext-interface    # Go parsing tests (kext_interface/)
 just kext-interface-gen     # Regenerate binary test fixtures
 just test-driver            # The driver's own unit tests, built for the host over the mock WDK
-just sim-test               # Python scenario tests (sim/): the mock driver served to a PipeAgent / kext_tester
-just sim-wheels             # zfsim wheels for Windows/Linux/macOS into sim/dist/ (Docker); CI attaches them to each release
+just sim-test               # Python scenario tests (mock/sim/): the mock driver served to a PipeAgent / kext_tester
+just sim-wheels             # zfsim wheels for Windows/Linux/macOS into mock/sim/dist/ (Docker); CI attaches them to each release
 
 # Regenerate the LLM reference files in docs/LLMs/
 just gen-llm-docs
@@ -60,8 +60,8 @@ cd kext_interface && go test -run <TestName>
 |-----------|----------|------|
 | `driver/` | Rust (`no_std`) | Kernel driver core library — WFP callouts, packet decisions, I/O with user space |
 | `driver/kernel/` | Rust (`no_std`) | Production build root — the only crate that produces the shipped `driver.lib` (allocator, panic handler, `DriverEntry` export); links `driver` against the real `wdk` only. Keep it free of logic |
-| `mock/` | Rust (host) | Test-only: the real `driver/src` compiled against `mock/wdk` (a host mock of the Windows kernel API) as `mock/driver`; `mock/harness` (loader, callout API, event decoding) used by `sim/`. Nothing in `driver/` or `wdk/` refers to it |
-| `sim/` | Rust (host) + Python | The Python module `zfsim`: the real driver (through `mock/harness`) loaded in-process. Scripts inject traffic like the OS, act as the agent or serve the driver on a named pipe (Unix socket on Linux/macOS) to the real Go agent, and assert on events and verdicts. Scenario tests `just sim-test`; random traffic for a real agent `just mock-serve` |
+| `mock/` | Rust (host) | Test-only: the real `driver/src` compiled against `mock/wdk` (a host mock of the Windows kernel API) as `mock/driver`; `mock/harness` (loader, callout API, event decoding); `mock/sim` (below). Nothing in `driver/` or `wdk/` refers to it |
+| `mock/sim/` | Rust (host) + Python | The Python module `zfsim` (a member of the `mock/` workspace): the real driver (through `mock/harness`) loaded in-process and served on a named pipe (Unix socket on Linux/macOS) to a real agent. Scripts inject traffic like the OS and assert on events and verdicts. Scenario tests `just sim-test`; random traffic for a real agent `just mock-serve` |
 | `protocol/` | Rust | Shared serialization of commands (user→kernel) and info events (kernel→user) |
 | `wdk/` | Rust (unsafe) | Thin wrappers over Windows kernel APIs (NDIS, WFP, IRP, etc.) |
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |

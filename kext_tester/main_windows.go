@@ -16,7 +16,7 @@ func main() {
 	// Real-world simulation mode: the same agent, but driving a userspace fake
 	// driver instead of a kernel service. Switched purely by the environment, so
 	// the production binary is otherwise unchanged. runSimulation attaches to the
-	// endpoint a zfsim script serves (see sim/).
+	// endpoint a zfsim script serves (see mock/sim/).
 	if pipeName := os.Getenv("ZF_SIM_PIPE"); pipeName != "" {
 		os.Exit(runSimulation(pipeName))
 	}

@@ -1,7 +1,7 @@
 """Build the `zfsim._native` extension and place it in python/zfsim/.
 
-    python sim/build.py [--release]
-    python sim/build.py --version     # print the wheel version, see driver_version()
+    python mock/sim/build.py [--release]
+    python mock/sim/build.py --version     # print the wheel version, see driver_version()
 
 Plain cargo + copy, so no maturin is needed: the cdylib is just a renamed
 Python extension (`_native.pyd` on Windows, `_native.so` elsewhere; the module
@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 def driver_version() -> str:
     """The driver version from kext_interface/version.txt (`[2, 0, 2, 0]`) as a
     wheel version: `2.0.2`, keeping the fourth number only when it is set."""
-    text = (HERE.parent / "kext_interface" / "version.txt").read_text()
+    text = (HERE.parents[1] / "kext_interface" / "version.txt").read_text()
     parts = [int(n) for n in text.strip().strip("[]").split(",")]
     if len(parts) == 4 and parts[3] == 0:
         parts = parts[:3]
@@ -35,7 +35,8 @@ def main() -> int:
         cmd.append("--release")
     subprocess.run(cmd, check=True)
 
-    out = HERE / "target" / ("release" if release else "debug")
+    # A member of the mock/ workspace: cargo builds into mock/target.
+    out = HERE.parent / "target" / ("release" if release else "debug")
     if sys.platform == "win32":
         src, dst = out / "_native.dll", "_native.pyd"
     elif sys.platform == "darwin":
