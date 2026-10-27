@@ -5,7 +5,7 @@
 extern crate alloc;
 
 mod ale_callouts;
-mod array_holder;
+mod pending_event;
 pub mod mpsc_queue;
 mod callouts;
 mod common;

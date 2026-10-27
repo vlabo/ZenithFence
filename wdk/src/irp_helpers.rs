@@ -18,6 +18,16 @@ pub fn complete_empty(irp: &mut IRP) -> NTSTATUS {
     return STATUS_SUCCESS;
 }
 
+/// The buffered-I/O system buffer of a request, `length` bytes long. A zero-length request has no
+/// system buffer, and a slice must not be built from a null pointer, even an empty one.
+unsafe fn system_buffer<'a>(irp: &IRP, length: usize) -> &'a mut [u8] {
+    let system_buffer = irp.AssociatedIrp.SystemBuffer as *mut u8;
+    if system_buffer.is_null() || length == 0 {
+        return &mut [];
+    }
+    core::slice::from_raw_parts_mut(system_buffer, length)
+}
+
 pub struct ReadRequest<'a> {
     irp: &'a mut IRP,
     buffer: &'a mut [u8],
@@ -30,11 +40,7 @@ impl ReadRequest<'_> {
             let irp_sp = irp.Tail.Overlay.Anonymous2.Anonymous.CurrentStackLocation;
             let device_io = (*irp_sp).Parameters.Read;
 
-            let system_buffer = irp.AssociatedIrp.SystemBuffer;
-            let buffer = core::slice::from_raw_parts_mut(
-                system_buffer as *mut u8,
-                device_io.Length as usize,
-            );
+            let buffer = system_buffer(irp, device_io.Length as usize);
             ReadRequest {
                 irp,
                 buffer,
@@ -93,11 +99,7 @@ impl WriteRequest<'_> {
             let irp_sp = irp.Tail.Overlay.Anonymous2.Anonymous.CurrentStackLocation;
             let device_io = (*irp_sp).Parameters.Write;
 
-            let system_buffer = irp.AssociatedIrp.SystemBuffer;
-            let buffer = core::slice::from_raw_parts_mut(
-                system_buffer as *mut u8,
-                device_io.Length as usize,
-            );
+            let buffer = system_buffer(irp, device_io.Length as usize);
             WriteRequest { irp, buffer }
         }
     }
@@ -149,11 +151,7 @@ impl DeviceControlRequest<'_> {
                     (*irp_sp).Parameters.DeviceIoControl,
                 );
 
-            let system_buffer = irp.AssociatedIrp.SystemBuffer;
-            let buffer = core::slice::from_raw_parts_mut(
-                system_buffer as *mut u8,
-                device_io.output_buffer_length as usize,
-            );
+            let buffer = system_buffer(irp, device_io.output_buffer_length as usize);
             DeviceControlRequest {
                 irp,
                 buffer,
@@ -182,19 +180,22 @@ impl DeviceControlRequest<'_> {
         bytes_to_write
     }
 
-    pub fn complete(&mut self) {
-        self.irp.IoStatus.Information = self.buffer.len();
+    /// Completes the request, returning the bytes written with `write`. Returns the status for the
+    /// dispatch routine: the IRP belongs to the I/O manager once it is completed and must not be read.
+    pub fn complete(self) -> NTSTATUS {
+        // Only the bytes that were written: the I/O manager copies this many back to user space.
+        self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
         unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
+        return STATUS_SUCCESS;
     }
 
-    pub fn not_implemented(&mut self) {
+    /// Completes the request as not implemented. Returns the status for the dispatch routine.
+    pub fn not_implemented(self) -> NTSTATUS {
+        self.irp.IoStatus.Information = 0;
         self.irp.IoStatus.Anonymous.Status = STATUS_NOT_IMPLEMENTED;
         unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
-    }
-
-    pub fn get_status(&self) -> NTSTATUS {
-        unsafe { self.irp.IoStatus.Anonymous.Status }
+        return STATUS_NOT_IMPLEMENTED;
     }
 
     pub fn get_control_code(&self) -> u32 {

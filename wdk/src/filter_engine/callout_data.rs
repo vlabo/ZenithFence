@@ -40,21 +40,42 @@ pub enum DeferResolution {
 impl ClassifyDefer {
     /// Completes the deferral where there is something to complete, and reports the resulting state
     /// of the connection together with the packet that was captured with it.
-    pub fn resolve(self) -> DeferResolution {
-        match self {
+    pub fn resolve(mut self) -> DeferResolution {
+        match &mut self {
             ClassifyDefer::Initial(context, packet_list) => {
+                let packet_list = packet_list.take();
                 let nbl_ptr = if let Some(ref tpl) = packet_list {
                     tpl.net_buffer_list_queue.nbl
                 } else {
                     core::ptr::null_mut()
                 };
                 unsafe {
-                    FwpsCompleteOperation0(context, nbl_ptr);
+                    FwpsCompleteOperation0(*context, nbl_ptr);
                 }
+                // Completed: nothing is left for `drop` to do.
+                *context = 0;
                 return DeferResolution::Completed(packet_list);
             }
             ClassifyDefer::Reauthorization(_callout_id, packet_list) => {
-                return DeferResolution::HeldByFilter(packet_list);
+                return DeferResolution::HeldByFilter(packet_list.take());
+            }
+        }
+    }
+}
+
+impl Drop for ClassifyDefer {
+    /// Safety net for a deferred connection that was dropped without `resolve`. A pended operation
+    /// that is never completed keeps the connecting thread waiting in the kernel for good, and its
+    /// callout cannot be unregistered. Completing it lets WFP classify the connection again, so the
+    /// verdict comes from the connection cache; callers resolve explicitly whenever they know it.
+    ///
+    /// A `Reauthorization` needs nothing: there is no pended operation, the filter holds the
+    /// connection.
+    fn drop(&mut self) {
+        if let ClassifyDefer::Initial(context, _) = self {
+            if *context != 0 {
+                crate::err!("deferred connection dropped without a verdict; completing it");
+                unsafe { FwpsCompleteOperation0(*context, core::ptr::null_mut()) };
             }
         }
     }
@@ -181,6 +202,13 @@ impl<'a> CalloutData<'a> {
     // This include injecting packets.
     pub fn pend_filter_rest(&mut self, packet_list: Option<TransportPacketList>) -> ClassifyDefer {
         ClassifyDefer::Reauthorization(self.callout_id, packet_list)
+    }
+
+    /// Whether this callout may set the classify action. False once a filter that is evaluated
+    /// earlier has made a final decision (it cleared FWPS_RIGHT_ACTION_WRITE); the callout must then
+    /// leave the action, and the packet, alone.
+    pub fn can_set_action(&self) -> bool {
+        unsafe { (*self.classify_out).can_set_action() }
     }
 
     pub fn action_permit(&mut self) {

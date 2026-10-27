@@ -257,6 +257,9 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
             // be returned as the result of the connect call; the packet is reinjected once user
             // space decides.
             crate::dbg!("pending connection: {} PID: {}", key, ale_data.process_id);
+            // The connection goes into the cache before user space hears about it: the verdict
+            // can arrive as soon as the event is queued, and it is stored on the cached connection.
+            add_connection(device, &key, &ale_data, None);
             match save_packet_outbound(device, &mut data, &ale_data) {
                 Ok(packet) => {
                     let info = device.packet_cache.push(
@@ -273,7 +276,6 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
                     crate::err!("failed to pend packet: {}", err);
                 }
             };
-            add_connection(device, &key, &ale_data, None);
 
             // Drop the packet. It will be re-injected after user space returns a verdict.
             data.block_and_absorb();
@@ -397,6 +399,11 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
         // the race against a concurrent reset; the verdict path queues those and retries them
         // (see `Device::reset_filters_and_inject`) instead of dropping the packet.
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
+        // The connection goes into the cache before user space hears about it: the verdict can
+        // arrive as soon as the event is queued, and it is stored on the cached connection.
+        crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
+        add_connection(device, &key, &ale_data, None);
+
         let can_pend_connection = !ale_data.reauthorize;
         match save_packet_inbound(device, &mut data, &ale_data, can_pend_connection) {
             Ok(packet) => {
@@ -414,10 +421,6 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
                 crate::err!("failed to pend packet: {}", err);
             }
         };
-
-        // Connection is not in cache, add it.
-        crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
-        add_connection(device, &key, &ale_data, None);
 
         // Drop the packet. It will be re-injected after user space returns a verdict.
         data.block_and_absorb();

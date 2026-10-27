@@ -129,17 +129,15 @@ unsafe extern "system" fn device_control(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
-    let Some(device) = get_device() else {
-        control_request.complete();
-        return control_request.get_status();
-    };
+    if get_device().is_none() {
+        return control_request.complete();
+    }
 
     let Some(control_code): Option<ControlCode> =
         FromPrimitive::from_u32(control_request.get_control_code())
     else {
         wdk::info!("Unknown IOCTL code: {}", control_request.get_control_code());
-        control_request.not_implemented();
-        return control_request.get_status();
+        return control_request.not_implemented();
     };
 
     wdk::info!("IOCTL: {}", control_code);
@@ -148,9 +146,8 @@ unsafe extern "system" fn device_control(
         ControlCode::Version => {
             control_request.write(&VERSION);
         }
-        ControlCode::ShutdownRequest => device.shutdown(),
     };
 
-    control_request.complete();
-    control_request.get_status()
+    // Completing hands the IRP back to the I/O manager; the status comes from the call, not the IRP.
+    control_request.complete()
 }

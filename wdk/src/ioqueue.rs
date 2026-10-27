@@ -10,8 +10,17 @@ use core::{
 
 use crate::dbg;
 use alloc::boxed::Box;
-use ntstatus::ntstatus::NtStatus;
-use windows_sys::{Wdk::Foundation::KQUEUE, Win32::System::Kernel::LIST_ENTRY};
+use windows_sys::{
+    Wdk::Foundation::KQUEUE,
+    Win32::{
+        Foundation::{STATUS_ABANDONED, STATUS_TIMEOUT, STATUS_USER_APC},
+        System::Kernel::LIST_ENTRY,
+    },
+};
+
+/// How long a blocking pop waits before checking again whether the queue was run down, in
+/// 100-nanosecond units (negative: relative to now). One second.
+const WAIT_RECHECK_INTERVAL: i64 = -10_000_000;
 
 #[derive(Debug)]
 pub enum Status {
@@ -135,14 +144,17 @@ impl<T> IOQueue<T> {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
             if self.initialized.load(Ordering::SeqCst) {
-                // Pop and check the return value.
+                // Pop and check the return value. It is either a pointer to the entry or one of a
+                // few small status codes. Compare the whole value: a kernel pointer is never that
+                // small, but its low 32 bits alone can equal one of the codes.
                 let list_entry =
                     KeRemoveQueue(kqueue, KprocessorMode::KernelMode, timeout) as *mut Entry<T>;
-                let error_code = NtStatus::try_from(list_entry as u32);
-                match error_code {
-                    Ok(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
-                    Ok(NtStatus::STATUS_USER_APC) => return Err(Status::UserAPC),
-                    Ok(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandoned),
+                match list_entry as usize {
+                    status if status == STATUS_TIMEOUT as usize => return Err(Status::Timeout),
+                    status if status == STATUS_USER_APC as usize => return Err(Status::UserAPC),
+                    status if status == STATUS_ABANDONED as usize => {
+                        return Err(Status::Abandoned)
+                    }
                     _ => {
                         // The return value is a pointer.
                         let list_entry = Box::from_raw(list_entry);
@@ -158,8 +170,15 @@ impl<T> IOQueue<T> {
 
     /// Returns element or a status. Waits until element is pushed or the queue is interrupted.
     pub fn wait_and_pop(&self) -> Result<T, Status> {
-        // No timeout.
-        self.pop_internal(core::ptr::null())
+        // Wait in bounded steps rather than forever. A reader that passed the initialized check
+        // just as `rundown` ran would otherwise wait on a queue nothing is ever pushed to again; it
+        // now sees the queue is gone at the next check (`pop_internal` returns Uninitialized).
+        loop {
+            match self.pop_internal(&WAIT_RECHECK_INTERVAL) {
+                Err(Status::Timeout) => continue,
+                result => return result,
+            }
+        }
     }
 
     /// Returns element or a status. Does not wait.
@@ -185,20 +204,26 @@ impl<T> IOQueue<T> {
             // Check if initialized.
             if self.initialized.swap(false, Ordering::SeqCst) {
                 // Remove and free all elements from the queue.
-                let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
-                if !list_entries.is_null() {
-                    let mut entry = list_entries;
-                    while !core::ptr::eq((*entry).Flink, list_entries) {
-                        let next = (*entry).Flink;
-                        dbg!("discarding entry");
-                        let _ = Box::from_raw(entry as *mut Entry<T>);
-                        entry = next;
-                    }
-                    dbg!("discarding last entry");
-                    let _ = Box::from_raw(entry as *mut Entry<T>);
-                }
+                Self::free_entries(KeRundownQueue(kqueue));
             }
         }
+    }
+
+    /// Frees the entries `KeRundownQueue` returned. `list_entries` is the first entry of the
+    /// circular list it handed back, or null when the queue was empty.
+    unsafe fn free_entries(list_entries: *mut LIST_ENTRY) {
+        if list_entries.is_null() {
+            return;
+        }
+        let mut entry = list_entries;
+        while !core::ptr::eq((*entry).Flink, list_entries) {
+            let next = (*entry).Flink;
+            dbg!("discarding entry");
+            let _ = Box::from_raw(entry as *mut Entry<T>);
+            entry = next;
+        }
+        dbg!("discarding last entry");
+        let _ = Box::from_raw(entry as *mut Entry<T>);
     }
 }
 
@@ -209,6 +234,10 @@ impl<T> Drop for IOQueue<T> {
         unsafe {
             let ptr = self.kernel_queue.get();
             if !ptr.is_null() {
+                // A push that passed the initialized check just before `rundown` can still have
+                // inserted its entry afterwards. Nothing pushes anymore by the time the queue is
+                // dropped, so take whatever is left once more.
+                Self::free_entries(KeRundownQueue(ptr));
                 *ptr = MaybeUninit::zeroed().assume_init();
             }
         }

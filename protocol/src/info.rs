@@ -114,6 +114,11 @@ impl Info {
     pub fn as_bytes(&self) -> &[u8] {
         return self.0.as_slice();
     }
+
+    /// The serialized event, without copying it.
+    pub fn into_bytes(self) -> Vec<u8> {
+        return self.0;
+    }
 }
 
 impl core::fmt::Write for Info {

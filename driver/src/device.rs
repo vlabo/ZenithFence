@@ -14,10 +14,11 @@ use wdk::{
     },
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
+    kmutex::KMutex,
 };
 
 use crate::{
-    array_holder::ArrayHolder,
+    pending_event::PendingEvent,
     callouts,
     connection::{Connection, ConnectionV4, ConnectionV6, Key},
     connection_cache::ConnectionCache,
@@ -37,32 +38,25 @@ pub enum Packet {
 ///
 /// It cannot sit behind the `rw_spin_lock::Mutex` like the rest of the shared state: acquiring
 /// that raises the IRQL to DISPATCH_LEVEL, while the filter engine calls (`FwpmTransaction*`,
-/// filter and callout (un)registration) must run at PASSIVE_LEVEL, and the reset and teardown
-/// paths wait between attempts (`wdk::utils::sleep_ms` refuses to above APC_LEVEL).
-///
-/// In the kernel build the mutable access is serialized by the driver instead: a filter reset
-/// only ever runs on the thread holding the `filter_reset_queue` drain claim, and the teardown
-/// runs from `shutdown`. WFP itself rejects overlapping transactions with
-/// `STATUS_FWP_TXN_IN_PROGRESS`, which both paths retry on.
+/// filter and callout (un)registration) must run at PASSIVE_LEVEL. A kernel mutex keeps the IRQL
+/// where it is, so the teardown (`shutdown`) and the filter resets (`reset_filters_and_inject`)
+/// take turns, and a reset sees the filters the teardown removed instead of adding them back.
 pub(crate) struct FilterEngineCell {
-    inner: core::cell::UnsafeCell<FilterEngine>,
+    inner: KMutex<FilterEngine>,
 }
-
-// See the type documentation for how access is serialized.
-unsafe impl Sync for FilterEngineCell {}
 
 impl FilterEngineCell {
     fn new(filter_engine: FilterEngine) -> Self {
         Self {
-            inner: core::cell::UnsafeCell::new(filter_engine),
+            inner: KMutex::new(filter_engine),
         }
     }
 
-    /// Runs `f` with mutable access to the filter engine. Must only be called at PASSIVE_LEVEL,
-    /// from the paths described on the type, and never re-entered from within `f`.
+    /// Runs `f` with exclusive access to the filter engine. Must only be called at PASSIVE_LEVEL,
+    /// and never from within `f`.
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
-        // SAFETY: see the type documentation.
-        f(unsafe { &mut *self.inner.get() })
+        let mut filter_engine = self.inner.lock();
+        f(&mut filter_engine)
     }
 }
 
@@ -72,7 +66,7 @@ pub struct Device {
     // and consumer (read) threads can share one `&Device` soundly. Every field
     // is interior-mutable; the filter engine through `FilterEngineCell`.
     pub(crate) filter_engine: FilterEngineCell,
-    pub(crate) read_leftover: ArrayHolder,
+    pub(crate) pending_event: PendingEvent,
     pub(crate) event_queue: IOQueue<Info>,
     pub(crate) packet_cache: IdCache,
     pub(crate) connection_cache: ConnectionCache,
@@ -102,7 +96,7 @@ impl Device {
 
         Ok(Self {
             filter_engine: FilterEngineCell::new(filter_engine),
-            read_leftover: ArrayHolder::default(),
+            pending_event: PendingEvent::new(),
             event_queue: IOQueue::new(),
             packet_cache: IdCache::new(),
             connection_cache: ConnectionCache::new(),
@@ -124,28 +118,19 @@ impl Device {
     // pub fn cleanup(&mut self) {}
 
     fn write_buffer(&self, read_request: &mut ReadRequest, info: Info) {
-        let bytes = info.as_bytes();
-        let count = read_request.write(bytes);
+        let count = read_request.write(info.as_bytes());
 
-        // Check if the full buffer was written.
-        if count < bytes.len() {
-            // Save the leftovers for later.
-            self.read_leftover.save(&bytes[count..]);
+        // Check if the full event was written.
+        if count < info.as_bytes().len() {
+            // Keep the rest for the next read.
+            self.pending_event.stash(info.into_bytes(), count);
         }
     }
 
     /// Called when handle. Read is called from user-space.
     pub fn read(&self, read_request: &mut ReadRequest) {
-        if let Some(data) = self.read_leftover.load() {
-            // There are leftovers from previous request.
-            let count = read_request.write(&data);
-
-            // Check if full command was written.
-            if count < data.len() {
-                // Save the leftovers for later.
-                self.read_leftover.save(&data[count..]);
-            }
-        } else {
+        // The rest of an event that did not fit in the previous read goes first.
+        if !self.pending_event.send(read_request) {
             // Noting left from before. Wait for next commands.
             match self.event_queue.wait_and_pop() {
                 Ok(info) => {
@@ -207,38 +192,51 @@ impl Device {
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
-                    if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        dbg!("Verdict received {}: {}", key, verdict);
-                        // Add verdict in the cache.
-                        let redirect_info = self.connection_cache.update_connection(key, verdict);
+                    // Every packet taken from the cache must be injected, as allowed or as blocked:
+                    // dropping a pended connection leaves it waiting forever. An out-of-range verdict
+                    // is a user space bug, so the connection is blocked rather than left pended.
+                    let verdict_value = verdict.verdict;
+                    let verdict = FromPrimitive::from_u8(verdict_value).unwrap_or_else(|| {
+                        err!("invalid verdict value {} for {}, blocking", verdict_value, key);
+                        crate::connection::Verdict::Failed
+                    });
+                    dbg!("Verdict received {}: {}", key, verdict);
+                    // Add verdict in the cache.
+                    let redirect_info = self.connection_cache.update_connection(key, verdict);
 
-                        match verdict {
-                            crate::connection::Verdict::Accept
-                            | crate::connection::Verdict::PermanentAccept => {
+                    match verdict {
+                        crate::connection::Verdict::Accept
+                        | crate::connection::Verdict::PermanentAccept => {
+                            if let Err(err) = self.inject_packet(packet, false) {
+                                err!("failed to inject packet: {} key={}", err, key);
+                            } else {
+                                dbg!("packet injected: {}", key);
+                            }
+                        }
+                        crate::connection::Verdict::RedirectNameServer
+                        | crate::connection::Verdict::RedirectTunnel => {
+                            if let Some(redirect_info) = redirect_info {
+                                if let Err(err) = packet.redirect(redirect_info) {
+                                    err!("failed to redirect packet: {} key={}", err, key);
+                                }
                                 if let Err(err) = self.inject_packet(packet, false) {
                                     err!("failed to inject packet: {} key={}", err, key);
-                                } else {
-                                    dbg!("packet injected: {}", key);
                                 }
-                            }
-                            crate::connection::Verdict::RedirectNameServer
-                            | crate::connection::Verdict::RedirectTunnel => {
-                                if let Some(redirect_info) = redirect_info {
-                                    if let Err(err) = packet.redirect(redirect_info) {
-                                        err!("failed to redirect packet: {} key={}", err, key);
-                                    }
-                                    if let Err(err) = self.inject_packet(packet, false) {
-                                        err!("failed to inject packet: {} key={}", err, key);
-                                    }
-                                }
-                            }
-                            _ => {
+                            } else {
+                                // The connection is no longer in the cache (cleared since the
+                                // packet was pended), so there is nowhere to redirect it to.
+                                err!("no redirect info for {}, blocking", key);
                                 if let Err(err) = self.inject_packet(packet, true) {
                                     err!("failed to inject packet: {} key={}", err, key);
                                 }
                             }
                         }
-                    };
+                        _ => {
+                            if let Err(err) = self.inject_packet(packet, true) {
+                                err!("failed to inject packet: {} key={}", err, key);
+                            }
+                        }
+                    }
                 } else {
                     // Id was not in the packet cache.
                     let id = verdict.id;
@@ -502,7 +500,7 @@ impl Device {
     /// Tears the device down, in the only order that leaves nothing behind for the unload:
     /// remove the filters, complete everything that is still pended, then remove the callouts.
     ///
-    /// Reachable from the shutdown command (write and device-control) and from the unload path,
+    /// Reachable from the shutdown command (write) and from the unload path,
     /// and safe to call more than once: the one-time part runs once, the rest runs on every call
     /// so anything that raced in afterwards is still resolved.
     pub fn shutdown(&self) {

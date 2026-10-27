@@ -17,7 +17,7 @@ use crate::{err, warn};
 trait IpVersion: Connection + Sized {
     const HEADER_LEN: u32;
     const IS_IPV6: bool;
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String>;
     fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>>;
 }
 
@@ -25,7 +25,7 @@ impl IpVersion for ConnectionV4 {
     const HEADER_LEN: u32 = IPV4_HEADER_LEN as u32;
     const IS_IPV6: bool = false;
 
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
         get_key_from_nb_v4(nb, direction)
     }
 
@@ -38,7 +38,7 @@ impl IpVersion for ConnectionV6 {
     const HEADER_LEN: u32 = IPV6_HEADER_LEN as u32;
     const IS_IPV6: bool = true;
 
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
         get_key_from_nb_v6(nb, direction)
     }
 
@@ -178,7 +178,14 @@ fn ip_packet_layer<T: IpVersion>(
 
             // Get key from packet.
             let key = match T::get_key_from_nb(&nb, direction) {
-                Ok(key) => key,
+                Ok(Some(key)) => key,
+                // A fragment other than the first has no transport header to classify by. The
+                // first fragment carries the decision: without it the datagram is never
+                // reassembled, and inbound ALE sees the reassembled packet.
+                Ok(None) => {
+                    data.action_permit();
+                    continue;
+                }
                 Err(err) => {
                     warn!("failed to get key from net buffer: {}", err);
                     return;

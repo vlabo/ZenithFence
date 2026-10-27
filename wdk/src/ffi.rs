@@ -131,8 +131,14 @@ pub(crate) struct NBListHeader {
     pub(crate) first_net_buffer: *mut NET_BUFFER,
 }
 
+/// A field aligned to MEMORY_ALLOCATION_ALIGNMENT (16 bytes on 64-bit), the
+/// `DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT)` of the NDIS headers.
+#[repr(C, align(16))]
+pub(crate) struct Aligned16<T>(pub(crate) T);
+
 /// The NET_BUFFER_LIST structure specifies a linked list of NET_BUFFER structures.
 /// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
+/// Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
 pub struct NET_BUFFER_LIST {
@@ -140,9 +146,9 @@ pub struct NET_BUFFER_LIST {
     pub(crate) Context: *mut c_void,
     pub(crate) ParentNetBufferList: *mut NET_BUFFER_LIST,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 4],
-    pub(crate) MiniportReserved: [*mut c_void; 2],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 4]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 2]>,
     pub(crate) Scratch: *mut c_void,
     pub(crate) SourceHandle: NDIS_HANDLE,
     pub(crate) NblFlags: u32,
@@ -161,6 +167,7 @@ pub union NBSize {
 
 /// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 /// The NET_BUFFER structure specifies data that is transmitted or received over the network.
+/// Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
 pub struct NET_BUFFER {
@@ -170,15 +177,43 @@ pub struct NET_BUFFER {
     pub(crate) nbSize: NBSize,
     pub(crate) MdlChain: *mut MDL,
     pub(crate) DataOffset: u32,
+    // The fields above are a NET_BUFFER_HEADER, a union with an SLIST_HEADER, which pads them to
+    // 48 bytes.
+    _HeaderPadding: u32,
     pub(crate) ChecksumBias: u16,
     pub(crate) Reserved: u16,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 6],
-    pub(crate) MiniportReserved: [*mut c_void; 4],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 6]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 4]>,
     pub(crate) DataPhysicalAddress: u64,
     pub(crate) SharedMemoryInfo: *mut c_void,
 }
+
+// Offsets of the NDIS structures as the WDK headers lay them out (x64). A mismatch means a field
+// is read from the wrong place, so check it at compile time.
+#[cfg(target_arch = "x86_64")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(offset_of!(NET_BUFFER_LIST, Context) == 16);
+    assert!(offset_of!(NET_BUFFER_LIST, NdisReserved) == 48);
+    assert!(offset_of!(NET_BUFFER_LIST, ProtocolReserved) == 64);
+    assert!(offset_of!(NET_BUFFER_LIST, MiniportReserved) == 96);
+    assert!(offset_of!(NET_BUFFER_LIST, Scratch) == 112);
+    assert!(offset_of!(NET_BUFFER_LIST, NblFlags) == 128);
+    assert!(offset_of!(NET_BUFFER_LIST, Status) == 140);
+    assert!(offset_of!(NET_BUFFER_LIST, NetBufferListInfo) == 144);
+
+    assert!(offset_of!(NET_BUFFER, MdlChain) == 32);
+    assert!(offset_of!(NET_BUFFER, DataOffset) == 40);
+    assert!(offset_of!(NET_BUFFER, ChecksumBias) == 48);
+    assert!(offset_of!(NET_BUFFER, NdisPoolHandle) == 56);
+    assert!(offset_of!(NET_BUFFER, NdisReserved) == 64);
+    assert!(offset_of!(NET_BUFFER, ProtocolReserved) == 80);
+    assert!(offset_of!(NET_BUFFER, MiniportReserved) == 128);
+    assert!(offset_of!(NET_BUFFER, DataPhysicalAddress) == 160);
+    assert!(size_of::<NET_BUFFER>() == 176);
+};
 
 /// This data type is used as the generic handle type in NDIS function calls.
 #[allow(non_camel_case_types)]
