@@ -1,5 +1,4 @@
 use alloc::string::String;
-use alloc::sync::Arc;
 use smoltcp::wire::{IPV4_HEADER_LEN, IPV6_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
@@ -18,7 +17,8 @@ trait IpVersion: Connection + Sized {
     const HEADER_LEN: u32;
     const IS_IPV6: bool;
     fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String>;
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>>;
+    fn with_connection<R>(cache: &ConnectionCache, key: &Key, f: impl FnOnce(&Self) -> R)
+        -> Option<R>;
 }
 
 impl IpVersion for ConnectionV4 {
@@ -29,8 +29,12 @@ impl IpVersion for ConnectionV4 {
         get_key_from_nb_v4(nb, direction)
     }
 
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
-        cache.get_connection_v4(key)
+    fn with_connection<R>(
+        cache: &ConnectionCache,
+        key: &Key,
+        f: impl FnOnce(&Self) -> R,
+    ) -> Option<R> {
+        cache.with_connection_v4(key, f)
     }
 }
 
@@ -42,8 +46,12 @@ impl IpVersion for ConnectionV6 {
         get_key_from_nb_v6(nb, direction)
     }
 
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
-        cache.get_connection_v6(key)
+    fn with_connection<R>(
+        cache: &ConnectionCache,
+        key: &Key,
+        f: impl FnOnce(&Self) -> R,
+    ) -> Option<R> {
+        cache.with_connection_v6(key, f)
     }
 }
 
@@ -203,15 +211,18 @@ fn ip_packet_layer<T: IpVersion>(
             ) {
                 // TCP and UDP always need to go through ALE layer first.
 
-                // Check if there is already connection object.
-                if let Some(conn) = T::get_connection(&device.connection_cache, &key) {
-                    // Connection object found.
-
+                // Check if there is already connection object. Everything needed from it is
+                // taken while its port is locked.
+                let found = T::with_connection(&device.connection_cache, &key, |conn| {
                     conn.update_bandwidth_data(packet_size, direction);
-                    process_id = conn.get_process_id();
+                    (conn.get_verdict(), conn.get_process_id(), conn.redirect_info())
+                });
+                if let Some((verdict, conn_process_id, redirect_info)) = found {
+                    // Connection object found.
+                    process_id = conn_process_id;
 
                     // Check if there is action for this connection.
-                    match conn.get_verdict() {
+                    match verdict {
                         Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
                             // Temporary verdicts have special paths.
                             is_tmp_verdict = true
@@ -222,7 +233,7 @@ fn ip_packet_layer<T: IpVersion>(
                             data.block_and_absorb()
                         }
                         Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
-                            if let Some(redirect_info) = conn.redirect_info() {
+                            if let Some(redirect_info) = redirect_info {
                                 match clone_packet(
                                     device,
                                     &nb,

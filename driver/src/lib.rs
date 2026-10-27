@@ -6,12 +6,11 @@ extern crate alloc;
 
 mod ale_callouts;
 mod pending_event;
-pub mod mpsc_queue;
 mod callouts;
 mod common;
 mod connection;
 mod connection_cache;
-mod rcu_port;
+mod port_connections;
 mod device;
 mod entry;
 mod filter_reset_queue;

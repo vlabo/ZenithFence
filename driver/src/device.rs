@@ -118,7 +118,7 @@ impl Device {
             pending_event: PendingEvent::new(),
             event_queue: IOQueue::new(MAX_EVENTS),
             packet_cache: IdCache::new(),
-            connection_cache: ConnectionCache::new(),
+            connection_cache: ConnectionCache::new()?,
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
             filter_reset_queue: FilterResetQueue::new(),
@@ -463,7 +463,6 @@ impl Device {
 
                 let (active, ended) = self.connection_cache.get_entries_count();
                 let packet_cache_count = self.packet_cache.get_entries_count();
-                let (unlinked_v4, unlinked_v6) = self.connection_cache.get_unlinked_queue_counts();
                 let filter_reset_count = self.filter_reset_queue.get_entries_count();
                 let packets_expired = self.packet_cache.get_expired_count();
 
@@ -474,15 +473,13 @@ impl Device {
                     );
                     _ = write!(
                         log_line,
-                        "MemStats: connections active={} ended={} | packet_cache={} expired={} | events queued={} dropped={} | unlinked_ports v4={} v6={} | filter_reset_queue={}",
+                        "MemStats: connections active={} ended={} | packet_cache={} expired={} | events queued={} dropped={} | filter_reset_queue={}",
                         active,
                         ended,
                         packet_cache_count,
                         packets_expired,
                         self.event_queue.queued_count(),
                         self.event_queue.dropped_count(),
-                        unlinked_v4,
-                        unlinked_v6,
                         filter_reset_count
                     );
                     logger::add_line(log_line);
@@ -550,41 +547,41 @@ impl Device {
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
-                let (conn_v4, conn_v6) = self.connection_cache.clean_ended_connections();
-
-                // Process ended ipv4 connections
-                for conn in conn_v4.iter() {
-                    let info = protocol::info::connection_end_event_v4_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    _ = self.event_queue.push(info);
-                }
-
-                // Process ended ipv6 connections
-                for conn in conn_v6.iter() {
-                    let info = protocol::info::connection_end_event_v6_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                // The events are built while the evicted connections are still alive: they are
+                // freed as they are removed.
+                let infos = self.connection_cache.clean_ended_connections(
+                    |conn: &ConnectionV4| {
+                        protocol::info::connection_end_event_v4_info(
+                            conn.get_process_id(),
+                            conn.get_direction() as u8,
+                            conn.protocol.into(),
+                            conn.local_address.octets(),
+                            conn.remote_address.octets(),
+                            conn.local_port,
+                            conn.remote_port,
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                        )
+                    },
+                    |conn: &ConnectionV6| {
+                        protocol::info::connection_end_event_v6_info(
+                            conn.get_process_id(),
+                            conn.get_direction() as u8,
+                            conn.protocol.into(),
+                            conn.local_address.octets(),
+                            conn.remote_address.octets(),
+                            conn.local_port,
+                            conn.remote_port,
+                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
+                            conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
+                        )
+                    },
+                );
+                for info in infos {
                     _ = self.event_queue.push(info);
                 }
             }

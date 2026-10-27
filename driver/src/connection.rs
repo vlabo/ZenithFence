@@ -91,6 +91,16 @@ impl Debug for Direction {
 }
 
 pub trait Connection {
+    /// What tells apart the connections on one local port (the cache slot already fixes the
+    /// protocol and the local port). The cache keeps it inline, next to the pointer to the
+    /// connection, so a lookup scans contiguous memory and only dereferences the match.
+    type CompactKey: Copy + PartialEq;
+
+    /// The compact key of this connection.
+    fn compact_key(&self) -> Self::CompactKey;
+    /// The compact key of `key`, or `None` if `key` is of the other IP version.
+    fn compact_key_of(key: &Key) -> Option<Self::CompactKey>;
+
     fn redirect_info(&self) -> Option<RedirectInfo> {
         let redirect_address = if self.is_ipv6() {
             IpAddress::Ipv6(Ipv6Address::LOCALHOST)
@@ -119,21 +129,6 @@ pub trait Connection {
         }
     }
 
-    /// Builds the [`Key`] that identifies this connection (protocol, local and
-    /// remote address/port). Relies on the address/port accessors, so it works
-    /// for both IPv4 and IPv6 connections without per-type duplication.
-    fn get_key(&self) -> Key {
-        Key {
-            protocol: self.get_protocol(),
-            local_address: self.get_local_address(),
-            local_port: self.get_local_port(),
-            remote_address: self.get_remote_address(),
-            remote_port: self.get_remote_port(),
-        }
-    }
-
-    /// Returns true if the connection is equal to the given key.
-    fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
     /// Returns the protocol of the connection.
@@ -258,6 +253,22 @@ pub struct ConnectionV6 {
     pub(crate) direction: Direction,
 }
 
+/// `Connection::CompactKey` of an IPv4 connection.
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV4 {
+    local_address: Ipv4Address,
+    remote_address: Ipv4Address,
+    remote_port: u16,
+}
+
+/// `Connection::CompactKey` of an IPv6 connection.
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV6 {
+    local_address: Ipv6Address,
+    remote_address: Ipv6Address,
+    remote_port: u16,
+}
+
 #[derive(Debug)]
 pub struct RedirectInfo {
     pub(crate) local_address: IpAddress,
@@ -303,22 +314,27 @@ impl ConnectionV4 {
 }
 
 impl Connection for ConnectionV4 {
-    fn equals(&self, key: &Key) -> bool {
-        if self.remote_port != key.remote_port {
-            return false;
+    type CompactKey = CompactKeyV4;
+
+    fn compact_key(&self) -> CompactKeyV4 {
+        CompactKeyV4 {
+            local_address: self.local_address,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
         }
-        if self.local_port != key.local_port {
-            return false;
-        }
-        if let IpAddress::Ipv4(local_address) = &key.local_address {
-            if !self.local_address.eq(local_address) {
-                return false;
+    }
+
+    fn compact_key_of(key: &Key) -> Option<CompactKeyV4> {
+        match (key.local_address, key.remote_address) {
+            (IpAddress::Ipv4(local_address), IpAddress::Ipv4(remote_address)) => {
+                Some(CompactKeyV4 {
+                    local_address,
+                    remote_address,
+                    remote_port: key.remote_port,
+                })
             }
+            _ => None,
         }
-        if let IpAddress::Ipv4(remote_address) = &key.remote_address {
-            return self.remote_address.eq(remote_address);
-        }
-        false
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -466,22 +482,27 @@ impl ConnectionV6 {
 }
 
 impl Connection for ConnectionV6 {
-    fn equals(&self, key: &Key) -> bool {
-        if self.remote_port != key.remote_port {
-            return false;
+    type CompactKey = CompactKeyV6;
+
+    fn compact_key(&self) -> CompactKeyV6 {
+        CompactKeyV6 {
+            local_address: self.local_address,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
         }
-        if self.local_port != key.local_port {
-            return false;
-        }
-        if let IpAddress::Ipv6(local_address) = &key.local_address {
-            if !self.local_address.eq(local_address) {
-                return false;
+    }
+
+    fn compact_key_of(key: &Key) -> Option<CompactKeyV6> {
+        match (key.local_address, key.remote_address) {
+            (IpAddress::Ipv6(local_address), IpAddress::Ipv6(remote_address)) => {
+                Some(CompactKeyV6 {
+                    local_address,
+                    remote_address,
+                    remote_port: key.remote_port,
+                })
             }
+            _ => None,
         }
-        if let IpAddress::Ipv6(remote_address) = &key.remote_address {
-            return self.remote_address.eq(remote_address);
-        }
-        false
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {

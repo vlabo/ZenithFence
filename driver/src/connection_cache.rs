@@ -1,17 +1,21 @@
 use alloc::boxed::Box;
-use alloc::sync::Arc;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::sync::atomic::Ordering;
 use core::time::Duration;
 
-use crate::connection::{Connection, ConnectionV4, ConnectionV6, Key, RedirectInfo, Verdict};
-use crate::mpsc_queue::MpscQueue;
-use crate::rcu_port::{ConnectionArray, RCUPort};
+use crate::connection::{
+    Connection, ConnectionV4, ConnectionV6, Key, RedirectInfo, Verdict, PM_DNS_PORT, PM_SPN_PORT,
+};
+use crate::port_connections::{Entry, PortConnections};
 use smoltcp::wire::IpProtocol;
 
 // 0-65535 must be valid ports. 0 is not a valid port number but its kept for future proofing for special cases.
 const PORT_COUT: usize = u16::MAX as usize + 1;
-type PortArray<T> = [RCUPort<T>; PORT_COUT];
+type PortArray<T> = [PortConnections<T>; PORT_COUT];
+
+/// The most stale connections one `clean_ended_connections` call evicts per IP version, which
+/// bounds the end events it sends at once.
+const MAX_STALE_EVICTIONS: usize = 100;
 
 // Selects the correct per-port slot from the tcp/udp arrays.
 fn get_port<'a, T: Connection>(
@@ -19,7 +23,7 @@ fn get_port<'a, T: Connection>(
     udp: &'a PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
-) -> Option<&'a RCUPort<T>> {
+) -> Option<&'a PortConnections<T>> {
     match protocol {
         IpProtocol::Tcp => Some(&tcp[local_port as usize]),
         IpProtocol::Udp => Some(&udp[local_port as usize]),
@@ -27,56 +31,83 @@ fn get_port<'a, T: Connection>(
     }
 }
 
-fn alloc_port_array<T: Connection>() -> Box<PortArray<T>> {
-    // RCUPort<T> is valid when zeroed:
+fn alloc_port_array<T: Connection>() -> Result<Box<PortArray<T>>, String> {
+    // PortConnections<T> is valid when zeroed:
     //   - AtomicPtr is valid as null
     //   - Mutex<()> / RwSpinLock uses i32 which is valid at 0
     // alloc_zeroed is used to allocate directly on the heap.
     let layout = core::alloc::Layout::new::<PortArray<T>>();
     unsafe {
         let ptr = alloc::alloc::alloc_zeroed(layout) as *mut PortArray<T>;
-        Box::from_raw(ptr)
+        if ptr.is_null() {
+            return Err("failed to allocate the connection cache".to_string());
+        }
+        Ok(Box::from_raw(ptr))
     }
 }
 
-fn ports_clear<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-) {
-    // Free all tcp connections
-    for port in tcp.iter() {
-        if !port.is_empty() {
-            port.lock().publish(None, queue);
-        }
-    }
-
-    // Free all udp connections
-    for port in udp.iter() {
-        if !port.is_empty() {
-            port.lock().publish(None, queue);
-        }
-    }
+/// The connection `key` names exactly.
+fn find_exact<'a, T: Connection>(entries: &'a [Entry<T>], key: &Key) -> Option<&'a T> {
+    let compact = T::compact_key_of(key)?;
+    entries
+        .iter()
+        .find(|entry| entry.key == compact)
+        .map(|entry| &*entry.conn)
 }
 
-// get_connection generic function for getting a connection.
-fn get_connection<T: Connection>(
+/// The connection `key` names, or the redirected connection a packet with `key` belongs to.
+fn find_exact_or_redirect<'a, T: Connection>(
+    entries: &'a [Entry<T>],
+    key: &Key,
+) -> Option<&'a T> {
+    if let Some(conn) = find_exact(entries, key) {
+        return Some(conn);
+    }
+    // A redirected packet carries the address it was redirected to, not the connection's, so it
+    // needs a slower check against each connection. Redirects only go to the DNS and the tunnel
+    // port, so no other packet pays for it.
+    if key.remote_port != PM_DNS_PORT && key.remote_port != PM_SPN_PORT {
+        return None;
+    }
+    entries
+        .iter()
+        .map(|entry| &*entry.conn)
+        .find(|conn| conn.redirect_equals(key))
+}
+
+// Runs `f` on the connection `key` names, holding its port's lock shared.
+fn with_exact<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     key: &Key,
-) -> Option<Arc<T>> {
-    // Get the connection array port.
-    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
-    let snap = port.get()?;
-    // Iterate over all connection and find the connection.
-    for conn in snap.iter() {
-        if conn.equals(key) || conn.redirect_equals(key) {
-            // Update last accessed.
-            conn.set_last_accessed_time(wdk::utils::get_monotonic_ms());
-            return Some(conn.clone());
+    f: impl FnOnce(&T) -> R,
+) -> Option<R> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?;
+    port.read(|entries| find_exact(entries, key).map(f))
+}
+
+// Runs `f` on the connection `key` names, or the redirected connection it belongs to, holding its
+// port's lock shared. Refreshes the last-accessed time.
+fn with_exact_or_redirect<T: Connection, R>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    key: &Key,
+    f: impl FnOnce(&T) -> R,
+) -> Option<R> {
+    let port = get_port(tcp, udp, key.protocol, key.local_port)?;
+    port.read(|entries| {
+        let conn = find_exact_or_redirect(entries, key)?;
+        conn.set_last_accessed_time(wdk::utils::get_monotonic_ms());
+        Some(f(conn))
+    })
+}
+
+fn ports_clear<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>) {
+    for port in tcp.iter().chain(udp.iter()) {
+        if !port.is_empty() {
+            port.write(|entries| entries.clear());
         }
     }
-    None
 }
 
 // Adds a connection to its port. If an equal one is already present, its
@@ -84,168 +115,100 @@ fn get_connection<T: Connection>(
 //
 // The duplicate check and the publish both run under the port write lock, so
 // concurrent adds of the same connection collapse to a single entry. This
-// matters because `get_connection` + add is not atomic and the packet layer
+// matters because a lookup + add is not atomic and the packet layer
 // runs on multiple CPUs, so two callers can miss the same connection and race
 // to insert it.
-fn add_connection<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-    new: T,
-) {
+fn add_connection<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>, new: T) {
     let Some(port) = get_port(tcp, udp, new.get_protocol(), new.get_local_port()) else {
         return;
     };
 
-    // Identity key, taken before `new` is moved into the Arc.
-    let key = new.get_key();
-    let new_arc = Arc::new(new);
+    // Allocated before the lock is taken.
+    let new = Entry::new(Box::new(new));
 
-    // Lock for writing.
-    let port_lock = port.lock();
-
-    // Copy the current port connection array. If the connection is already
-    // present, fold the new observation into it instead of inserting a duplicate.
-    let mut new_vec = match port_lock.snapshot() {
-        Some(snap) => {
-            // Check if connection is already in.
-            for conn in snap.iter() {
-                if conn.equals(&key) {
-                    // Refresh last-accessed and accumulate bandwidth so no traffic
-                    // accounting is lost. Identity, verdict and process id are left
-                    // untouched — the existing connection stays authoritative.
-                    conn.set_last_accessed_time(new_arc.get_last_accessed_time());
-                    conn.get_bandwidth_usage()
-                        .add_from(new_arc.get_bandwidth_usage());
-                    return;
-                }
-            }
-
-            let mut v = Vec::with_capacity(snap.len() + 1);
-            v.extend(snap.iter().cloned());
-            v
+    port.write(|entries| {
+        // If the connection is already present, fold the new observation into it instead of
+        // inserting a duplicate.
+        if let Some(entry) = entries.iter().find(|entry| entry.key == new.key) {
+            // Refresh last-accessed and accumulate bandwidth so no traffic
+            // accounting is lost. Identity, verdict and process id are left
+            // untouched — the existing connection stays authoritative.
+            entry
+                .conn
+                .set_last_accessed_time(new.conn.get_last_accessed_time());
+            entry
+                .conn
+                .get_bandwidth_usage()
+                .add_from(new.conn.get_bandwidth_usage());
+            return;
         }
-        None => Vec::with_capacity(1),
-    };
 
-    // Add the new connection and publish.
-    new_vec.push(new_arc);
-    port_lock.publish(Some(new_vec.into_boxed_slice()), queue);
+        entries.push(new);
+    });
 }
 
-// Marks the connection matching `key` as ended and returns it. Read-only guard.
-fn end_connection<T: Connection>(
+// Marks the connection matching `key` as ended and runs `f` on it.
+fn end_connection<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     key: &Key,
-) -> Option<Arc<T>> {
-    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
-    let snap = port.get()?;
-    for conn in snap.iter() {
-        if conn.equals(key) {
-            conn.end(wdk::utils::get_monotonic_ms());
-            return Some(conn.clone());
-        }
-    }
-    None
+    f: impl FnOnce(&T) -> R,
+) -> Option<R> {
+    with_exact(tcp, udp, key, |conn| {
+        conn.end(wdk::utils::get_monotonic_ms());
+        f(conn)
+    })
 }
 
 // Marks every active connection on the given (protocol, port) as ended and
-// returns them. Read-only guard.
-fn end_all_on_port<T: Connection>(
+// runs `f` on each.
+fn end_all_on_port<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
-) -> Option<Vec<Arc<T>>> {
-    let port = get_port(tcp, udp, protocol, local_port)?.read();
-    let snap = port.get()?;
+    mut f: impl FnMut(&T) -> R,
+) -> Vec<R> {
+    let Some(port) = get_port(tcp, udp, protocol, local_port) else {
+        return Vec::new();
+    };
     let now = wdk::utils::get_monotonic_ms();
-    let mut ended = Vec::new();
-    for conn in snap.iter() {
-        if !conn.has_ended() {
-            conn.end(now);
-            ended.push(conn.clone());
+    port.read(|entries| {
+        let mut ended = Vec::new();
+        for conn in entries.iter().map(|entry| &*entry.conn) {
+            if !conn.has_ended() {
+                conn.end(now);
+                ended.push(f(conn));
+            }
         }
-    }
-    Some(ended)
-}
-
-// Sets the verdict on the connection matching `key`, returning any redirect
-// info. Read-only guard.
-fn set_connection_verdict<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    key: &Key,
-    verdict: Verdict,
-) -> Option<RedirectInfo> {
-    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
-    let snap = port.get()?;
-    for conn in snap.iter() {
-        if conn.equals(key) {
-            conn.set_verdict(verdict);
-            return conn.redirect_info();
-        }
-    }
-    None
-}
-
-fn fail_if_undecided<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>, key: &Key) {
-    let Some(port) = get_port(tcp, udp, key.protocol, key.local_port) else {
-        return;
-    };
-    let port = port.read();
-    let Some(snap) = port.get() else {
-        return;
-    };
-    for conn in snap.iter() {
-        if conn.equals(key) {
-            conn.replace_verdict(Verdict::Undecided, Verdict::Failed);
-            return;
-        }
-    }
-}
-
-// Returns the verdict of the connection matching `key`, including redirect
-// matches. Refreshes the last-accessed time. Read-only guard.
-fn find_verdict<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    key: &Key,
-) -> Option<Verdict> {
-    let port = get_port(tcp, udp, key.protocol, key.local_port)?.read();
-    let snap = port.get()?;
-    for conn in snap.iter() {
-        if conn.equals(key) || conn.redirect_equals(key) {
-            conn.set_last_accessed_time(wdk::utils::get_monotonic_ms());
-            return Some(conn.get_verdict());
-        }
-    }
-    None
+        ended
+    })
 }
 
 // ports_walk generic function for waling over all connections.
-fn ports_walk<T: Connection, F: FnMut(&T)>(tcp: &PortArray<T>, udp: &PortArray<T>, mut iter: F) {
+fn ports_walk<T: Connection, F: FnMut(&T)>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    mut iter: F,
+) {
     for port in tcp.iter().chain(udp.iter()) {
-        let guard = port.read();
-        if let Some(snap) = guard.get() {
-            for conn in snap.iter() {
-                iter(conn.as_ref());
-            }
+        // One lock at a time, held only for its own port.
+        if !port.is_empty() {
+            port.read(|entries| entries.iter().for_each(|entry| iter(&entry.conn)));
         }
     }
 }
 
-fn ports_clean_ended<T: Connection>(
+// Removes the connections that ended over a minute ago, and evicts up to MAX_STALE_EVICTIONS
+// that saw no traffic for two minutes, running `on_stale` on each of those.
+fn ports_clean_ended<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
-    removed_connections: &mut Vec<Arc<T>>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-) {
+    mut on_stale: impl FnMut(&T) -> R,
+) -> Vec<R> {
     // Durations
     const TWO_MINUTES: u64 = Duration::from_secs(120).as_millis() as u64;
     const ONE_MINUTE: u64 = Duration::from_secs(60).as_millis() as u64;
-    const SECOND: u64 = Duration::from_secs(1).as_millis() as u64;
 
     let now = wdk::utils::get_monotonic_ms();
     // The clock counts from boot, so it can be below these windows when the driver loads early.
@@ -253,87 +216,28 @@ fn ports_clean_ended<T: Connection>(
     let before_two_minutes = now.saturating_sub(TWO_MINUTES);
     let before_one_minute = now.saturating_sub(ONE_MINUTE);
 
-    // Remove all ended or stale connections.
+    let mut evicted = Vec::new();
     for port in tcp.iter().chain(udp.iter()) {
-        let mut any_removed = false;
-        let mut survivors: Vec<Arc<T>> = Vec::new();
-
-        // Port is still readable while the lock is acquired; it just stops concurrent writes.
-        let port_guard = port.lock();
-        let snap = match port_guard.snapshot() {
-            Some(s) => s,
-            None => continue,
-        };
-
-        // Check for ended connections and build a new list.
-        for conn in snap.iter() {
-            if conn.has_ended() && conn.get_end_time() < before_one_minute {
-                any_removed = true;
-                continue;
-            }
-            if removed_connections.capacity() > removed_connections.len()
-                && conn.get_last_accessed_time() < before_two_minutes
-            {
-                removed_connections.push(conn.clone());
-                any_removed = true;
-                continue;
-            }
-            survivors.push(conn.clone());
+        if port.is_empty() {
+            continue;
         }
-
-        // Publish if there are any changes.
-        if any_removed {
-            port_guard.publish(
-                if survivors.is_empty() {
-                    None
-                } else {
-                    Some(survivors.into_boxed_slice())
-                },
-                queue,
-            );
-        }
+        port.write(|entries| {
+            entries.retain(|entry| {
+                let conn = &*entry.conn;
+                if conn.has_ended() && conn.get_end_time() < before_one_minute {
+                    return false;
+                }
+                if evicted.len() < MAX_STALE_EVICTIONS
+                    && conn.get_last_accessed_time() < before_two_minutes
+                {
+                    evicted.push(on_stale(conn));
+                    return false;
+                }
+                true
+            })
+        });
     }
-
-    // Clean unused and unlinked connection arrays.
-    let now = wdk::utils::get_monotonic_ms();
-    loop {
-        let mut continue_loop = false;
-        match queue.peek() {
-            Some(conn_array) => 'conn_match: {
-                // Check for active readers
-                let readers = conn_array.readers.load(Ordering::SeqCst);
-                if readers != 0 {
-                    break 'conn_match;
-                }
-
-                let time = conn_array.unlinked_timestamp.load(Ordering::SeqCst);
-                // Prevent overflow
-                if time > now {
-                    break 'conn_match;
-                }
-
-                // Check if enough time has passed since the un-linking.
-                if now - time < SECOND {
-                    break 'conn_match;
-                }
-
-                // Array is safe to free.
-                let array = queue.pop();
-                unsafe {
-                    drop(Box::from_raw(array));
-                }
-
-                // Continue to next.
-                continue_loop = true;
-            }
-            None => (),
-        }
-
-        if !continue_loop {
-            // No more arrays to free.
-            break;
-        }
-    }
+    evicted
 }
 
 // ConnectionCache holds the state of all active connections.
@@ -343,121 +247,115 @@ pub struct ConnectionCache {
     udp_v4: Box<PortArray<ConnectionV4>>,
     tcp_v6: Box<PortArray<ConnectionV6>>,
     udp_v6: Box<PortArray<ConnectionV6>>,
-
-    // Holds unlinked connections arrays.
-    unlinked_ports_v4: MpscQueue<ConnectionArray<ConnectionV4>>,
-    unlinked_ports_v6: MpscQueue<ConnectionArray<ConnectionV6>>,
 }
 
 impl ConnectionCache {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, String> {
         // Initialize all the arrays.
-        Self {
-            tcp_v4: alloc_port_array(),
-            udp_v4: alloc_port_array(),
-            tcp_v6: alloc_port_array(),
-            udp_v6: alloc_port_array(),
-            unlinked_ports_v4: MpscQueue::new(),
-            unlinked_ports_v6: MpscQueue::new(),
-        }
+        Ok(Self {
+            tcp_v4: alloc_port_array()?,
+            udp_v4: alloc_port_array()?,
+            tcp_v6: alloc_port_array()?,
+            udp_v6: alloc_port_array()?,
+        })
     }
 
     pub fn add_v4(&self, new: ConnectionV4) {
-        add_connection(&self.tcp_v4, &self.udp_v4, &self.unlinked_ports_v4, new);
+        add_connection(&self.tcp_v4, &self.udp_v4, new);
     }
 
     pub fn add_v6(&self, new: ConnectionV6) {
-        add_connection(&self.tcp_v6, &self.udp_v6, &self.unlinked_ports_v6, new);
+        add_connection(&self.tcp_v6, &self.udp_v6, new);
     }
 
-    pub fn end_v4(&self, key: Key) -> Option<Arc<ConnectionV4>> {
-        end_connection(&self.tcp_v4, &self.udp_v4, &key)
+    /// Marks the connection matching `key` as ended and runs `f` on it.
+    pub fn end_v4<R>(&self, key: Key, f: impl FnOnce(&ConnectionV4) -> R) -> Option<R> {
+        end_connection(&self.tcp_v4, &self.udp_v4, &key, f)
     }
 
-    pub fn end_v6(&self, key: Key) -> Option<Arc<ConnectionV6>> {
-        end_connection(&self.tcp_v6, &self.udp_v6, &key)
+    /// Marks the connection matching `key` as ended and runs `f` on it.
+    pub fn end_v6<R>(&self, key: Key, f: impl FnOnce(&ConnectionV6) -> R) -> Option<R> {
+        end_connection(&self.tcp_v6, &self.udp_v6, &key, f)
     }
 
-    pub fn end_all_on_port_v4(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV4>>> {
-        end_all_on_port(&self.tcp_v4, &self.udp_v4, key.0, key.1)
+    /// Marks every active connection on the port as ended and runs `f` on each.
+    pub fn end_all_on_port_v4<R>(
+        &self,
+        key: (IpProtocol, u16),
+        f: impl FnMut(&ConnectionV4) -> R,
+    ) -> Vec<R> {
+        end_all_on_port(&self.tcp_v4, &self.udp_v4, key.0, key.1, f)
     }
 
-    pub fn end_all_on_port_v6(&self, key: (IpProtocol, u16)) -> Option<Vec<Arc<ConnectionV6>>> {
-        end_all_on_port(&self.tcp_v6, &self.udp_v6, key.0, key.1)
+    /// Marks every active connection on the port as ended and runs `f` on each.
+    pub fn end_all_on_port_v6<R>(
+        &self,
+        key: (IpProtocol, u16),
+        f: impl FnMut(&ConnectionV6) -> R,
+    ) -> Vec<R> {
+        end_all_on_port(&self.tcp_v6, &self.udp_v6, key.0, key.1, f)
     }
 
+    /// Sets the verdict of the connection matching `key`, returning any redirect info.
     pub fn update_connection(&self, key: Key, verdict: Verdict) -> Option<RedirectInfo> {
+        fn set<T: Connection>(conn: &T, verdict: Verdict) -> Option<RedirectInfo> {
+            conn.set_verdict(verdict);
+            conn.redirect_info()
+        }
         if key.is_ipv6() {
-            set_connection_verdict(&self.tcp_v6, &self.udp_v6, &key, verdict)
+            with_exact(&self.tcp_v6, &self.udp_v6, &key, |conn| set(conn, verdict))?
         } else {
-            set_connection_verdict(&self.tcp_v4, &self.udp_v4, &key, verdict)
+            with_exact(&self.tcp_v4, &self.udp_v4, &key, |conn| set(conn, verdict))?
         }
     }
 
-    // clean_ended_connections is not thread safe and should be called from one place only.
-    // Returns the connections that have ended, so they can be sent as events to
-    // user space. Takes `&self` (the port arrays are internally locked) so the
-    // whole `Device` API can stay `&self`; the result is freshly owned.
-    pub fn clean_ended_connections(
+    // clean_ended_connections should be called from one place only.
+    // Removes ended connections and evicts stale ones, running `on_stale_v4` / `on_stale_v6` on
+    // each evicted connection, so its end can be reported to user space.
+    pub fn clean_ended_connections<R>(
         &self,
-    ) -> (Vec<Arc<ConnectionV4>>, Vec<Arc<ConnectionV6>>) {
-        // The capacity is load-bearing, not just an optimization: `ports_clean_ended`
-        // only evicts a stale (inactive) connection while `capacity() > len()`, which
-        // bounds the eviction/event work per call. Allocating with capacity 100
-        // preserves the original behaviour (this was a reused `with_capacity(100)` field).
-        let mut ended_v4 = Vec::with_capacity(100);
-        let mut ended_v6 = Vec::with_capacity(100);
-        ports_clean_ended(
-            &self.tcp_v4,
-            &self.udp_v4,
-            &mut ended_v4,
-            &self.unlinked_ports_v4,
-        );
-        ports_clean_ended(
-            &self.tcp_v6,
-            &self.udp_v6,
-            &mut ended_v6,
-            &self.unlinked_ports_v6,
-        );
-        return (ended_v4, ended_v6);
+        on_stale_v4: impl FnMut(&ConnectionV4) -> R,
+        on_stale_v6: impl FnMut(&ConnectionV6) -> R,
+    ) -> Vec<R> {
+        let mut evicted = ports_clean_ended(&self.tcp_v4, &self.udp_v4, on_stale_v4);
+        evicted.extend(ports_clean_ended(&self.tcp_v6, &self.udp_v6, on_stale_v6));
+        evicted
     }
 
     /// Fails the connection matching `key` if it is still undecided, so a verdict that arrived in
     /// the meantime is kept.
     pub fn fail_if_undecided(&self, key: &Key) {
+        fn fail<T: Connection>(conn: &T) {
+            conn.replace_verdict(Verdict::Undecided, Verdict::Failed);
+        }
         if key.is_ipv6() {
-            fail_if_undecided(&self.tcp_v6, &self.udp_v6, key)
+            with_exact(&self.tcp_v6, &self.udp_v6, key, fail);
         } else {
-            fail_if_undecided(&self.tcp_v4, &self.udp_v4, key)
+            with_exact(&self.tcp_v4, &self.udp_v4, key, fail);
         }
     }
 
+    /// The verdict of the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time.
     pub fn get_verdict(&self, key: &Key) -> Option<Verdict> {
         if key.is_ipv6() {
-            find_verdict(&self.tcp_v6, &self.udp_v6, key)
+            with_exact_or_redirect(&self.tcp_v6, &self.udp_v6, key, Connection::get_verdict)
         } else {
-            find_verdict(&self.tcp_v4, &self.udp_v4, key)
+            with_exact_or_redirect(&self.tcp_v4, &self.udp_v4, key, Connection::get_verdict)
         }
     }
-    // walk_over_connections_v4 walks over all IPv4 connections. Lock free.
+
+    // walk_over_connections_v4 walks over all IPv4 connections. Takes the port's lock shared.
     pub fn walk_over_connections_v4<F: FnMut(&ConnectionV4)>(&self, iter: F) {
         ports_walk(&self.tcp_v4, &self.udp_v4, iter);
     }
 
-    // walk_over_connections_v6 walks over all IPv6 connections. Lock free.
+    // walk_over_connections_v6 walks over all IPv6 connections. Takes the port's lock shared.
     pub fn walk_over_connections_v6<F: FnMut(&ConnectionV6)>(&self, iter: F) {
         ports_walk(&self.tcp_v6, &self.udp_v6, iter);
     }
 
-    // get_unlinked_queue_counts returns stats of all the unlinked connection arrays. Lock free.
-    pub fn get_unlinked_queue_counts(&self) -> (usize, usize) {
-        (
-            self.unlinked_ports_v4.count(),
-            self.unlinked_ports_v6.count(),
-        )
-    }
-
-    // get_entries_count returns stats for all the connections count. Lock free.
+    // get_entries_count returns stats for all the connections count. Takes the port's lock shared.
     pub fn get_entries_count(&self) -> (usize, usize) {
         let mut active = 0usize;
         let mut ended = 0usize;
@@ -478,45 +376,29 @@ impl ConnectionCache {
         (active, ended)
     }
 
-    // get_connection_v4 returns a connection by key. Lock free.
-    pub fn get_connection_v4(&self, key: &Key) -> Option<Arc<ConnectionV4>> {
-        get_connection(&self.tcp_v4, &self.udp_v4, key)
+    /// Runs `f` on the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time. Takes the port's lock shared.
+    pub fn with_connection_v4<R>(
+        &self,
+        key: &Key,
+        f: impl FnOnce(&ConnectionV4) -> R,
+    ) -> Option<R> {
+        with_exact_or_redirect(&self.tcp_v4, &self.udp_v4, key, f)
     }
 
-    // get_connection_v6 returns a connection by key. Lock free.
-    pub fn get_connection_v6(&self, key: &Key) -> Option<Arc<ConnectionV6>> {
-        get_connection(&self.tcp_v6, &self.udp_v6, key)
+    /// Runs `f` on the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time. Takes the port's lock shared.
+    pub fn with_connection_v6<R>(
+        &self,
+        key: &Key,
+        f: impl FnOnce(&ConnectionV6) -> R,
+    ) -> Option<R> {
+        with_exact_or_redirect(&self.tcp_v6, &self.udp_v6, key, f)
     }
 
     // Clears the connection cache.
     pub fn clear(&self) {
-        ports_clear(&self.tcp_v4, &self.udp_v4, &self.unlinked_ports_v4);
-        ports_clear(&self.tcp_v6, &self.udp_v6, &self.unlinked_ports_v6);
-    }
-}
-
-impl Drop for ConnectionCache {
-    fn drop(&mut self) {
-        // Clear the cache
-        self.clear();
-        // Free all unlinked connection arrays
-        loop {
-            let array = self.unlinked_ports_v4.pop();
-            if array.is_null() {
-                break;
-            }
-            unsafe {
-                drop(Box::from_raw(array));
-            }
-        }
-        loop {
-            let array = self.unlinked_ports_v6.pop();
-            if array.is_null() {
-                break;
-            }
-            unsafe {
-                drop(Box::from_raw(array));
-            }
-        }
+        ports_clear(&self.tcp_v4, &self.udp_v4);
+        ports_clear(&self.tcp_v6, &self.udp_v6);
     }
 }

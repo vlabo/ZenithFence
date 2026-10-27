@@ -564,8 +564,8 @@ pub fn endpoint_closure_v4(data: CalloutData) {
             remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
         };
 
-        if let Some(conn) = device.connection_cache.end_v4(key) {
-            let info = protocol::info::connection_end_event_v4_info(
+        let info = device.connection_cache.end_v4(key, |conn| {
+            protocol::info::connection_end_event_v4_info(
                 data.get_process_id().unwrap_or(0),
                 conn.get_direction() as u8,
                 u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
@@ -577,7 +577,9 @@ pub fn endpoint_closure_v4(data: CalloutData) {
                 conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                 conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                 conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-            );
+            )
+        });
+        if let Some(info) = info {
             let _ = device.event_queue.push(info);
         }
     } else {
@@ -608,8 +610,8 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                 remote_port: data.get_value_u16(Fields::IpRemotePort as usize),
             };
 
-            if let Some(conn) = device.connection_cache.end_v6(key) {
-                let info = protocol::info::connection_end_event_v6_info(
+            let info = device.connection_cache.end_v6(key, |conn| {
+                protocol::info::connection_end_event_v6_info(
                     data.get_process_id().unwrap_or(0),
                     conn.get_direction() as u8,
                     u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
@@ -621,7 +623,9 @@ pub fn endpoint_closure_v6(data: CalloutData) {
                     conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                     conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                     conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                );
+                )
+            });
+            if let Some(info) = info {
                 let _ = device.event_queue.push(info);
             }
         }
@@ -635,19 +639,20 @@ pub fn ale_resource_monitor(data: CalloutData) {
     match data.layer {
         layer::Layer::AleResourceAssignmentV4Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV4;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
-                get_protocol(&data, Fields::IpProtocol as usize),
+            let process_id = data.get_process_id().unwrap_or(0);
+            dbg!(
+                "Port {}/{} Ipv4 assign request discarded pid={}",
                 data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                dbg!(
-                    "Port {}/{} Ipv4 assign request discarded pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
+                get_protocol(&data, Fields::IpProtocol as usize),
+                process_id,
+            );
+            let infos = device.connection_cache.end_all_on_port_v4(
+                (
                     get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = protocol::info::connection_end_event_v4_info(
+                    data.get_value_u16(Fields::IpLocalPort as usize),
+                ),
+                |conn| {
+                    protocol::info::connection_end_event_v4_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -659,26 +664,29 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    let _ = device.event_queue.push(info);
-                }
+                    )
+                },
+            );
+            for info in infos {
+                let _ = device.event_queue.push(info);
             }
         }
         layer::Layer::AleResourceAssignmentV6Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV6;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
-                get_protocol(&data, Fields::IpProtocol as usize),
+            let process_id = data.get_process_id().unwrap_or(0);
+            dbg!(
+                "Port {}/{} Ipv6 assign request discarded pid={}",
                 data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                dbg!(
-                    "Port {}/{} Ipv6 assign request discarded pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
+                get_protocol(&data, Fields::IpProtocol as usize),
+                process_id,
+            );
+            let infos = device.connection_cache.end_all_on_port_v6(
+                (
                     get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = protocol::info::connection_end_event_v6_info(
+                    data.get_value_u16(Fields::IpLocalPort as usize),
+                ),
+                |conn| {
+                    protocol::info::connection_end_event_v6_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -690,26 +698,29 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    let _ = device.event_queue.push(info);
-                }
+                    )
+                },
+            );
+            for info in infos {
+                let _ = device.event_queue.push(info);
             }
         }
         layer::Layer::AleResourceReleaseV4 => {
             type Fields = layer::FieldsAleResourceReleaseV4;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v4((
-                get_protocol(&data, Fields::IpProtocol as usize),
+            let process_id = data.get_process_id().unwrap_or(0);
+            dbg!(
+                "Port {}/{} ipv4 released pid={}",
                 data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                dbg!(
-                    "Port {}/{} ipv4 released pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
+                get_protocol(&data, Fields::IpProtocol as usize),
+                process_id,
+            );
+            let infos = device.connection_cache.end_all_on_port_v4(
+                (
                     get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = protocol::info::connection_end_event_v4_info(
+                    data.get_value_u16(Fields::IpLocalPort as usize),
+                ),
+                |conn| {
+                    protocol::info::connection_end_event_v4_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -721,26 +732,29 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    let _ = device.event_queue.push(info);
-                }
+                    )
+                },
+            );
+            for info in infos {
+                let _ = device.event_queue.push(info);
             }
         }
         layer::Layer::AleResourceReleaseV6 => {
             type Fields = layer::FieldsAleResourceReleaseV6;
-            if let Some(conns) = device.connection_cache.end_all_on_port_v6((
-                get_protocol(&data, Fields::IpProtocol as usize),
+            let process_id = data.get_process_id().unwrap_or(0);
+            dbg!(
+                "Port {}/{} ipv6 released pid={}",
                 data.get_value_u16(Fields::IpLocalPort as usize),
-            )) {
-                let process_id = data.get_process_id().unwrap_or(0);
-                dbg!(
-                    "Port {}/{} ipv6 released pid={}",
-                    data.get_value_u16(Fields::IpLocalPort as usize),
+                get_protocol(&data, Fields::IpProtocol as usize),
+                process_id,
+            );
+            let infos = device.connection_cache.end_all_on_port_v6(
+                (
                     get_protocol(&data, Fields::IpProtocol as usize),
-                    process_id,
-                );
-                for conn in conns {
-                    let info = protocol::info::connection_end_event_v6_info(
+                    data.get_value_u16(Fields::IpLocalPort as usize),
+                ),
+                |conn| {
+                    protocol::info::connection_end_event_v6_info(
                         process_id,
                         conn.get_direction() as u8,
                         data.get_value_u8(Fields::IpProtocol as usize),
@@ -752,9 +766,11 @@ pub fn ale_resource_monitor(data: CalloutData) {
                         conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
                         conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    let _ = device.event_queue.push(info);
-                }
+                    )
+                },
+            );
+            for info in infos {
+                let _ = device.event_queue.push(info);
             }
         }
         _ => {}
