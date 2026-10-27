@@ -2,7 +2,7 @@ use core::ffi::c_void;
 
 use windows_sys::{
     core::GUID,
-    Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, MDL},
+    Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, MDL, OBJECT_ATTRIBUTES},
     Win32::{
         Foundation::{BOOLEAN, HANDLE, NTSTATUS, UNICODE_STRING},
         NetworkManagement::WindowsFilteringPlatform::{
@@ -487,6 +487,22 @@ extern "C" {
 
     /// The KeGetCurrentIrql routine returns the current IRQL.
     pub(crate) fn KeGetCurrentIrql() -> u8;
+
+    /// The PsCreateSystemThread routine creates a system thread that executes in kernel mode.
+    /// Declared here because windows-sys types the start routine without its context argument.
+    pub(crate) fn PsCreateSystemThread(
+        thread_handle: *mut HANDLE,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        process_handle: HANDLE,
+        client_id: *mut c_void,
+        start_routine: unsafe extern "system" fn(start_context: *mut c_void),
+        start_context: *mut c_void,
+    ) -> NTSTATUS;
+
+    /// The ZwClose routine closes an object handle. Declared here because windows-sys links it
+    /// against ntdll.dll.
+    pub(crate) fn ZwClose(handle: HANDLE) -> NTSTATUS;
 
     /// The KeDelayExecutionThread routine puts the current thread into an alertable or
     /// nonalertable wait state for a given interval.

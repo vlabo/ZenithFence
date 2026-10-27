@@ -204,13 +204,6 @@ impl<'a> CalloutData<'a> {
         ClassifyDefer::Reauthorization(self.callout_id, packet_list)
     }
 
-    /// Whether this callout may set the classify action. False once a filter that is evaluated
-    /// earlier has made a final decision (it cleared FWPS_RIGHT_ACTION_WRITE); the callout must then
-    /// leave the action, and the packet, alone.
-    pub fn can_set_action(&self) -> bool {
-        unsafe { (*self.classify_out).can_set_action() }
-    }
-
     pub fn action_permit(&mut self) {
         unsafe {
             (*self.classify_out).action_permit();

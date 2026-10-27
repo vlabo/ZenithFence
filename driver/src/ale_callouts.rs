@@ -257,20 +257,18 @@ fn ale_layer_auth_outbound(mut data: CalloutData, ale_data: AleLayerData) {
             // be returned as the result of the connect call; the packet is reinjected once user
             // space decides.
             crate::dbg!("pending connection: {} PID: {}", key, ale_data.process_id);
+            // User space is not keeping up. Fail closed without pending: the connect fails, and
+            // nothing is cached, so a retry is classified afresh.
+            if device.is_backlogged() {
+                data.action_block();
+                return;
+            }
             // The connection goes into the cache before user space hears about it: the verdict
             // can arrive as soon as the event is queued, and it is stored on the cached connection.
             add_connection(device, &key, &ale_data, None);
             match save_packet_outbound(device, &mut data, &ale_data) {
                 Ok(packet) => {
-                    let info = device.packet_cache.push(
-                        (key, packet),
-                        ale_data.process_id,
-                        ale_data.direction,
-                        true,
-                    );
-                    if let Some(info) = info {
-                        let _ = device.event_queue.push(info);
-                    }
+                    device.queue_packet(key, packet, ale_data.process_id, ale_data.direction, true)
                 }
                 Err(err) => {
                     crate::err!("failed to pend packet: {}", err);
@@ -324,19 +322,20 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
             // No verdict yet: the connection is already pended and user space has not decided.
             // Save this packet too so it is sent to user space and reinjected with the verdict.
             Verdict::Undecided => {
+                // User space is not keeping up: keep it blocked, without copying it.
+                if device.is_backlogged() {
+                    data.block_and_absorb();
+                    return;
+                }
                 crate::dbg!("saving packet: {}", key);
                 match save_packet_inbound(device, &mut data, &ale_data, false) {
-                    Ok(packet) => {
-                        let info = device.packet_cache.push(
-                            (key, packet),
-                            ale_data.process_id,
-                            ale_data.direction,
-                            true,
-                        );
-                        if let Some(info) = info {
-                            let _ = device.event_queue.push(info);
-                        }
-                    }
+                    Ok(packet) => device.queue_packet(
+                        key,
+                        packet,
+                        ale_data.process_id,
+                        ale_data.direction,
+                        true,
+                    ),
                     Err(err) => {
                         crate::err!("failed to pend packet: {}", err);
                     }
@@ -399,6 +398,12 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
         // the race against a concurrent reset; the verdict path queues those and retries them
         // (see `Device::reset_filters_and_inject`) instead of dropping the packet.
         crate::dbg!("pending connection: {} {}", key, ale_data.direction);
+        // User space is not keeping up. Fail closed without pending: nothing is cached, so the
+        // next attempt is classified afresh.
+        if device.is_backlogged() {
+            data.action_block();
+            return;
+        }
         // The connection goes into the cache before user space hears about it: the verdict can
         // arrive as soon as the event is queued, and it is stored on the cached connection.
         crate::dbg!("adding connection: {} PID: {}", key, ale_data.process_id);
@@ -407,15 +412,7 @@ fn ale_layer_auth_inbound(mut data: CalloutData, ale_data: AleLayerData) {
         let can_pend_connection = !ale_data.reauthorize;
         match save_packet_inbound(device, &mut data, &ale_data, can_pend_connection) {
             Ok(packet) => {
-                let info = device.packet_cache.push(
-                    (key, packet),
-                    ale_data.process_id,
-                    ale_data.direction,
-                    true,
-                );
-                if let Some(info) = info {
-                    let _ = device.event_queue.push(info);
-                }
+                device.queue_packet(key, packet, ale_data.process_id, ale_data.direction, true)
             }
             Err(err) => {
                 crate::err!("failed to pend packet: {}", err);

@@ -190,6 +190,22 @@ fn set_connection_verdict<T: Connection>(
     None
 }
 
+fn fail_if_undecided<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>, key: &Key) {
+    let Some(port) = get_port(tcp, udp, key.protocol, key.local_port) else {
+        return;
+    };
+    let port = port.read();
+    let Some(snap) = port.get() else {
+        return;
+    };
+    for conn in snap.iter() {
+        if conn.equals(key) {
+            conn.replace_verdict(Verdict::Undecided, Verdict::Failed);
+            return;
+        }
+    }
+}
+
 // Returns the verdict of the connection matching `key`, including redirect
 // matches. Refreshes the last-accessed time. Read-only guard.
 fn find_verdict<T: Connection>(
@@ -404,6 +420,16 @@ impl ConnectionCache {
             &self.unlinked_ports_v6,
         );
         return (ended_v4, ended_v6);
+    }
+
+    /// Fails the connection matching `key` if it is still undecided, so a verdict that arrived in
+    /// the meantime is kept.
+    pub fn fail_if_undecided(&self, key: &Key) {
+        if key.is_ipv6() {
+            fail_if_undecided(&self.tcp_v6, &self.udp_v6, key)
+        } else {
+            fail_if_undecided(&self.tcp_v4, &self.udp_v4, key)
+        }
     }
 
     pub fn get_verdict(&self, key: &Key) -> Option<Verdict> {

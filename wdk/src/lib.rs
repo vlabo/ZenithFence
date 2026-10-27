@@ -16,6 +16,7 @@ pub mod kmutex;
 pub mod rw_spin_lock;
 pub mod spin_lock;
 pub mod utils;
+pub mod worker;
 
 #[allow(dead_code)]
 pub mod ffi;

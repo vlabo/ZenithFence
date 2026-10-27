@@ -235,7 +235,7 @@ fn ip_packet_layer<T: IpVersion>(
                                 ) {
                                     Ok(mut packet) => {
                                         let _ = packet.redirect(redirect_info);
-                                        if let Err(err) = device.inject_packet(packet, false) {
+                                        if let Err(err) = device.inject_permitted_packet(packet) {
                                             err!("failed to inject packet: {}", err);
                                         }
                                     }
@@ -270,6 +270,11 @@ fn ip_packet_layer<T: IpVersion>(
                 // The decision for the packet is not jet made. If clone fails, it should not allow the packet.
                 data.block_and_absorb();
 
+                // User space is not keeping up: keep it blocked, without copying it.
+                if device.is_backlogged() {
+                    continue;
+                }
+
                 let packet = match clone_packet(
                     device,
                     &nb,
@@ -287,13 +292,8 @@ fn ip_packet_layer<T: IpVersion>(
                     }
                 };
 
-                let info = device
-                    .packet_cache
-                    .push((key, packet), process_id, direction, false);
                 // Send to Userspace
-                if let Some(info) = info {
-                    let _ = device.event_queue.push(info);
-                }
+                device.queue_packet(key, packet, process_id, direction, false);
             }
         }
     }
@@ -309,6 +309,11 @@ fn clone_packet(
     sub_interface_index: u32,
     compartment_id: i32,
 ) -> Result<Packet, String> {
+    // TODO: Large send (LSO). An outbound TCP packet can be up to 64 KB, left for the NIC to split
+    // as the TcpLargeSendNetBufferListInfo of the original NBL says. The copy does not carry that
+    // info, and `recalc_header_checksums` writes a full TCP checksum where LSO expects the
+    // pseudo-header seed. Copy the info, and seed instead of recompute for LSO packets. Needs
+    // testing on a real NIC with LSO enabled.
     let mut clone = nb.clone_as_nbl(&device.network_allocator)?;
     let inbound = match direction {
         Direction::Outbound => false,

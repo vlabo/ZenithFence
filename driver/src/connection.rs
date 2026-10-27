@@ -167,6 +167,8 @@ pub trait Connection {
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
     fn set_verdict(&self, verdict: Verdict);
+    /// Sets the verdict to `new` only if it is `current`. Returns whether it did.
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool;
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
 
@@ -399,6 +401,12 @@ impl Connection for ConnectionV4 {
         self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool {
+        self.verdict
+            .compare_exchange(current as u8, new as u8, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
         &self.bandwidth_usage
     }
@@ -554,6 +562,12 @@ impl Connection for ConnectionV6 {
 
     fn set_verdict(&self, verdict: Verdict) {
         self.verdict.store(verdict as u8, Ordering::SeqCst);
+    }
+
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool {
+        self.verdict
+            .compare_exchange(current as u8, new as u8, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {

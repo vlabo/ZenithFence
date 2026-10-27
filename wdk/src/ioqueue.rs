@@ -5,7 +5,7 @@ use core::{
     marker::PhantomData,
     mem::MaybeUninit,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::dbg;
@@ -28,6 +28,8 @@ pub enum Status {
     Timeout,
     UserAPC,
     Abandoned,
+    /// The queue holds its maximum number of entries; the pushed entry was dropped.
+    Full,
 }
 
 impl Display for Status {
@@ -37,6 +39,7 @@ impl Display for Status {
             Status::Timeout => write!(f, "Timeout"),
             Status::UserAPC => write!(f, "UserAPC"),
             Status::Abandoned => write!(f, "Abandoned"),
+            Status::Full => write!(f, "Full"),
         }
     }
 }
@@ -89,14 +92,20 @@ pub struct IOQueue<T> {
     // The address of the value should not change.
     kernel_queue: Pin<Box<UnsafeCell<KQUEUE>>>,
     initialized: AtomicBool,
+    /// Entries pushed and not popped yet, counting the ones being pushed right now.
+    len: AtomicUsize,
+    max_len: usize,
+    /// Entries refused because the queue was full.
+    dropped: AtomicUsize,
     _type: PhantomData<T>, // 0 size variable. Required for the generic to work properly. Compiler limitation.
 }
 
 unsafe impl<T> Sync for IOQueue<T> {}
 
 impl<T> IOQueue<T> {
-    /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
-    pub fn new() -> Self {
+    /// A queue that holds up to `max_len` entries. Make sure `rundown` is called on exit, if
+    /// `drop()` is not called for queue.
+    pub fn new(max_len: usize) -> Self {
         unsafe {
             let kernel_queue = Box::pin(UnsafeCell::new(MaybeUninit::zeroed().assume_init()));
             KeInitializeQueue(kernel_queue.get(), 1);
@@ -104,13 +113,24 @@ impl<T> IOQueue<T> {
             Self {
                 kernel_queue,
                 initialized: AtomicBool::new(true),
+                len: AtomicUsize::new(0),
+                max_len,
+                dropped: AtomicUsize::new(0),
                 _type: PhantomData,
             }
         }
     }
 
-    /// Pushes new entry of any type.
+    /// Pushes new entry of any type. Fails with `Full`, dropping the entry, when the queue already
+    /// holds `max_len` entries: nothing is reading it, and it must not grow without bound.
     pub fn push(&self, entry: T) -> Result<(), Status> {
+        // Take a slot first, so concurrent pushes can never overshoot the limit together.
+        if self.len.fetch_add(1, Ordering::SeqCst) >= self.max_len {
+            self.len.fetch_sub(1, Ordering::SeqCst);
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err(Status::Full);
+        }
+
         let kqueue = self.kernel_queue.get();
         // Allocate entry.
         let list_entry = Box::new(Entry {
@@ -135,6 +155,7 @@ impl<T> IOQueue<T> {
         }
 
         _ = unsafe { Box::from_raw(raw_ptr) };
+        self.len.fetch_sub(1, Ordering::SeqCst);
         return Err(Status::Uninitialized);
     }
 
@@ -158,6 +179,7 @@ impl<T> IOQueue<T> {
                     _ => {
                         // The return value is a pointer.
                         let list_entry = Box::from_raw(list_entry);
+                        self.len.fetch_sub(1, Ordering::SeqCst);
                         let entry = list_entry.entry;
                         return Ok(entry);
                     }
@@ -191,6 +213,21 @@ impl<T> IOQueue<T> {
     pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status> {
         let timeout_ptr: i64 = timeout * -10000;
         self.pop_internal(&timeout_ptr)
+    }
+
+    /// Whether the queue holds `max_len` entries, so a push would fail.
+    pub fn is_full(&self) -> bool {
+        self.len.load(Ordering::SeqCst) >= self.max_len
+    }
+
+    /// The number of entries waiting to be popped.
+    pub fn queued_count(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
+    }
+
+    /// The number of entries `push` refused because the queue was full.
+    pub fn dropped_count(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// Removes all elements and frees all the memory. The object can't be used after this function is called.
