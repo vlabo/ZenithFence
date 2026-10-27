@@ -1,12 +1,21 @@
 name: Build
 
+# Builds and links the kernel driver (driver.sys + driver.pdb, unsigned) and
+# keeps it as the `driver` artifact of the run. On a published release it builds
+# the release profile and attaches the driver to the release as well.
+#
 # PRs, plus pushes to main. A push to a PR branch already runs through
 # `pull_request`; triggering on every branch push too ran each job twice.
 on:
   pull_request:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-driver:
@@ -36,11 +45,22 @@ jobs:
           key: cargo-driver-${{ runner.os }}-${{ hashFiles('driver/kernel/Cargo.lock') }}
           restore-keys: cargo-driver-${{ runner.os }}-
 
+      # Releases ship the release profile; PRs and main build debug, like
+      # `just link` without --release.
+      - name: Choose profile
+        shell: pwsh
+        run: |
+          $profile = if ("${{ github.event_name }}" -eq "release") { "release" } else { "debug" }
+          "PROFILE=$profile" >> $env:GITHUB_ENV
+          Write-Host "building the $profile profile"
+
       # driver/kernel is the production build root (crate-type = "staticlib"):
       # `cargo build` compiles driver_kernel.lib and surfaces any compilation errors.
       - name: Build driver
         working-directory: ./driver/kernel
-        run: cargo build --locked
+        shell: pwsh
+        run: |
+          if ($env:PROFILE -eq "release") { cargo build --locked --release } else { cargo build --locked }
 
       # Link driver.lib into the .sys, mirroring the Justfile `link` recipe.
       # The WDK / c_helper static libs referenced via #[link(kind="static")]
@@ -51,7 +71,7 @@ jobs:
       - name: Link driver (driver.sys)
         shell: pwsh
         run: |
-          Copy-Item ./driver/kernel/target/x86_64-pc-windows-msvc/debug/driver_kernel.lib ./driver.lib
+          Copy-Item ./driver/kernel/target/x86_64-pc-windows-msvc/$env:PROFILE/driver_kernel.lib ./driver.lib
           link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT `
             /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO `
             /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 `
@@ -87,8 +107,32 @@ jobs:
             ${{ vars.DRIVER_PRODUCT_NAME }}.pdb
           if-no-files-found: error
 
+  # Release only: attach the driver built above to the release, zipped with its
+  # PDB and named after the tag so the download says what it is.
+  publish:
+    name: Attach driver to the release
+    if: github.event_name == 'release'
+    needs: build-driver
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: driver
+          path: driver
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          zip -j "driver-$TAG-unsigned.zip" driver/driver.sys driver/driver.pdb
+          gh release upload "$TAG" "driver-$TAG-unsigned.zip" --clobber --repo "$GITHUB_REPOSITORY"
+
   check-kext-interface:
     name: Check kext_interface (compile only)
+    if: github.event_name != 'release'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
