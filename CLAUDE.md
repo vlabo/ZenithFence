@@ -54,7 +54,6 @@ cd kext_interface && go test -run <TestName>
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |
 | `kext_tester/` | Go | Manual test app that loads and exercises the driver |
 | `release/` | Rust | Packages the signed `.sys` into a `.zip`/`.cab` for Microsoft submission |
-| `c_helper/` | C | Small ASM/C helpers needed by the linker |
 | `libs/` | — | Pre-compiled Windows import libraries |
 
 ### Data Flow

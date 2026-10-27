@@ -72,7 +72,7 @@ fn get_connection<T: Connection>(
     for conn in snap.iter() {
         if conn.equals(key) || conn.redirect_equals(key) {
             // Update last accessed.
-            conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+            conn.set_last_accessed_time(wdk::utils::get_monotonic_ms());
             return Some(conn.clone());
         }
     }
@@ -143,7 +143,7 @@ fn end_connection<T: Connection>(
     let snap = port.get()?;
     for conn in snap.iter() {
         if conn.equals(key) {
-            conn.end(wdk::utils::get_system_timestamp_ms());
+            conn.end(wdk::utils::get_monotonic_ms());
             return Some(conn.clone());
         }
     }
@@ -160,7 +160,7 @@ fn end_all_on_port<T: Connection>(
 ) -> Option<Vec<Arc<T>>> {
     let port = get_port(tcp, udp, protocol, local_port)?.read();
     let snap = port.get()?;
-    let now = wdk::utils::get_system_timestamp_ms();
+    let now = wdk::utils::get_monotonic_ms();
     let mut ended = Vec::new();
     for conn in snap.iter() {
         if !conn.has_ended() {
@@ -201,7 +201,7 @@ fn find_verdict<T: Connection>(
     let snap = port.get()?;
     for conn in snap.iter() {
         if conn.equals(key) || conn.redirect_equals(key) {
-            conn.set_last_accessed_time(wdk::utils::get_system_timestamp_ms());
+            conn.set_last_accessed_time(wdk::utils::get_monotonic_ms());
             return Some(conn.get_verdict());
         }
     }
@@ -231,9 +231,11 @@ fn ports_clean_ended<T: Connection>(
     const ONE_MINUTE: u64 = Duration::from_secs(60).as_millis() as u64;
     const SECOND: u64 = Duration::from_secs(1).as_millis() as u64;
 
-    let now = wdk::utils::get_system_timestamp_ms();
-    let before_two_minutes = now - TWO_MINUTES;
-    let before_one_minute = now - ONE_MINUTE;
+    let now = wdk::utils::get_monotonic_ms();
+    // The clock counts from boot, so it can be below these windows when the driver loads early.
+    // Saturating makes the cutoff 0, which no timestamp is below: nothing is old enough yet.
+    let before_two_minutes = now.saturating_sub(TWO_MINUTES);
+    let before_one_minute = now.saturating_sub(ONE_MINUTE);
 
     // Remove all ended or stale connections.
     for port in tcp.iter().chain(udp.iter()) {
@@ -277,7 +279,7 @@ fn ports_clean_ended<T: Connection>(
     }
 
     // Clean unused and unlinked connection arrays.
-    let now = wdk::utils::get_system_timestamp_ms();
+    let now = wdk::utils::get_monotonic_ms();
     loop {
         let mut continue_loop = false;
         match queue.peek() {

@@ -143,7 +143,7 @@ impl<T: Connection> RCUPortWriteGuard<'_, T> {
         unsafe {
             (*old)
                 .unlinked_timestamp
-                .store(wdk::utils::get_system_timestamp_ms(), Ordering::SeqCst);
+                .store(wdk::utils::get_monotonic_ms(), Ordering::SeqCst);
         }
 
         queue.push(old);

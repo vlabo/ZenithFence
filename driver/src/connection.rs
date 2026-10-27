@@ -277,7 +277,7 @@ impl ConnectionV4 {
             return Err("wrong ip address version".to_string());
         };
 
-        let timestamp = wdk::utils::get_system_timestamp_ms();
+        let timestamp = wdk::utils::get_monotonic_ms();
 
         Ok(Self {
             protocol: key.protocol,
@@ -434,7 +434,7 @@ impl ConnectionV6 {
         let IpAddress::Ipv6(remote_address) = key.remote_address else {
             return Err("wrong ip address version".to_string());
         };
-        let timestamp = wdk::utils::get_system_timestamp_ms();
+        let timestamp = wdk::utils::get_monotonic_ms();
 
         Ok(Self {
             protocol: key.protocol,

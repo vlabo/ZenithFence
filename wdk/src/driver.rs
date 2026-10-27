@@ -1,12 +1,9 @@
 use windows_sys::{
     Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP},
-    Win32::Foundation::{HANDLE, NTSTATUS},
+    Win32::Foundation::NTSTATUS,
 };
 
-use crate::{
-    interface,
-    irp_helpers::{ReadRequest, WriteRequest},
-};
+use crate::irp_helpers::{ReadRequest, WriteRequest};
 
 pub trait Device {
     fn new(driver: &Driver) -> Self;
@@ -17,7 +14,6 @@ pub trait Device {
 }
 
 pub struct Driver {
-    _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
     device_object: *mut DEVICE_OBJECT,
 }
@@ -29,16 +25,10 @@ pub type UnloadFnType = unsafe extern "system" fn(driver_object: *const DRIVER_O
 pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> NTSTATUS;
 
 impl Driver {
-    pub(crate) fn new(
-        driver_object: *mut DRIVER_OBJECT,
-        _driver_handle: HANDLE,
-        device_handle: HANDLE,
-    ) -> Driver {
+    pub(crate) fn new(driver_object: *mut DRIVER_OBJECT, device_object: *mut DEVICE_OBJECT) -> Driver {
         return Driver {
-            // driver_handle,
-            _device_handle: device_handle,
             driver_object,
-            device_object: interface::wdf_device_wdm_get_device_object(device_handle),
+            device_object,
         };
     }
 

@@ -9,6 +9,9 @@ use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
+// Name of the device user space opens (`\\.\ZenithFence`).
+const DRIVER_NAME: &str = "ZenithFence";
+
 // Global device pointer. `get_device` hands out a shared `&'static` so callout
 // and read/write threads can share one device soundly (every `Device` field is
 // interior-mutable).
@@ -22,17 +25,12 @@ pub fn get_device() -> Option<&'static device::Device> {
 #[export_name = "DriverEntry"]
 pub extern "system" fn driver_entry(
     driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
-    registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
+    _registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
 ) -> windows_sys::Win32::Foundation::NTSTATUS {
     info!("Starting initialization...");
 
-    // Initialize driver object.
-    let mut driver = match interface::init_driver_object(
-        driver_object,
-        registry_path,
-        "ZenithFence",
-        core::ptr::null_mut(),
-    ) {
+    // Create the device user space opens.
+    let mut driver = match interface::init_driver_object(driver_object, DRIVER_NAME) {
         Ok(driver) => driver,
         Err(status) => {
             err!("driver_entry: failed to initialize driver: {}", status);
@@ -40,8 +38,12 @@ pub extern "system" fn driver_entry(
         }
     };
 
-    // Set driver functions.
+    // Set driver functions. Every request type user space sends needs a handler: the I/O manager
+    // rejects the ones without.
     driver.set_driver_unload(driver_unload);
+    driver.set_create_fn(driver_open_close);
+    driver.set_cleanup_fn(driver_open_close);
+    driver.set_close_fn(driver_open_close);
     driver.set_read_fn(driver_read);
     driver.set_write_fn(driver_write);
     driver.set_device_control_fn(device_control);
@@ -52,6 +54,8 @@ pub extern "system" fn driver_entry(
             Ok(device) => Box::new(device),
             Err(err) => {
                 wdk::err!("filed to initialize device: {}", err);
+                // The unload routine is not called when DriverEntry fails, so undo it here.
+                interface::delete_device(driver_object, DRIVER_NAME);
                 return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
             }
         };
@@ -62,7 +66,7 @@ pub extern "system" fn driver_entry(
 }
 
 // driver_unload function is called when service delete is called from user-space.
-unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
+unsafe extern "system" fn driver_unload(object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
     unsafe {
         if !DEVICE.is_null() {
@@ -73,6 +77,16 @@ unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
             DEVICE = core::ptr::null_mut();
         }
     }
+    // The callouts were registered on the device object, so it goes last.
+    interface::delete_device(object, DRIVER_NAME);
+}
+
+/// Opening, cleaning up and closing a handle need no work from the driver; they only have to succeed.
+unsafe extern "system" fn driver_open_close(
+    _device_object: &mut DEVICE_OBJECT,
+    irp: &mut IRP,
+) -> NTSTATUS {
+    wdk::irp_helpers::complete_empty(irp)
 }
 
 // driver_read event triggered from user-space on file.Read.

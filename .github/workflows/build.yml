@@ -41,8 +41,8 @@ jobs:
         run: cargo build
 
       # Link driver.lib into the .sys, mirroring the Justfile `link` recipe.
-      # The WDK / c_helper static libs referenced via #[link(kind="static")]
-      # live in the repo; pass their dirs as /LIBPATH so link.exe resolves them
+      # The WDK static libs referenced via #[link(kind="static")]
+      # live in the repo; pass their dir as /LIBPATH so link.exe resolves them
       # on the runner (the absolute search paths baked in by cargo don't exist
       # here). Signing is omitted: it needs the DriverCertificate private key,
       # which is not in the repo.
@@ -53,9 +53,9 @@ jobs:
           link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT `
             /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO `
             /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 `
-            /ENTRY:FxDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" `
+            /ENTRY:GsDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" `
             /MERGE:.rustc=.data /INTEGRITYCHECK `
-            /LIBPATH:libs/x64 /LIBPATH:c_helper/x64 driver.lib
+            /LIBPATH:libs/x64 driver.lib
 
       - name: Upload driver artifact (unsigned)
         uses: actions/upload-artifact@v4

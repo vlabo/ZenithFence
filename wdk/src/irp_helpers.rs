@@ -9,6 +9,15 @@ use windows_sys::{
     },
 };
 
+/// Completes `irp` successfully without transferring data, for requests that need no work from the
+/// driver (opening, cleaning up and closing a handle). Returns the status for the dispatch routine.
+pub fn complete_empty(irp: &mut IRP) -> NTSTATUS {
+    irp.IoStatus.Information = 0;
+    irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+    unsafe { IofCompleteRequest(irp, IO_NO_INCREMENT as i8) };
+    return STATUS_SUCCESS;
+}
+
 pub struct ReadRequest<'a> {
     irp: &'a mut IRP,
     buffer: &'a mut [u8],

@@ -315,7 +315,7 @@ impl Device {
                 let since = update.timestamp;
                 // Taken before the walk, and `since` is inclusive: a connection touched
                 // while the walk runs is reported again next time rather than missed.
-                let now = wdk::utils::get_system_timestamp_ms();
+                let now = wdk::utils::get_monotonic_ms();
                 wdk::dbg!("GetConnectionsUpdate command");
 
                 let send_event_v4 = |conn: &ConnectionV4| {
