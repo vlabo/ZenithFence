@@ -4,6 +4,7 @@ use core::{
     sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
 use num::FromPrimitive;
+use protocol::info::Info;
 use num_derive::FromPrimitive;
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
@@ -166,6 +167,11 @@ pub trait Connection {
     fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool;
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
+
+    /// The event that tells user space the connection ended, with its final counters.
+    fn end_info(&self, process_id: u64) -> Info;
+    /// The event that reports the connection's counters (GetConnectionsUpdate).
+    fn update_info(&self) -> Info;
 
     fn update_bandwidth_data(&self, bytes: u64, direction: Direction) {
         // Update bandwidth usage.
@@ -426,6 +432,38 @@ impl Connection for ConnectionV4 {
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
         &self.bandwidth_usage
     }
+
+    fn end_info(&self, process_id: u64) -> Info {
+        let bandwidth = &self.bandwidth_usage;
+        protocol::info::connection_end_event_v4_info(
+            process_id,
+            self.direction as u8,
+            self.protocol.into(),
+            self.local_address.octets(),
+            self.remote_address.octets(),
+            self.local_port,
+            self.remote_port,
+            bandwidth.rx_bytes.load(Ordering::SeqCst),
+            bandwidth.rx_packets.load(Ordering::SeqCst),
+            bandwidth.tx_bytes.load(Ordering::SeqCst),
+            bandwidth.tx_packets.load(Ordering::SeqCst),
+        )
+    }
+
+    fn update_info(&self) -> Info {
+        let bandwidth = &self.bandwidth_usage;
+        protocol::info::connection_update_event_v4_info(
+            self.protocol.into(),
+            self.local_address.octets(),
+            self.remote_address.octets(),
+            self.local_port,
+            self.remote_port,
+            bandwidth.rx_bytes.load(Ordering::SeqCst),
+            bandwidth.rx_packets.load(Ordering::SeqCst),
+            bandwidth.tx_bytes.load(Ordering::SeqCst),
+            bandwidth.tx_packets.load(Ordering::SeqCst),
+        )
+    }
 }
 
 impl Clone for ConnectionV4 {
@@ -593,6 +631,38 @@ impl Connection for ConnectionV6 {
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
         &self.bandwidth_usage
+    }
+
+    fn end_info(&self, process_id: u64) -> Info {
+        let bandwidth = &self.bandwidth_usage;
+        protocol::info::connection_end_event_v6_info(
+            process_id,
+            self.direction as u8,
+            self.protocol.into(),
+            self.local_address.octets(),
+            self.remote_address.octets(),
+            self.local_port,
+            self.remote_port,
+            bandwidth.rx_bytes.load(Ordering::SeqCst),
+            bandwidth.rx_packets.load(Ordering::SeqCst),
+            bandwidth.tx_bytes.load(Ordering::SeqCst),
+            bandwidth.tx_packets.load(Ordering::SeqCst),
+        )
+    }
+
+    fn update_info(&self) -> Info {
+        let bandwidth = &self.bandwidth_usage;
+        protocol::info::connection_update_event_v6_info(
+            self.protocol.into(),
+            self.local_address.octets(),
+            self.remote_address.octets(),
+            self.local_port,
+            self.remote_port,
+            bandwidth.rx_bytes.load(Ordering::SeqCst),
+            bandwidth.rx_packets.load(Ordering::SeqCst),
+            bandwidth.tx_bytes.load(Ordering::SeqCst),
+            bandwidth.tx_packets.load(Ordering::SeqCst),
+        )
     }
 }
 

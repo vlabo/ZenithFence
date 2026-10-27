@@ -82,6 +82,8 @@ unsafe extern "system" fn driver_unload(object: *const DRIVER_OBJECT) {
 }
 
 /// Opening, cleaning up and closing a handle need no work from the driver; they only have to succeed.
+// TODO: Closing the agent's handle leaves its pended packets to the 30 s timeout and keeps the
+// cached verdicts. Decide on a policy for an agent that goes away (see `interface::init_driver_object`).
 unsafe extern "system" fn driver_open_close(
     _device_object: &mut DEVICE_OBJECT,
     irp: &mut IRP,
@@ -95,14 +97,13 @@ unsafe extern "system" fn driver_read(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut read_request = ReadRequest::new(irp);
-    let Some(device) = get_device() else {
-        read_request.complete();
-
-        return read_request.get_status();
-    };
-
-    device.read(&mut read_request);
-    read_request.get_status()
+    // TODO: The read blocks this thread in `device.read` until an event arrives, so the request
+    // cannot be cancelled (CancelIoEx) while it waits. Pend read IRPs in a cancel-safe queue
+    // instead (IoCsqInitialize) and complete them as events are pushed.
+    if let Some(device) = get_device() {
+        device.read(&mut read_request);
+    }
+    read_request.complete()
 }
 
 /// driver_write event triggered from user-space on file.Write.
@@ -111,16 +112,11 @@ unsafe extern "system" fn driver_write(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut write_request = WriteRequest::new(irp);
-    let Some(device) = get_device() else {
-        write_request.complete();
-        return write_request.get_status();
-    };
-
-    device.write(&mut write_request);
-
-    write_request.mark_all_as_read();
-    write_request.complete();
-    write_request.get_status()
+    if let Some(device) = get_device() {
+        device.write(&mut write_request);
+        write_request.mark_all_as_read();
+    }
+    write_request.complete()
 }
 
 /// device_control event triggered from user-space on file.deviceIOControl.

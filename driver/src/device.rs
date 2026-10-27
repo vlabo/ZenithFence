@@ -213,6 +213,7 @@ impl Device {
     }
 
     /// Called when handle. Read is called from user-space.
+    // TODO: Waits on this thread until an event arrives; see the TODO at `entry::driver_read`.
     pub fn read(&self, read_request: &mut ReadRequest) {
         // The rest of an event that did not fit in the previous read goes first.
         if !self.pending_event.send(read_request) {
@@ -223,13 +224,13 @@ impl Device {
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
-                    read_request.timeout();
+                    read_request.set_timeout();
                     return;
                 }
                 Err(err) => {
                     // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
                     err!("failed to pop value: {}", err);
-                    read_request.end_of_file();
+                    read_request.set_end_of_file();
                     return;
                 }
             }
@@ -246,7 +247,7 @@ impl Device {
                 }
             }
         }
-        read_request.complete();
+        read_request.set_success();
     }
 
     // Called when handle.Write is called from user-space.
@@ -407,17 +408,7 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v4_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = conn.update_info();
                     _ = self.event_queue.push(info);
                 };
 
@@ -427,17 +418,7 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v6_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = conn.update_info();
                     _ = self.event_queue.push(info);
                 };
 
@@ -485,65 +466,8 @@ impl Device {
                     logger::add_line(log_line);
                 }
 
-                self.connection_cache
-                    .walk_over_connections_v4(|conn: &ConnectionV4| {
-                        let proto = match conn.protocol {
-                            IpProtocol::Tcp => "TCP",
-                            IpProtocol::Udp => "UDP",
-                            _ => "???",
-                        };
-                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
-                        let mut log_line = protocol::info::log_line(
-                            protocol::info::Severity::Info,
-                            logger::MAX_LOG_LINE_SIZE,
-                        );
-                        _ = write!(
-                            log_line,
-                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
-                            proto,
-                            conn.direction,
-                            conn.local_address,
-                            conn.local_port,
-                            conn.remote_address,
-                            conn.remote_port,
-                            conn.process_id,
-                            conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            status,
-                        );
-                        logger::add_line(log_line);
-                    });
-
-                self.connection_cache
-                    .walk_over_connections_v6(|conn: &ConnectionV6| {
-                        let proto = match conn.protocol {
-                            IpProtocol::Tcp => "TCP",
-                            IpProtocol::Udp => "UDP",
-                            _ => "???",
-                        };
-                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
-                        let mut log_line = protocol::info::log_line(
-                            protocol::info::Severity::Info,
-                            logger::MAX_LOG_LINE_SIZE,
-                        );
-                        _ = write!(
-                            log_line,
-                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
-                            proto,
-                            conn.direction,
-                            conn.local_address,
-                            conn.local_port,
-                            conn.remote_address,
-                            conn.remote_port,
-                            conn.process_id,
-                            conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            status,
-                        );
-                        logger::add_line(log_line);
-                    });
+                self.connection_cache.walk_over_connections_v4(log_connection);
+                self.connection_cache.walk_over_connections_v6(log_connection);
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
@@ -551,34 +475,10 @@ impl Device {
                 // freed as they are removed.
                 let infos = self.connection_cache.clean_ended_connections(
                     |conn: &ConnectionV4| {
-                        protocol::info::connection_end_event_v4_info(
-                            conn.get_process_id(),
-                            conn.get_direction() as u8,
-                            conn.protocol.into(),
-                            conn.local_address.octets(),
-                            conn.remote_address.octets(),
-                            conn.local_port,
-                            conn.remote_port,
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                        )
+                        conn.end_info(conn.get_process_id())
                     },
                     |conn: &ConnectionV6| {
-                        protocol::info::connection_end_event_v6_info(
-                            conn.get_process_id(),
-                            conn.get_direction() as u8,
-                            conn.protocol.into(),
-                            conn.local_address.octets(),
-                            conn.remote_address.octets(),
-                            conn.local_port,
-                            conn.remote_port,
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                        )
+                        conn.end_info(conn.get_process_id())
                     },
                 );
                 for info in infos {
@@ -740,6 +640,8 @@ impl Device {
 
             match self.filter_engine.with(|fe| fe.reset_all_filters()) {
                 Ok(()) => {
+                    // This attempt counts too.
+                    let attempts_taken = attempts + 1;
                     attempts = 0;
                     let len = batch.len();
                     for pending in batch {
@@ -748,8 +650,8 @@ impl Device {
                         }
                     }
                     info!(
-                        "injected {} reauthorized packets after {} attempts",
-                        len, attempts
+                        "injected {} reauthorized packets after {} attempt(s)",
+                        len, attempts_taken
                     )
                 }
                 Err(ResetError::TransactionInProgress) => {
@@ -795,6 +697,37 @@ impl Device {
 
         return self.injector.inject_packet_list_transport(packet_list);
     }
+}
+
+/// Logs one line describing `conn`, for PrintMemoryStats.
+fn log_connection<T: Connection>(conn: &T) {
+    use core::fmt::Write;
+
+    let proto = match conn.get_protocol() {
+        IpProtocol::Tcp => "TCP",
+        IpProtocol::Udp => "UDP",
+        _ => "???",
+    };
+    let status = if conn.has_ended() { " [ENDED]" } else { "" };
+    let bandwidth = conn.get_bandwidth_usage();
+    let mut log_line =
+        protocol::info::log_line(protocol::info::Severity::Info, logger::MAX_LOG_LINE_SIZE);
+    _ = write!(
+        log_line,
+        "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+        proto,
+        conn.get_direction(),
+        conn.get_local_address(),
+        conn.get_local_port(),
+        conn.get_remote_address(),
+        conn.get_remote_port(),
+        conn.get_process_id(),
+        conn.get_verdict(),
+        bandwidth.rx_bytes.load(Ordering::SeqCst),
+        bandwidth.tx_bytes.load(Ordering::SeqCst),
+        status,
+    );
+    logger::add_line(log_line);
 }
 
 /// The maintenance thread's routine, every `MAINTENANCE_INTERVAL_MS` at PASSIVE_LEVEL.

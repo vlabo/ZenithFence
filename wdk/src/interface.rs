@@ -60,7 +60,12 @@ pub fn init_driver_object(
             &device_name,
             FILE_DEVICE_NETWORK,
             FILE_DEVICE_SECURE_OPEN,
-            0, // Not exclusive: more than one handle can be open.
+            // Not exclusive: more than one handle can be open.
+            // TODO: Open the device exclusive, so only one agent at a time reads the event stream
+            // (two readers split it between them), and decide what happens to pended packets and
+            // cached verdicts when that agent's handle closes. The client may depend on opening
+            // more than one handle today.
+            0,
             &SDDL_DEVOBJ_SYS_ALL_ADM_ALL,
             &GUID_DEVCLASS_NET,
             &mut device_object,

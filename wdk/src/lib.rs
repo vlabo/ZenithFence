@@ -14,7 +14,6 @@ pub mod ioqueue;
 pub mod irp_helpers;
 pub mod kmutex;
 pub mod rw_spin_lock;
-pub mod spin_lock;
 pub mod utils;
 pub mod worker;
 

@@ -1,4 +1,3 @@
-use core::sync::atomic::Ordering;
 
 use crate::connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key, Verdict};
 use crate::device::{Device, Packet};
@@ -521,7 +520,13 @@ fn create_packet_list(
             Some(size) if size >= fixed_ip_header_len => size,
             _ => fixed_ip_header_len,
         };
-        let retreat_size = ip_header_size + callout_data.get_transport_header_size();
+        // Unlike the IP header, the transport header has no safe fallback size (TCP may carry
+        // options), and retreating by a wrong amount would clone a shifted packet.
+        let Some(transport_header_size) = callout_data.get_transport_header_size() else {
+            crate::err!("no transport header size in ale layer data");
+            return None;
+        };
+        let retreat_size = ip_header_size + transport_header_size;
         // A failed retreat leaves the offset at the transport header, so the clone would be
         // missing the headers it has to be reinjected with.
         if let Err(err) = nb.retreat(retreat_size, true) {
@@ -555,7 +560,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
         return;
     };
     let ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
-    if let ValueType::FwpUint32 = ip_address_type {
+    if let Some(ValueType::FwpUint32) = ip_address_type {
         let key = Key {
             protocol: get_protocol(&data, Fields::IpProtocol as usize),
             local_address: get_ipv4_address(&data, Fields::IpLocalAddress as usize),
@@ -565,19 +570,7 @@ pub fn endpoint_closure_v4(data: CalloutData) {
         };
 
         let info = device.connection_cache.end_v4(key, |conn| {
-            protocol::info::connection_end_event_v4_info(
-                data.get_process_id().unwrap_or(0),
-                conn.get_direction() as u8,
-                u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                conn.local_address.octets(),
-                conn.remote_address.octets(),
-                conn.local_port,
-                conn.remote_port,
-                conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-            )
+            conn.end_info(data.get_process_id().unwrap_or(0))
         });
         if let Some(info) = info {
             let _ = device.event_queue.push(info);
@@ -600,8 +593,8 @@ pub fn endpoint_closure_v6(data: CalloutData) {
     let local_ip_address_type = data.get_value_type(Fields::IpLocalAddress as usize);
     let remote_ip_address_type = data.get_value_type(Fields::IpRemoteAddress as usize);
 
-    if let ValueType::FwpByteArray16Type = local_ip_address_type {
-        if let ValueType::FwpByteArray16Type = remote_ip_address_type {
+    if let Some(ValueType::FwpByteArray16Type) = local_ip_address_type {
+        if let Some(ValueType::FwpByteArray16Type) = remote_ip_address_type {
             let key = Key {
                 protocol: get_protocol(&data, Fields::IpProtocol as usize),
                 local_address: get_ipv6_address(&data, Fields::IpLocalAddress as usize),
@@ -611,19 +604,7 @@ pub fn endpoint_closure_v6(data: CalloutData) {
             };
 
             let info = device.connection_cache.end_v6(key, |conn| {
-                protocol::info::connection_end_event_v6_info(
-                    data.get_process_id().unwrap_or(0),
-                    conn.get_direction() as u8,
-                    u8::from(get_protocol(&data, Fields::IpProtocol as usize)),
-                    conn.local_address.octets(),
-                    conn.remote_address.octets(),
-                    conn.local_port,
-                    conn.remote_port,
-                    conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                    conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                )
+                conn.end_info(data.get_process_id().unwrap_or(0))
             });
             if let Some(info) = info {
                 let _ = device.event_queue.push(info);
@@ -651,21 +632,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| {
-                    protocol::info::connection_end_event_v4_info(
-                        process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    )
-                },
+                |conn| conn.end_info(process_id),
             );
             for info in infos {
                 let _ = device.event_queue.push(info);
@@ -685,21 +652,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| {
-                    protocol::info::connection_end_event_v6_info(
-                        process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    )
-                },
+                |conn| conn.end_info(process_id),
             );
             for info in infos {
                 let _ = device.event_queue.push(info);
@@ -719,21 +672,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| {
-                    protocol::info::connection_end_event_v4_info(
-                        process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    )
-                },
+                |conn| conn.end_info(process_id),
             );
             for info in infos {
                 let _ = device.event_queue.push(info);
@@ -753,21 +692,7 @@ pub fn ale_resource_monitor(data: CalloutData) {
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| {
-                    protocol::info::connection_end_event_v6_info(
-                        process_id,
-                        conn.get_direction() as u8,
-                        data.get_value_u8(Fields::IpProtocol as usize),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    )
-                },
+                |conn| conn.end_info(process_id),
             );
             for info in infos {
                 let _ = device.event_queue.push(info);

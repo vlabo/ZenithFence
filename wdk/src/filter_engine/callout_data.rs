@@ -91,8 +91,9 @@ pub struct CalloutData<'a> {
 }
 
 impl<'a> CalloutData<'a> {
-    pub fn get_value_type(&self, index: usize) -> ValueType {
-        self.values[index].value_type
+    /// The type of the value at `index`. `None` for a type `ValueType` does not know.
+    pub fn get_value_type(&self, index: usize) -> Option<ValueType> {
+        ValueType::from_raw(self.values[index].value_type)
     }
 
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
@@ -141,7 +142,8 @@ impl<'a> CalloutData<'a> {
         unsafe { (*self.metadata).get_ip_header_size() }
     }
 
-    pub fn get_transport_header_size(&self) -> u32 {
+    /// Size of the transport header. `None` if the layer does not provide the field.
+    pub fn get_transport_header_size(&self) -> Option<u32> {
         unsafe { (*self.metadata).get_transport_header_size() }
     }
 

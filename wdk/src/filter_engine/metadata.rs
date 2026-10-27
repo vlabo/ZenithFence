@@ -11,7 +11,8 @@ use windows_sys::Win32::{
             FWPS_METADATA_FIELD_PROCESS_ID, FWPS_METADATA_FIELD_PROCESS_PATH,
             FWPS_METADATA_FIELD_REMOTE_SCOPE_ID,
             FWPS_METADATA_FIELD_TRANSPORT_CONTROL_DATA,
-            FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE, FWP_BYTE_BLOB, FWP_DIRECTION,
+            FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE,
+            FWPS_METADATA_FIELD_TRANSPORT_HEADER_SIZE, FWP_BYTE_BLOB, FWP_DIRECTION,
         },
     },
     Networking::WinSock::SCOPE_ID,
@@ -131,8 +132,12 @@ impl FwpsIncomingMetadataValues {
         None
     }
 
-    pub(crate) fn get_transport_header_size(&self) -> u32 {
-        self.transport_header_size
+    pub(crate) fn get_transport_header_size(&self) -> Option<u32> {
+        if self.has_field(FWPS_METADATA_FIELD_TRANSPORT_HEADER_SIZE) {
+            return Some(self.transport_header_size);
+        }
+
+        None
     }
 
     pub(crate) fn get_process_id(&self) -> Option<u64> {

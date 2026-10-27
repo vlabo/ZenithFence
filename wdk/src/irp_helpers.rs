@@ -41,11 +41,14 @@ impl ReadRequest<'_> {
             let device_io = (*irp_sp).Parameters.Read;
 
             let buffer = system_buffer(irp, device_io.Length as usize);
-            ReadRequest {
+            let mut request = ReadRequest {
                 irp,
                 buffer,
                 fill_index: 0,
-            }
+            };
+            // Succeeds with whatever was written, unless an outcome is set.
+            request.set_success();
+            request
         }
     }
 
@@ -53,22 +56,31 @@ impl ReadRequest<'_> {
         self.buffer.len() - self.fill_index
     }
 
-    pub fn complete(&mut self) {
+    /// The read succeeds, returning the bytes written with `write`.
+    pub fn set_success(&mut self) {
         self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
     }
 
-    pub fn end_of_file(&mut self) {
+    /// The read ends with end of file, returning the bytes written with `write`.
+    pub fn set_end_of_file(&mut self) {
         self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_END_OF_FILE;
     }
 
-    pub fn timeout(&mut self) {
+    /// The read times out.
+    pub fn set_timeout(&mut self) {
+        self.irp.IoStatus.Information = 0;
         self.irp.IoStatus.Anonymous.Status = STATUS_TIMEOUT;
     }
 
-    pub fn get_status(&self) -> NTSTATUS {
-        unsafe { self.irp.IoStatus.Anonymous.Status }
+    /// Completes the request with the outcome that was set, handing the IRP back to the I/O
+    /// manager. Returns the status for the dispatch routine: the IRP must not be read once it is
+    /// completed.
+    pub fn complete(self) -> NTSTATUS {
+        let status = unsafe { self.irp.IoStatus.Anonymous.Status };
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
+        status
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> usize {
@@ -100,6 +112,7 @@ impl WriteRequest<'_> {
             let device_io = (*irp_sp).Parameters.Write;
 
             let buffer = system_buffer(irp, device_io.Length as usize);
+            irp.IoStatus.Information = 0;
             WriteRequest { irp, buffer }
         }
     }
@@ -112,12 +125,12 @@ impl WriteRequest<'_> {
         self.irp.IoStatus.Information = self.buffer.len();
     }
 
-    pub fn complete(&mut self) {
+    /// Completes the request successfully, handing the IRP back to the I/O manager. Returns the
+    /// status for the dispatch routine: the IRP must not be read once it is completed.
+    pub fn complete(self) -> NTSTATUS {
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
-    }
-
-    pub fn get_status(&self) -> NTSTATUS {
-        unsafe { self.irp.IoStatus.Anonymous.Status }
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
+        STATUS_SUCCESS
     }
 }
 

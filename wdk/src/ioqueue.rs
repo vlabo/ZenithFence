@@ -100,7 +100,8 @@ pub struct IOQueue<T> {
     _type: PhantomData<T>, // 0 size variable. Required for the generic to work properly. Compiler limitation.
 }
 
-unsafe impl<T> Sync for IOQueue<T> {}
+// Entries move from the pushing thread to the popping one.
+unsafe impl<T: Send> Sync for IOQueue<T> {}
 
 impl<T> IOQueue<T> {
     /// A queue that holds up to `max_len` entries. Make sure `rundown` is called on exit, if

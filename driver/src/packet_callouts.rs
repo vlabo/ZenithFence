@@ -158,6 +158,10 @@ fn ip_packet_layer<T: IpVersion>(
     // a chain of net buffers, each an independent packet with its own data offset and length,
     // so all packet work below is done per net buffer. Handling only the head of the chain
     // would account for bytes that are never inspected and inject a truncated packet.
+    //
+    // A classify has one action, but the loop can set it per net buffer, so the last one wins.
+    // That is fine because everything in one classify belongs to one flow: the net buffers share
+    // a connection, and with it a verdict and an action.
     for nbl in NetBufferListIter::new(data.get_layer_data() as _) {
         for mut nb in nbl.iter_net_buffers() {
             // Special condition for inbound packets.
