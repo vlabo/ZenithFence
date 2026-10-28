@@ -1,9 +1,11 @@
-use core::mem::MaybeUninit;
-
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
+use core::{
+    alloc::Layout,
+    ffi::c_void,
+    mem::{ManuallyDrop, MaybeUninit},
+    ptr::NonNull,
 };
+
+use alloc::string::{String, ToString};
 use windows_sys::Wdk::System::SystemServices::{
     IoAllocateMdl, IoFreeMdl, MmBuildMdlForNonPagedPool,
 };
@@ -89,35 +91,22 @@ impl NetBuffer {
     /// chain of its own, because that is what the injection path takes: one
     /// packet per injected list.
     pub fn clone_as_nbl(&self, net_allocator: &NetworkAllocator) -> Result<NetBufferList, String> {
+        self.clone_as_nbl_with_prefix(net_allocator, 0)
+    }
+
+    /// Like `clone_as_nbl`, with `prefix_len` bytes (a multiple of `PACKET_BUFFER_ALIGN`) in front
+    /// of the copy, in the same allocation, for what has to live as long as the packet
+    /// (`NetBufferList::prefix_mut`).
+    pub(crate) fn clone_as_nbl_with_prefix(
+        &self,
+        net_allocator: &NetworkAllocator,
+        prefix_len: usize,
+    ) -> Result<NetBufferList, String> {
         unsafe {
             let Some(nb) = self.nb.as_ref() else {
                 return Err("net buffer is null".to_string());
             };
-
-            let data_length = nb.nbSize.DataLength;
-            if data_length == 0 {
-                return Err("can't clone empty packet".to_string());
-            }
-
-            let mut buffer = alloc::vec![0 as u8; data_length as usize];
-            let buffer_ptr = buffer.as_mut_ptr();
-
-            let ptr = NdisGetDataBuffer(nb, data_length, buffer_ptr, 1, 0);
-            if ptr.is_null() {
-                return Err("failed to copy packet buffer".to_string());
-            }
-
-            // If the pointers differ the data is not in the correct place.
-            if ptr != buffer_ptr {
-                buffer.copy_from_slice(core::slice::from_raw_parts(ptr, data_length as usize));
-            }
-
-            let new_nbl = net_allocator.wrap_packet_in_nbl(&buffer)?;
-
-            return Ok(NetBufferList {
-                nbl: new_nbl,
-                data: Some(buffer),
-            });
+            copy_net_buffer(nb, net_allocator, prefix_len)
         }
     }
 
@@ -186,9 +175,125 @@ impl Iterator for NetBufferIter {
     }
 }
 
+/// Alignment of a packet copy. A prefix is a multiple of it, so what is kept in one (control data:
+/// WSACMSGHDR has 8-byte fields) and the packet bytes after it are aligned too.
+pub(crate) const PACKET_BUFFER_ALIGN: usize = 16;
+
+/// A packet copy owned by a `NetBufferList`: one allocation holding a prefix of `prefix_len`
+/// bytes, then the `len` packet bytes the list's MDL describes.
+struct PacketBuffer {
+    block: NonNull<u8>,
+    prefix_len: usize,
+    len: usize,
+}
+
+impl PacketBuffer {
+    /// Zeroed room for a prefix of `prefix_len` bytes (a multiple of `PACKET_BUFFER_ALIGN`) and a
+    /// packet of `len` bytes.
+    fn new(prefix_len: usize, len: usize) -> Result<Self, String> {
+        let layout = prefix_len
+            .checked_add(len)
+            .and_then(|size| Layout::from_size_align(size, PACKET_BUFFER_ALIGN).ok());
+        let layout = match layout {
+            Some(layout) if layout.size() > 0 && prefix_len.is_multiple_of(PACKET_BUFFER_ALIGN) => {
+                layout
+            }
+            _ => return Err("invalid packet copy size".to_string()),
+        };
+
+        let block = unsafe { alloc::alloc::alloc_zeroed(layout) };
+        match NonNull::new(block) {
+            Some(block) => Ok(Self {
+                block,
+                prefix_len,
+                len,
+            }),
+            None => Err("failed to allocate packet copy".to_string()),
+        }
+    }
+
+    fn data(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.block.as_ptr().add(self.prefix_len), self.len) }
+    }
+
+    fn data_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(self.block.as_ptr().add(self.prefix_len), self.len)
+        }
+    }
+
+    fn prefix_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.block.as_ptr(), self.prefix_len) }
+    }
+
+    /// Gives up the allocation without freeing it; `from_raw` takes it back.
+    fn into_raw(self) -> *mut u8 {
+        ManuallyDrop::new(self).block.as_ptr()
+    }
+
+    /// # Safety
+    /// `block`, `prefix_len` and `len` must be those of a buffer `into_raw` gave up.
+    unsafe fn from_raw(block: *mut u8, prefix_len: usize, len: usize) -> Self {
+        Self {
+            block: NonNull::new_unchecked(block),
+            prefix_len,
+            len,
+        }
+    }
+}
+
+impl Drop for PacketBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            // The layout `new` allocated with, and checked.
+            let layout =
+                Layout::from_size_align_unchecked(self.prefix_len + self.len, PACKET_BUFFER_ALIGN);
+            alloc::alloc::dealloc(self.block.as_ptr(), layout);
+        }
+    }
+}
+
+/// Copies the data of `nb` into a new, standalone NET_BUFFER_LIST, with `prefix_len` bytes in
+/// front of the copy (see `PacketBuffer`).
+unsafe fn copy_net_buffer(
+    nb: &NET_BUFFER,
+    net_allocator: &NetworkAllocator,
+    prefix_len: usize,
+) -> Result<NetBufferList, String> {
+    let data_length = nb.nbSize.DataLength;
+    if data_length == 0 {
+        return Err("can't clone empty packet".to_string());
+    }
+
+    let mut buffer = PacketBuffer::new(prefix_len, data_length as usize)?;
+    let data = buffer.data_mut();
+    let buffer_ptr = data.as_mut_ptr();
+
+    // Two options: returns a pointer to the raw packet buffer if the data is contiguous, or copies
+    // it into the supplied buffer and returns a pointer to that.
+    let ptr = NdisGetDataBuffer(nb, data_length, buffer_ptr, 1, 0);
+    if ptr.is_null() {
+        return Err("failed to copy packet buffer".to_string());
+    }
+
+    // If the pointers differ the data is not in the correct place.
+    if ptr != buffer_ptr {
+        data.copy_from_slice(core::slice::from_raw_parts(ptr, data_length as usize));
+    }
+
+    let new_nbl = net_allocator.wrap_packet_in_nbl(buffer.data())?;
+
+    Ok(NetBufferList {
+        nbl: new_nbl,
+        data: Some(buffer),
+    })
+}
+
 pub struct NetBufferList {
     pub(crate) nbl: *mut NET_BUFFER_LIST,
-    data: Option<Vec<u8>>,
+    /// The packet copy the list's MDL describes, for a list built by `clone`/`clone_as_nbl`.
+    /// `None` for a list this does not own.
+    data: Option<PacketBuffer>,
 }
 
 impl NetBufferList {
@@ -223,36 +328,7 @@ impl NetBufferList {
 
             let nb = nbl.Header.first_net_buffer;
             if let Some(nb) = nb.as_ref() {
-                let data_length = nb.nbSize.DataLength;
-                if data_length == 0 {
-                    return Err("can't clone empty packet".to_string());
-                }
-
-                // Allocate space in buffer, if buffer is too small.
-                let mut buffer = alloc::vec![0 as u8; data_length as usize];
-
-                let buffer_ptr = buffer.as_mut_ptr();
-
-                // Two options returns a pointer to the raw packet buffer,
-                // or copies the data to the supplied buffer
-                // and returns a pointer to the supplied buffer.
-                let ptr = NdisGetDataBuffer(nb, data_length, buffer_ptr, 1, 0);
-
-                if ptr.is_null() {
-                    return Err("failed to copy packet buffer".to_string());
-                }
-
-                // If the pointers differ the data is not in the correct place.
-                if ptr != buffer_ptr {
-                    buffer.copy_from_slice(core::slice::from_raw_parts(ptr, data_length as usize));
-                }
-
-                let new_nbl = net_allocator.wrap_packet_in_nbl(&buffer)?;
-
-                return Ok(NetBufferList {
-                    nbl: new_nbl,
-                    data: Some(buffer),
-                });
+                copy_net_buffer(nb, net_allocator, 0)
             } else {
                 return Err("net buffer is null".to_string());
             }
@@ -260,17 +336,76 @@ impl NetBufferList {
     }
 
     pub fn get_data_mut(&mut self) -> Option<&mut [u8]> {
-        if let Some(data) = &mut self.data {
-            return Some(data.as_mut_slice());
-        }
-        return None;
+        self.data.as_mut().map(PacketBuffer::data_mut)
     }
 
     pub fn get_data(&self) -> Option<&[u8]> {
-        if let Some(data) = &self.data {
-            return Some(data.as_slice());
+        self.data.as_ref().map(PacketBuffer::data)
+    }
+
+    /// The bytes in front of the packet copy (`NetBuffer::clone_as_nbl_with_prefix`).
+    pub(crate) fn prefix_mut(&mut self) -> Option<&mut [u8]> {
+        self.data.as_mut().map(PacketBuffer::prefix_mut)
+    }
+
+    pub(crate) fn prefix_len(&self) -> usize {
+        self.data.as_ref().map_or(0, |data| data.prefix_len)
+    }
+
+    /// Hands the list over to an asynchronous injection, without allocating a context for it.
+    /// Returns the NET_BUFFER_LIST to inject and the completion context: the start of the packet
+    /// copy's allocation (its prefix), or null for a list this does not own. The completion
+    /// routine gives both back to `from_injected`.
+    pub(crate) fn into_injected(self) -> (*mut NET_BUFFER_LIST, *mut c_void) {
+        // Nothing is freed here: from now on the injection owns the list.
+        let mut this = ManuallyDrop::new(self);
+        let context = match this.data.take() {
+            Some(data) => data.into_raw() as *mut c_void,
+            None => core::ptr::null_mut(),
+        };
+        (this.nbl, context)
+    }
+
+    /// Takes back a list handed over with `into_injected`, once its injection completed or failed
+    /// to start. `prefix_len` is the list's `prefix_len()` from before. Dropping the result frees
+    /// the list, its MDL and the packet copy.
+    ///
+    /// The length of the packet is read from the MDL, which `wrap_packet_in_nbl` built over all
+    /// of it. Returns `None`, leaking the list, if the MDL does not start right after the prefix:
+    /// freeing with a wrong layout would corrupt the pool.
+    ///
+    /// # Safety
+    /// `nbl` and `context` must be a pair `into_injected` returned, and nothing may use the list
+    /// anymore.
+    pub(crate) unsafe fn from_injected(
+        nbl: *mut NET_BUFFER_LIST,
+        context: *mut c_void,
+        prefix_len: usize,
+    ) -> Option<NetBufferList> {
+        if context.is_null() {
+            return Some(NetBufferList { nbl, data: None });
         }
-        return None;
+
+        let mdl = nbl
+            .as_ref()
+            .and_then(|nbl| nbl.Header.first_net_buffer.as_ref())
+            .and_then(|nb| nb.MdlChain.as_ref());
+        let Some(mdl) = mdl else {
+            crate::err!("injected packet has no MDL, leaking it");
+            return None;
+        };
+        // MmGetMdlVirtualAddress
+        let start = (mdl.StartVa as usize).wrapping_add(mdl.ByteOffset as usize);
+        if start != (context as usize).wrapping_add(prefix_len) {
+            crate::err!("injected packet MDL does not match its buffer, leaking it");
+            return None;
+        }
+
+        let data = PacketBuffer::from_raw(context as *mut u8, prefix_len, mdl.ByteCount as usize);
+        Some(NetBufferList {
+            nbl,
+            data: Some(data),
+        })
     }
 
     pub fn get_data_length(&self) -> u64 {
@@ -421,15 +556,17 @@ impl NetworkAllocator {
         }
     }
 
-    pub fn free_net_buffer(nbl: *mut NET_BUFFER_LIST) {
-        NetBufferListIter::new(nbl).for_each(|nbl| unsafe {
-            if let Some(nbl) = nbl.nbl.as_mut() {
+    /// Frees a net buffer list allocated by `wrap_packet_in_nbl`, and its MDL. Only this one list:
+    /// whatever its `Next` points to is not ours to free.
+    pub(crate) fn free_net_buffer(nbl: *mut NET_BUFFER_LIST) {
+        unsafe {
+            if let Some(nbl) = nbl.as_mut() {
                 if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
                     IoFreeMdl(nb.MdlChain);
                 }
                 FwpsFreeNetBufferList0(nbl);
             }
-        });
+        }
     }
 
     /// Retreats the data start of the first net buffer.

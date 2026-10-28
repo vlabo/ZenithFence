@@ -10,10 +10,7 @@ use super::{
     packet::TransportPacketList,
     stream_data::StreamCalloutIoPacket,
 };
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-};
+use alloc::string::{String, ToString};
 use core::{ffi::c_void, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::HANDLE,
@@ -40,21 +37,42 @@ pub enum DeferResolution {
 impl ClassifyDefer {
     /// Completes the deferral where there is something to complete, and reports the resulting state
     /// of the connection together with the packet that was captured with it.
-    pub fn resolve(self) -> DeferResolution {
-        match self {
+    pub fn resolve(mut self) -> DeferResolution {
+        match &mut self {
             ClassifyDefer::Initial(context, packet_list) => {
+                let packet_list = packet_list.take();
                 let nbl_ptr = if let Some(ref tpl) = packet_list {
                     tpl.net_buffer_list_queue.nbl
                 } else {
                     core::ptr::null_mut()
                 };
                 unsafe {
-                    FwpsCompleteOperation0(context, nbl_ptr);
+                    FwpsCompleteOperation0(*context, nbl_ptr);
                 }
+                // Completed: nothing is left for `drop` to do.
+                *context = 0;
                 return DeferResolution::Completed(packet_list);
             }
             ClassifyDefer::Reauthorization(_callout_id, packet_list) => {
-                return DeferResolution::HeldByFilter(packet_list);
+                return DeferResolution::HeldByFilter(packet_list.take());
+            }
+        }
+    }
+}
+
+impl Drop for ClassifyDefer {
+    /// Safety net for a deferred connection that was dropped without `resolve`. A pended operation
+    /// that is never completed keeps the connecting thread waiting in the kernel for good, and its
+    /// callout cannot be unregistered. Completing it lets WFP classify the connection again, so the
+    /// verdict comes from the connection cache; callers resolve explicitly whenever they know it.
+    ///
+    /// A `Reauthorization` needs nothing: there is no pended operation, the filter holds the
+    /// connection.
+    fn drop(&mut self) {
+        if let ClassifyDefer::Initial(context, _) = self {
+            if *context != 0 {
+                crate::err!("deferred connection dropped without a verdict; completing it");
+                unsafe { FwpsCompleteOperation0(*context, core::ptr::null_mut()) };
             }
         }
     }
@@ -70,8 +88,9 @@ pub struct CalloutData<'a> {
 }
 
 impl<'a> CalloutData<'a> {
-    pub fn get_value_type(&self, index: usize) -> ValueType {
-        self.values[index].value_type
+    /// The type of the value at `index`. `None` for a type `ValueType` does not know.
+    pub fn get_value_type(&self, index: usize) -> Option<ValueType> {
+        ValueType::from_raw(self.values[index].value_type)
     }
 
     pub fn get_value_u8(&'a self, index: usize) -> u8 {
@@ -120,7 +139,8 @@ impl<'a> CalloutData<'a> {
         unsafe { (*self.metadata).get_ip_header_size() }
     }
 
-    pub fn get_transport_header_size(&self) -> u32 {
+    /// Size of the transport header. `None` if the layer does not provide the field.
+    pub fn get_transport_header_size(&self) -> Option<u32> {
         unsafe { (*self.metadata).get_transport_header_size() }
     }
 
@@ -133,15 +153,6 @@ impl<'a> CalloutData<'a> {
     pub fn get_control_data(&self) -> Option<NonNull<[u8]>> {
         unsafe {
             return (*self.metadata).get_control_data();
-        }
-    }
-
-    pub fn get_control_data_copy(&self) -> Option<Box<[u8]>> {
-        unsafe {
-            match (*self.metadata).get_control_data() {
-                Some(data) => Some(data.as_ref().to_vec().into_boxed_slice()),
-                None => None,
-            }
         }
     }
 

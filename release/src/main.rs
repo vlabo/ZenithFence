@@ -250,7 +250,7 @@ fn create_release_dir(dir_path: &Path, with_bat: bool) {
         .arg("/MACHINE:X64")
         .arg("/OPT:REF,ICF")
         .arg("/SUBSYSTEM:NATIVE,6.01")
-        .arg("/ENTRY:FxDriverEntry")
+        .arg("/ENTRY:GsDriverEntry")
         .arg("/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE")
         .arg("/MERGE:.rustc=.data")
         .arg("/INTEGRITYCHECK")

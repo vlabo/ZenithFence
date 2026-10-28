@@ -13,7 +13,7 @@ link arg="":
 
 	$DriverVarient="{{ if arg == "--release" { "release" } else { "debug" } }}"
 	cp ./driver/target/x86_64-pc-windows-msvc/$DriverVarient/driver.lib .
-	link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 /ENTRY:FxDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" /MERGE:.rustc=.data /INTEGRITYCHECK driver.lib
+	link.exe /OUT:driver.sys /RELEASE /DEBUG /NOLOGO /NXCOMPAT /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO /PDBALTPATH:driver.pdb /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 /ENTRY:GsDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" /MERGE:.rustc=.data /INTEGRITYCHECK driver.lib
 	signtool sign /a /s PrivateCertStore /n DriverCertificate /fd SHA256 /t http://timestamp.digicert.com driver.sys
 
 rebrand name: link
@@ -28,10 +28,10 @@ test-protocol:
 
 [working-directory: './kext_interface']
 test-kext-interface:
-	go test -run TestRustInfoFile
+	go test -run 'TestRustInfoFile|TestInfoDiffFile'
 
 [working-directory: './kext_interface']
 kext-interface-gen:
-	go test -run TestGenerateCommandFile
+	go test -run 'TestGenerateCommandFile|TestGenerateCommandDiff'
 
 test: kext-interface-gen test-protocol test-kext-interface
