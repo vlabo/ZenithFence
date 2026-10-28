@@ -85,8 +85,8 @@ const BLOCKING_POLL: Duration = Duration::from_millis(50);
 impl<T> IOQueue<T> {
     /// A queue that holds up to `max_len` entries, in the mode chosen by
     /// [`set_default_blocking`] (see type docs).
-    pub fn new(max_len: usize) -> Self {
-        Self {
+    pub fn new(max_len: usize) -> Result<Self, String> {
+        Ok(Self {
             inner: Mutex::new(Inner {
                 queue: VecDeque::new(),
                 live: true,
@@ -95,7 +95,7 @@ impl<T> IOQueue<T> {
             blocking: DEFAULT_BLOCKING.load(Ordering::SeqCst),
             max_len,
             dropped: AtomicUsize::new(0),
-        }
+        })
     }
 
     pub fn push(&self, entry: T) -> Result<(), Status> {
@@ -140,35 +140,6 @@ impl<T> IOQueue<T> {
                 .wait_timeout(inner, BLOCKING_POLL)
                 .unwrap_or_else(|p| p.into_inner());
             inner = guard;
-        }
-    }
-
-    /// Blocks up to `timeout` milliseconds for an entry. Returns `Timeout` if the
-    /// deadline passes with the queue still empty, or `Abandoned` after rundown.
-    pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status> {
-        let dur = if timeout <= 0 {
-            Duration::ZERO
-        } else {
-            Duration::from_millis(timeout as u64)
-        };
-        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(value) = inner.queue.pop_front() {
-            return Ok(value);
-        }
-        if !inner.live {
-            return Err(Status::Abandoned);
-        }
-        let (mut guard, res) = self
-            .cond
-            .wait_timeout(inner, dur)
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some(value) = guard.queue.pop_front() {
-            Ok(value)
-        } else if !guard.live {
-            Err(Status::Abandoned)
-        } else {
-            let _ = res;
-            Err(Status::Timeout)
         }
     }
 

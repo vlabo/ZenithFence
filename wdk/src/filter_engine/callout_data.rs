@@ -10,10 +10,7 @@ use super::{
     packet::TransportPacketList,
     stream_data::StreamCalloutIoPacket,
 };
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-};
+use alloc::string::{String, ToString};
 use core::{ffi::c_void, ptr::NonNull};
 use windows_sys::Win32::{
     Foundation::HANDLE,
@@ -156,15 +153,6 @@ impl<'a> CalloutData<'a> {
     pub fn get_control_data(&self) -> Option<NonNull<[u8]>> {
         unsafe {
             return (*self.metadata).get_control_data();
-        }
-    }
-
-    pub fn get_control_data_copy(&self) -> Option<Box<[u8]>> {
-        unsafe {
-            match (*self.metadata).get_control_data() {
-                Some(data) => Some(data.as_ref().to_vec().into_boxed_slice()),
-                None => None,
-            }
         }
     }
 

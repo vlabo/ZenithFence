@@ -14,6 +14,7 @@ mod callouts;
 mod common;
 pub mod connection;
 pub mod connection_cache;
+mod event;
 mod port_connections;
 pub mod device;
 pub mod entry;

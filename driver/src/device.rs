@@ -2,7 +2,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::string::String;
 use num_traits::FromPrimitive;
-use protocol::{command::CommandType, info::Info};
+use protocol::{
+    command::CommandType,
+    info::{ConnectionUpdateEnd, Writer},
+};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 use wdk::{
     driver::Driver,
@@ -19,20 +22,21 @@ use wdk::{
 };
 
 use crate::{
-    pending_event::PendingEvent,
     callouts,
     connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key},
     connection_cache::ConnectionCache,
     dbg, err,
+    event::Event,
     filter_reset_queue::{FilterResetQueue, PendingReset},
     id_cache::IdCache,
     info, logger,
     packet_util::Redirect,
+    pending_event::PendingEvent,
 };
 
 /// The most events waiting for user space to read them. Past it, events are dropped (packet
 /// events: the packet is blocked), so a stalled reader cannot make the queue grow without bound.
-const MAX_EVENTS: usize = 16384;
+const MAX_EVENTS: usize = 32_768;
 
 /// How long a packet waits for its verdict. User space answers in milliseconds; a packet still
 /// waiting after this is blocked, so a connect does not hang on an agent that stopped answering.
@@ -79,7 +83,7 @@ pub struct Device {
     // is interior-mutable; the filter engine through `FilterEngineCell`.
     pub filter_engine: FilterEngineCell,
     pub(crate) pending_event: PendingEvent,
-    pub(crate) event_queue: IOQueue<Info>,
+    pub(crate) event_queue: IOQueue<Event>,
     pub packet_cache: IdCache,
     pub connection_cache: ConnectionCache,
     pub injector: Injector,
@@ -99,6 +103,9 @@ impl Device {
     /// Initialize all members of the device. Memory is handled by windows.
     /// Make sure everything is initialized here.
     pub fn new(driver: &Driver) -> Result<Self, String> {
+        // Allocated first: it is the largest allocation, and nothing is registered yet to undo.
+        let event_queue = IOQueue::new(MAX_EVENTS)?;
+
         let mut filter_engine =
             match FilterEngine::new(driver, 0xf19f6eef_9031_4339_b90a_613da727ee29) {
                 Ok(fe) => fe,
@@ -116,7 +123,7 @@ impl Device {
         Ok(Self {
             filter_engine: FilterEngineCell::new(filter_engine),
             pending_event: PendingEvent::new(),
-            event_queue: IOQueue::new(MAX_EVENTS),
+            event_queue,
             packet_cache: IdCache::new(),
             connection_cache: ConnectionCache::new()?,
             injector: Injector::new(),
@@ -202,25 +209,44 @@ impl Device {
     /// Cleanup is called just before drop.
     // pub fn cleanup(&mut self) {}
 
-    fn write_buffer(&self, read_request: &mut ReadRequest, info: Info) {
-        let count = read_request.write(info.as_bytes());
+    /// Serializes `event` into the read buffer, leaving out its first `sent` bytes (an earlier
+    /// read sent them). What does not fit is kept for the next read.
+    fn write_event(&self, read_request: &mut ReadRequest, event: Event, sent: usize) {
+        let free_space = read_request.free_space();
+        let written = read_request.write_with(|buffer| {
+            let mut writer = Writer::new(buffer, sent);
+            event.write(&mut writer, &self.packet_cache);
+            writer.written()
+        });
 
-        // Check if the full event was written.
-        if count < info.as_bytes().len() {
-            // Keep the rest for the next read.
-            self.pending_event.stash(info.into_bytes(), count);
+        let sent = sent + written;
+        if sent >= event.serialized_size() {
+            return;
         }
+        if written == 0 && free_space > 0 {
+            // Nothing more came out of it although there was room: its size is wrong. Keeping it
+            // would stall every read after this one.
+            err!(
+                "event stopped at {} of {} bytes, dropping it",
+                sent,
+                event.serialized_size()
+            );
+            return;
+        }
+        self.pending_event.stash(event, sent);
     }
 
     /// Called when handle. Read is called from user-space.
     // TODO: Waits on this thread until an event arrives; see the TODO at `entry::driver_read`.
     pub fn read(&self, read_request: &mut ReadRequest) {
         // The rest of an event that did not fit in the previous read goes first.
-        if !self.pending_event.send(read_request) {
+        if let Some((event, sent)) = self.pending_event.take() {
+            self.write_event(read_request, event, sent);
+        } else {
             // Noting left from before. Wait for next commands.
             match self.event_queue.wait_and_pop() {
-                Ok(info) => {
-                    self.write_buffer(read_request, info);
+                Ok(event) => {
+                    self.write_event(read_request, event, 0);
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
@@ -239,8 +265,8 @@ impl Device {
         // Check if we have more space. InfoType + data_size == 5 bytes
         while read_request.free_space() > 5 {
             match self.event_queue.pop() {
-                Ok(info) => {
-                    self.write_buffer(read_request, info);
+                Ok(event) => {
+                    self.write_event(read_request, event, 0);
                 }
                 Err(_) => {
                     break;
@@ -283,7 +309,11 @@ impl Device {
                     // is a user space bug, so the connection is blocked rather than left pended.
                     let verdict_value = verdict.verdict;
                     let verdict = FromPrimitive::from_u8(verdict_value).unwrap_or_else(|| {
-                        err!("invalid verdict value {} for {}, blocking", verdict_value, key);
+                        err!(
+                            "invalid verdict value {} for {}, blocking",
+                            verdict_value,
+                            key
+                        );
                         crate::connection::Verdict::Failed
                     });
                     dbg!("Verdict received {}: {}", key, verdict);
@@ -388,7 +418,10 @@ impl Device {
             }
             CommandType::GetConnectionsUpdate => {
                 let Some(update) = protocol::command::parse_update_info(buffer) else {
-                    err!("getConnectionsUpdate command too short ({} bytes)", buffer.len());
+                    err!(
+                        "getConnectionsUpdate command too short ({} bytes)",
+                        buffer.len()
+                    );
                     return;
                 };
                 // Report the connections that saw traffic since the previous update. The
@@ -404,7 +437,9 @@ impl Device {
 
                 let send_event_v4 = |conn: &ConnectionV4| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.has_ended() || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since {
+                    if conn.has_ended()
+                        || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since
+                    {
                         return;
                     }
 
@@ -414,7 +449,9 @@ impl Device {
 
                 let send_event_v6 = |conn: &ConnectionV6| {
                     // Function is behind spin lock. Dont do expensive operations.
-                    if conn.has_ended() || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since {
+                    if conn.has_ended()
+                        || conn.last_accessed_timestamp.load(Ordering::SeqCst) < since
+                    {
                         return;
                     }
 
@@ -429,13 +466,13 @@ impl Device {
 
                 _ = self
                     .event_queue
-                    .push(protocol::info::connection_update_end_info(now));
+                    .push(Event::UpdateEnd(ConnectionUpdateEnd { timestamp: now }));
             }
             CommandType::GetLogs => {
                 wdk::dbg!("GetLogs command");
                 let lines_vec = logger::flush();
                 for line in lines_vec {
-                    let _ = self.event_queue.push(line);
+                    let _ = self.event_queue.push(Event::Log(line));
                 }
             }
             CommandType::PrintMemoryStats => {
@@ -466,24 +503,24 @@ impl Device {
                     logger::add_line(log_line);
                 }
 
-                self.connection_cache.walk_over_connections_v4(log_connection);
-                self.connection_cache.walk_over_connections_v6(log_connection);
+                self.connection_cache
+                    .walk_over_connections_v4(log_connection);
+                self.connection_cache
+                    .walk_over_connections_v6(log_connection);
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
                 // The events are built while the evicted connections are still alive: they are
-                // freed as they are removed.
-                let infos = self.connection_cache.clean_ended_connections(
+                // freed as they are removed. Pushing never waits, so it is fine under the port's
+                // lock; with the queue full the event is dropped.
+                self.connection_cache.clean_ended_connections(
                     |conn: &ConnectionV4| {
-                        conn.end_info(conn.get_process_id())
+                        _ = self.event_queue.push(conn.end_info(conn.get_process_id()));
                     },
                     |conn: &ConnectionV6| {
-                        conn.end_info(conn.get_process_id())
+                        _ = self.event_queue.push(conn.end_info(conn.get_process_id()));
                     },
                 );
-                for info in infos {
-                    _ = self.event_queue.push(info);
-                }
             }
         }
     }

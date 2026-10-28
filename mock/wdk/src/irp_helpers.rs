@@ -108,6 +108,15 @@ impl<'a> ReadRequest<'a> {
         bytes_to_write
     }
 
+    /// Lets `f` write straight into the free part of the buffer. `f` returns how many bytes it
+    /// wrote, and those are kept. Returns the same count.
+    pub fn write_with(&mut self, f: impl FnOnce(&mut [u8]) -> usize) -> usize {
+        let free_space = self.free_space();
+        let written = f(&mut self.buffer[self.fill_index..]).min(free_space);
+        self.fill_index += written;
+        written
+    }
+
     /// Test helper: the bytes written so far.
     pub fn written(&self) -> &[u8] {
         &self.buffer[..self.fill_index]

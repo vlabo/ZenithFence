@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use super::callout_data::CalloutData;
-use super::net_buffer::{NetBufferList, NET_BUFFER_LIST};
+use super::net_buffer::{NetBuffer, NetBufferList, NetworkAllocator, NET_BUFFER_LIST};
 
 /// Host mock of `wdk::filter_engine::packet::InjectInfo`.
 /// `compartment_id` is `i32` to match the real `COMPARTMENT_ID` type alias.
@@ -140,20 +140,23 @@ impl Injector {
         }
     }
 
+    /// Copies `net_buffer` for a later transport injection. The real one also keeps the remote
+    /// address and the control data in the copy; the mock injector reads neither.
     pub fn from_ale_callout(
         ipv6: bool,
         _callout_data: &CalloutData,
-        net_buffer_list: NetBufferList,
+        net_buffer: &NetBuffer,
+        net_allocator: &NetworkAllocator,
         _remote_ip_slice: &[u8],
         inbound: bool,
         _interface_index: u32,
         _sub_interface_index: u32,
-    ) -> TransportPacketList {
-        TransportPacketList {
-            net_buffer_list_queue: net_buffer_list,
+    ) -> Result<TransportPacketList, String> {
+        Ok(TransportPacketList {
+            net_buffer_list_queue: net_buffer.clone_as_nbl(net_allocator)?,
             ipv6,
             inbound,
-        }
+        })
     }
 }
 

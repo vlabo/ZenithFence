@@ -1,11 +1,12 @@
+use crate::event::Event;
 use alloc::string::{String, ToString};
 use core::{
     fmt::{Debug, Display},
     sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
 use num::FromPrimitive;
-use protocol::info::Info;
 use num_derive::FromPrimitive;
+use protocol::info::{ConnectionEndV4, ConnectionEndV6, ConnectionUpdateV4, ConnectionUpdateV6};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
 pub static PM_DNS_PORT: u16 = 53;
@@ -169,9 +170,9 @@ pub trait Connection {
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
 
     /// The event that tells user space the connection ended, with its final counters.
-    fn end_info(&self, process_id: u64) -> Info;
+    fn end_info(&self, process_id: u64) -> Event;
     /// The event that reports the connection's counters (GetConnectionsUpdate).
-    fn update_info(&self) -> Info;
+    fn update_info(&self) -> Event;
 
     fn update_bandwidth_data(&self, bytes: u64, direction: Direction) {
         // Update bandwidth usage.
@@ -433,36 +434,36 @@ impl Connection for ConnectionV4 {
         &self.bandwidth_usage
     }
 
-    fn end_info(&self, process_id: u64) -> Info {
+    fn end_info(&self, process_id: u64) -> Event {
         let bandwidth = &self.bandwidth_usage;
-        protocol::info::connection_end_event_v4_info(
+        Event::EndV4(ConnectionEndV4 {
             process_id,
-            self.direction as u8,
-            self.protocol.into(),
-            self.local_address.octets(),
-            self.remote_address.octets(),
-            self.local_port,
-            self.remote_port,
-            bandwidth.rx_bytes.load(Ordering::SeqCst),
-            bandwidth.rx_packets.load(Ordering::SeqCst),
-            bandwidth.tx_bytes.load(Ordering::SeqCst),
-            bandwidth.tx_packets.load(Ordering::SeqCst),
-        )
+            direction: self.direction as u8,
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 
-    fn update_info(&self) -> Info {
+    fn update_info(&self) -> Event {
         let bandwidth = &self.bandwidth_usage;
-        protocol::info::connection_update_event_v4_info(
-            self.protocol.into(),
-            self.local_address.octets(),
-            self.remote_address.octets(),
-            self.local_port,
-            self.remote_port,
-            bandwidth.rx_bytes.load(Ordering::SeqCst),
-            bandwidth.rx_packets.load(Ordering::SeqCst),
-            bandwidth.tx_bytes.load(Ordering::SeqCst),
-            bandwidth.tx_packets.load(Ordering::SeqCst),
-        )
+        Event::UpdateV4(ConnectionUpdateV4 {
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 }
 
@@ -633,36 +634,36 @@ impl Connection for ConnectionV6 {
         &self.bandwidth_usage
     }
 
-    fn end_info(&self, process_id: u64) -> Info {
+    fn end_info(&self, process_id: u64) -> Event {
         let bandwidth = &self.bandwidth_usage;
-        protocol::info::connection_end_event_v6_info(
+        Event::EndV6(ConnectionEndV6 {
             process_id,
-            self.direction as u8,
-            self.protocol.into(),
-            self.local_address.octets(),
-            self.remote_address.octets(),
-            self.local_port,
-            self.remote_port,
-            bandwidth.rx_bytes.load(Ordering::SeqCst),
-            bandwidth.rx_packets.load(Ordering::SeqCst),
-            bandwidth.tx_bytes.load(Ordering::SeqCst),
-            bandwidth.tx_packets.load(Ordering::SeqCst),
-        )
+            direction: self.direction as u8,
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 
-    fn update_info(&self) -> Info {
+    fn update_info(&self) -> Event {
         let bandwidth = &self.bandwidth_usage;
-        protocol::info::connection_update_event_v6_info(
-            self.protocol.into(),
-            self.local_address.octets(),
-            self.remote_address.octets(),
-            self.local_port,
-            self.remote_port,
-            bandwidth.rx_bytes.load(Ordering::SeqCst),
-            bandwidth.rx_packets.load(Ordering::SeqCst),
-            bandwidth.tx_bytes.load(Ordering::SeqCst),
-            bandwidth.tx_packets.load(Ordering::SeqCst),
-        )
+        Event::UpdateV6(ConnectionUpdateV6 {
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 }
 
