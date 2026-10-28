@@ -540,18 +540,17 @@ fn create_packet_list(
         IpAddress::Ipv4(address) => &address.octets(),
         IpAddress::Ipv6(address) => &address.octets(),
     };
-    if let Ok(clone) = nb.clone_as_nbl(&device.network_allocator) {
-        return Some(Injector::from_ale_callout(
-            ale_data.is_ipv6,
-            callout_data,
-            clone,
-            address,
-            inbound,
-            ale_data.interface_index,
-            ale_data.sub_interface_index,
-        ));
-    }
-    return None;
+    Injector::from_ale_callout(
+        ale_data.is_ipv6,
+        callout_data,
+        &nb,
+        &device.network_allocator,
+        address,
+        inbound,
+        ale_data.interface_index,
+        ale_data.sub_interface_index,
+    )
+    .ok()
 }
 
 pub fn endpoint_closure_v4(data: CalloutData) {
