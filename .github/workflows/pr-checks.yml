@@ -41,36 +41,11 @@ jobs:
       - name: Run tests
         run: just test
 
-  # Simulation on Linux: the scenario tests in mock/sim/tests, the real driver over
-  # mock_wdk driven from Python in-process, with agents (PipeAgent and the Go
-  # test agent) attached over a Unix socket.
-  sim-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # `go test` above already compiles kext_interface on Windows and runs a
+      # subset of vet; this is the full set.
+      - name: Vet kext_interface
+        working-directory: ./kext_interface
+        run: go vet ./...
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: stable
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install just
-        uses: taiki-e/install-action@v2
-        with:
-          tool: just
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: mock
-
-      - name: Scenario tests
-        run: timeout 300 just sim-test
+  # The scenario tests in mock/sim/tests run in zfsim-wheels.yml, against the
+  # installed Windows and Linux wheels.

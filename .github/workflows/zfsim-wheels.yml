@@ -2,16 +2,19 @@ name: zfsim wheels
 
 # Builds the zfsim wheels (Windows, Linux and macOS x86_64) in the same
 # container as `just sim-wheels`, installs the Windows and Linux ones into a
-# clean Python and runs the scenario tests against them. Every run keeps the
-# wheels as its `zfsim-wheels` artifact (download it from the run's summary
-# page, e.g. the PR's checks); on a published release they are also attached
-# to the release. Pull requests and manual runs make no release.
+# clean Python and runs the scenario tests against them (the only CI run of
+# mock/sim/tests). Every run keeps the wheels as its `zfsim-wheels` artifact
+# (download it from the run's summary page, e.g. the PR's checks); on a
+# published release they are also attached to the release. Pull requests,
+# pushes to main and manual runs make no release.
 
 on:
   release:
     types: [published]
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -38,7 +41,7 @@ jobs:
       # Release: the tag without its "v" (v2.0.3 -> 2.0.3). Pull request: the
       # driver version as a dev build numbered by the run (2.0.2.dev57), so each
       # push installs as an upgrade of the last. Manual run: the input, else the
-      # driver version.
+      # driver version. Push to main: the driver version.
       - name: Wheel version
         id: version
         shell: bash
@@ -92,6 +95,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: kext_tester/go.sum
+
+      # The Go test agent for test_serve's kext_tester test. The installed
+      # package can't find it in the source tree, so point it there.
+      - name: Build the Go test agent (kext_tester)
+        shell: bash
+        run: |
+          agent="$RUNNER_TEMP/kext_tester"
+          if [ "$RUNNER_OS" = "Windows" ]; then agent="$agent.exe"; fi
+          go build -C kext_tester -o "$agent"
+          echo "ZF_KEXT_TESTER=$agent" >> "$GITHUB_ENV"
 
       - uses: actions/download-artifact@v4
         with:

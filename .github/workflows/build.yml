@@ -129,25 +129,3 @@ jobs:
         run: |
           zip -j "driver-$TAG-unsigned.zip" driver/driver.sys driver/driver.pdb
           gh release upload "$TAG" "driver-$TAG-unsigned.zip" --clobber --repo "$GITHUB_REPOSITORY"
-
-  check-kext-interface:
-    name: Check kext_interface (compile only)
-    if: github.event_name != 'release'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: kext_interface/go.mod
-          cache-dependency-path: kext_interface/go.sum
-
-      # go:build windows constrained package — compile-check only, no tests run.
-      - name: Build kext_interface
-        working-directory: ./kext_interface
-        run: go build ./...
-
-      - name: Vet kext_interface
-        working-directory: ./kext_interface
-        run: go vet ./...
