@@ -10,6 +10,7 @@ mod callouts;
 mod common;
 mod connection;
 mod connection_cache;
+mod event;
 mod port_connections;
 mod device;
 mod entry;

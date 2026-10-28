@@ -627,16 +627,15 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 get_protocol(&data, Fields::IpProtocol as usize),
                 process_id,
             );
-            let infos = device.connection_cache.end_all_on_port_v4(
+            device.connection_cache.end_all_on_port_v4(
                 (
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| conn.end_info(process_id),
+                |conn| {
+                    let _ = device.event_queue.push(conn.end_info(process_id));
+                },
             );
-            for info in infos {
-                let _ = device.event_queue.push(info);
-            }
         }
         layer::Layer::AleResourceAssignmentV6Discard => {
             type Fields = layer::FieldsAleResourceAssignmentV6;
@@ -647,16 +646,15 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 get_protocol(&data, Fields::IpProtocol as usize),
                 process_id,
             );
-            let infos = device.connection_cache.end_all_on_port_v6(
+            device.connection_cache.end_all_on_port_v6(
                 (
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| conn.end_info(process_id),
+                |conn| {
+                    let _ = device.event_queue.push(conn.end_info(process_id));
+                },
             );
-            for info in infos {
-                let _ = device.event_queue.push(info);
-            }
         }
         layer::Layer::AleResourceReleaseV4 => {
             type Fields = layer::FieldsAleResourceReleaseV4;
@@ -667,16 +665,15 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 get_protocol(&data, Fields::IpProtocol as usize),
                 process_id,
             );
-            let infos = device.connection_cache.end_all_on_port_v4(
+            device.connection_cache.end_all_on_port_v4(
                 (
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| conn.end_info(process_id),
+                |conn| {
+                    let _ = device.event_queue.push(conn.end_info(process_id));
+                },
             );
-            for info in infos {
-                let _ = device.event_queue.push(info);
-            }
         }
         layer::Layer::AleResourceReleaseV6 => {
             type Fields = layer::FieldsAleResourceReleaseV6;
@@ -687,16 +684,15 @@ pub fn ale_resource_monitor(data: CalloutData) {
                 get_protocol(&data, Fields::IpProtocol as usize),
                 process_id,
             );
-            let infos = device.connection_cache.end_all_on_port_v6(
+            device.connection_cache.end_all_on_port_v6(
                 (
                     get_protocol(&data, Fields::IpProtocol as usize),
                     data.get_value_u16(Fields::IpLocalPort as usize),
                 ),
-                |conn| conn.end_info(process_id),
+                |conn| {
+                    let _ = device.event_queue.push(conn.end_info(process_id));
+                },
             );
-            for info in infos {
-                let _ = device.event_queue.push(info);
-            }
         }
         _ => {}
     }

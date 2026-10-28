@@ -1,6 +1,5 @@
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::time::Duration;
 
 use crate::connection::{
@@ -161,27 +160,25 @@ fn end_connection<T: Connection, R>(
 }
 
 // Marks every active connection on the given (protocol, port) as ended and
-// runs `f` on each.
-fn end_all_on_port<T: Connection, R>(
+// runs `f` on each, holding the port's lock shared.
+fn end_all_on_port<T: Connection>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
-    mut f: impl FnMut(&T) -> R,
-) -> Vec<R> {
+    mut f: impl FnMut(&T),
+) {
     let Some(port) = get_port(tcp, udp, protocol, local_port) else {
-        return Vec::new();
+        return;
     };
     let now = wdk::utils::get_monotonic_ms();
     port.read(|entries| {
-        let mut ended = Vec::new();
         for conn in entries.iter().map(|entry| &*entry.conn) {
             if !conn.has_ended() {
                 conn.end(now);
-                ended.push(f(conn));
+                f(conn);
             }
         }
-        ended
     })
 }
 
@@ -200,12 +197,13 @@ fn ports_walk<T: Connection, F: FnMut(&T)>(
 }
 
 // Removes the connections that ended over a minute ago, and evicts up to MAX_STALE_EVICTIONS
-// that saw no traffic for two minutes, running `on_stale` on each of those.
-fn ports_clean_ended<T: Connection, R>(
+// that saw no traffic for two minutes, running `on_stale` on each of those before it is freed,
+// holding its port's lock exclusive.
+fn ports_clean_ended<T: Connection>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
-    mut on_stale: impl FnMut(&T) -> R,
-) -> Vec<R> {
+    mut on_stale: impl FnMut(&T),
+) {
     // Durations
     const TWO_MINUTES: u64 = Duration::from_secs(120).as_millis() as u64;
     const ONE_MINUTE: u64 = Duration::from_secs(60).as_millis() as u64;
@@ -216,7 +214,7 @@ fn ports_clean_ended<T: Connection, R>(
     let before_two_minutes = now.saturating_sub(TWO_MINUTES);
     let before_one_minute = now.saturating_sub(ONE_MINUTE);
 
-    let mut evicted = Vec::new();
+    let mut evicted = 0;
     for port in tcp.iter().chain(udp.iter()) {
         if port.is_empty() {
             continue;
@@ -227,17 +225,17 @@ fn ports_clean_ended<T: Connection, R>(
                 if conn.has_ended() && conn.get_end_time() < before_one_minute {
                     return false;
                 }
-                if evicted.len() < MAX_STALE_EVICTIONS
+                if evicted < MAX_STALE_EVICTIONS
                     && conn.get_last_accessed_time() < before_two_minutes
                 {
-                    evicted.push(on_stale(conn));
+                    on_stale(conn);
+                    evicted += 1;
                     return false;
                 }
                 true
             })
         });
     }
-    evicted
 }
 
 // ConnectionCache holds the state of all active connections.
@@ -278,21 +276,15 @@ impl ConnectionCache {
         end_connection(&self.tcp_v6, &self.udp_v6, &key, f)
     }
 
-    /// Marks every active connection on the port as ended and runs `f` on each.
-    pub fn end_all_on_port_v4<R>(
-        &self,
-        key: (IpProtocol, u16),
-        f: impl FnMut(&ConnectionV4) -> R,
-    ) -> Vec<R> {
+    /// Marks every active connection on the port as ended and runs `f` on each, holding the
+    /// port's lock shared.
+    pub fn end_all_on_port_v4(&self, key: (IpProtocol, u16), f: impl FnMut(&ConnectionV4)) {
         end_all_on_port(&self.tcp_v4, &self.udp_v4, key.0, key.1, f)
     }
 
-    /// Marks every active connection on the port as ended and runs `f` on each.
-    pub fn end_all_on_port_v6<R>(
-        &self,
-        key: (IpProtocol, u16),
-        f: impl FnMut(&ConnectionV6) -> R,
-    ) -> Vec<R> {
+    /// Marks every active connection on the port as ended and runs `f` on each, holding the
+    /// port's lock shared.
+    pub fn end_all_on_port_v6(&self, key: (IpProtocol, u16), f: impl FnMut(&ConnectionV6)) {
         end_all_on_port(&self.tcp_v6, &self.udp_v6, key.0, key.1, f)
     }
 
@@ -311,15 +303,15 @@ impl ConnectionCache {
 
     // clean_ended_connections should be called from one place only.
     // Removes ended connections and evicts stale ones, running `on_stale_v4` / `on_stale_v6` on
-    // each evicted connection, so its end can be reported to user space.
-    pub fn clean_ended_connections<R>(
+    // each evicted connection before it is freed, so its end can be reported to user space. They
+    // run under the port's lock: they must not use the connection cache again.
+    pub fn clean_ended_connections(
         &self,
-        on_stale_v4: impl FnMut(&ConnectionV4) -> R,
-        on_stale_v6: impl FnMut(&ConnectionV6) -> R,
-    ) -> Vec<R> {
-        let mut evicted = ports_clean_ended(&self.tcp_v4, &self.udp_v4, on_stale_v4);
-        evicted.extend(ports_clean_ended(&self.tcp_v6, &self.udp_v6, on_stale_v6));
-        evicted
+        on_stale_v4: impl FnMut(&ConnectionV4),
+        on_stale_v6: impl FnMut(&ConnectionV6),
+    ) {
+        ports_clean_ended(&self.tcp_v4, &self.udp_v4, on_stale_v4);
+        ports_clean_ended(&self.tcp_v6, &self.udp_v6, on_stale_v6);
     }
 
     /// Fails the connection matching `key` if it is still undecided, so a verdict that arrived in
