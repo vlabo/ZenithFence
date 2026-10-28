@@ -231,6 +231,8 @@ impl Info {
     fn with_capacity(info_type: InfoType, capacity: usize) -> Self;
     fn update_size(&mut self);
     pub fn as_bytes(&self) -> &[u8];
+    /// The serialized event, without copying it.
+    pub fn into_bytes(self) -> Vec<u8>;
 }
 ```
 

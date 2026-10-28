@@ -54,9 +54,11 @@ pub fn load() -> NTSTATUS {
 /// service stop. No-op if nothing is loaded.
 pub fn unload() {
     let taken = LOADED.lock().unwrap_or_else(|p| p.into_inner()).take();
-    if let Some(LoadedDriver(driver_object)) = taken {
+    if let Some(LoadedDriver(mut driver_object)) = taken {
         if let Some(driver_unload) = driver_object.DriverUnload {
-            unsafe { driver_unload(driver_object.as_ref()) };
+            // Derived from `&mut`: the unload routine deletes the device object
+            // in it, like the kernel's IoDeleteDevice.
+            unsafe { driver_unload(driver_object.as_mut()) };
         }
     }
 }

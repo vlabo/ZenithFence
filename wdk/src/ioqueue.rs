@@ -5,13 +5,22 @@ use core::{
     marker::PhantomData,
     mem::MaybeUninit,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::dbg;
 use alloc::boxed::Box;
-use ntstatus::ntstatus::NtStatus;
-use windows_sys::{Wdk::Foundation::KQUEUE, Win32::System::Kernel::LIST_ENTRY};
+use windows_sys::{
+    Wdk::Foundation::KQUEUE,
+    Win32::{
+        Foundation::{STATUS_ABANDONED, STATUS_TIMEOUT, STATUS_USER_APC},
+        System::Kernel::LIST_ENTRY,
+    },
+};
+
+/// How long a blocking pop waits before checking again whether the queue was run down, in
+/// 100-nanosecond units (negative: relative to now). One second.
+const WAIT_RECHECK_INTERVAL: i64 = -10_000_000;
 
 #[derive(Debug)]
 pub enum Status {
@@ -19,6 +28,8 @@ pub enum Status {
     Timeout,
     UserAPC,
     Abandoned,
+    /// The queue holds its maximum number of entries; the pushed entry was dropped.
+    Full,
 }
 
 impl Display for Status {
@@ -28,6 +39,7 @@ impl Display for Status {
             Status::Timeout => write!(f, "Timeout"),
             Status::UserAPC => write!(f, "UserAPC"),
             Status::Abandoned => write!(f, "Abandoned"),
+            Status::Full => write!(f, "Full"),
         }
     }
 }
@@ -80,14 +92,21 @@ pub struct IOQueue<T> {
     // The address of the value should not change.
     kernel_queue: Pin<Box<UnsafeCell<KQUEUE>>>,
     initialized: AtomicBool,
+    /// Entries pushed and not popped yet, counting the ones being pushed right now.
+    len: AtomicUsize,
+    max_len: usize,
+    /// Entries refused because the queue was full.
+    dropped: AtomicUsize,
     _type: PhantomData<T>, // 0 size variable. Required for the generic to work properly. Compiler limitation.
 }
 
-unsafe impl<T> Sync for IOQueue<T> {}
+// Entries move from the pushing thread to the popping one.
+unsafe impl<T: Send> Sync for IOQueue<T> {}
 
 impl<T> IOQueue<T> {
-    /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
-    pub fn new() -> Self {
+    /// A queue that holds up to `max_len` entries. Make sure `rundown` is called on exit, if
+    /// `drop()` is not called for queue.
+    pub fn new(max_len: usize) -> Self {
         unsafe {
             let kernel_queue = Box::pin(UnsafeCell::new(MaybeUninit::zeroed().assume_init()));
             KeInitializeQueue(kernel_queue.get(), 1);
@@ -95,13 +114,24 @@ impl<T> IOQueue<T> {
             Self {
                 kernel_queue,
                 initialized: AtomicBool::new(true),
+                len: AtomicUsize::new(0),
+                max_len,
+                dropped: AtomicUsize::new(0),
                 _type: PhantomData,
             }
         }
     }
 
-    /// Pushes new entry of any type.
+    /// Pushes new entry of any type. Fails with `Full`, dropping the entry, when the queue already
+    /// holds `max_len` entries: nothing is reading it, and it must not grow without bound.
     pub fn push(&self, entry: T) -> Result<(), Status> {
+        // Take a slot first, so concurrent pushes can never overshoot the limit together.
+        if self.len.fetch_add(1, Ordering::SeqCst) >= self.max_len {
+            self.len.fetch_sub(1, Ordering::SeqCst);
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err(Status::Full);
+        }
+
         let kqueue = self.kernel_queue.get();
         // Allocate entry.
         let list_entry = Box::new(Entry {
@@ -126,6 +156,7 @@ impl<T> IOQueue<T> {
         }
 
         _ = unsafe { Box::from_raw(raw_ptr) };
+        self.len.fetch_sub(1, Ordering::SeqCst);
         return Err(Status::Uninitialized);
     }
 
@@ -135,17 +166,21 @@ impl<T> IOQueue<T> {
             let kqueue = self.kernel_queue.get();
             // Check if initialized.
             if self.initialized.load(Ordering::SeqCst) {
-                // Pop and check the return value.
+                // Pop and check the return value. It is either a pointer to the entry or one of a
+                // few small status codes. Compare the whole value: a kernel pointer is never that
+                // small, but its low 32 bits alone can equal one of the codes.
                 let list_entry =
                     KeRemoveQueue(kqueue, KprocessorMode::KernelMode, timeout) as *mut Entry<T>;
-                let error_code = NtStatus::try_from(list_entry as u32);
-                match error_code {
-                    Ok(NtStatus::STATUS_TIMEOUT) => return Err(Status::Timeout),
-                    Ok(NtStatus::STATUS_USER_APC) => return Err(Status::UserAPC),
-                    Ok(NtStatus::STATUS_ABANDONED) => return Err(Status::Abandoned),
+                match list_entry as usize {
+                    status if status == STATUS_TIMEOUT as usize => return Err(Status::Timeout),
+                    status if status == STATUS_USER_APC as usize => return Err(Status::UserAPC),
+                    status if status == STATUS_ABANDONED as usize => {
+                        return Err(Status::Abandoned)
+                    }
                     _ => {
                         // The return value is a pointer.
                         let list_entry = Box::from_raw(list_entry);
+                        self.len.fetch_sub(1, Ordering::SeqCst);
                         let entry = list_entry.entry;
                         return Ok(entry);
                     }
@@ -158,8 +193,15 @@ impl<T> IOQueue<T> {
 
     /// Returns element or a status. Waits until element is pushed or the queue is interrupted.
     pub fn wait_and_pop(&self) -> Result<T, Status> {
-        // No timeout.
-        self.pop_internal(core::ptr::null())
+        // Wait in bounded steps rather than forever. A reader that passed the initialized check
+        // just as `rundown` ran would otherwise wait on a queue nothing is ever pushed to again; it
+        // now sees the queue is gone at the next check (`pop_internal` returns Uninitialized).
+        loop {
+            match self.pop_internal(&WAIT_RECHECK_INTERVAL) {
+                Err(Status::Timeout) => continue,
+                result => return result,
+            }
+        }
     }
 
     /// Returns element or a status. Does not wait.
@@ -174,6 +216,21 @@ impl<T> IOQueue<T> {
         self.pop_internal(&timeout_ptr)
     }
 
+    /// Whether the queue holds `max_len` entries, so a push would fail.
+    pub fn is_full(&self) -> bool {
+        self.len.load(Ordering::SeqCst) >= self.max_len
+    }
+
+    /// The number of entries waiting to be popped.
+    pub fn queued_count(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
+    }
+
+    /// The number of entries `push` refused because the queue was full.
+    pub fn dropped_count(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
     /// Removes all elements and frees all the memory. The object can't be used after this function is called.
     pub fn rundown(&self) {
         unsafe {
@@ -185,20 +242,26 @@ impl<T> IOQueue<T> {
             // Check if initialized.
             if self.initialized.swap(false, Ordering::SeqCst) {
                 // Remove and free all elements from the queue.
-                let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
-                if !list_entries.is_null() {
-                    let mut entry = list_entries;
-                    while !core::ptr::eq((*entry).Flink, list_entries) {
-                        let next = (*entry).Flink;
-                        dbg!("discarding entry");
-                        let _ = Box::from_raw(entry as *mut Entry<T>);
-                        entry = next;
-                    }
-                    dbg!("discarding last entry");
-                    let _ = Box::from_raw(entry as *mut Entry<T>);
-                }
+                Self::free_entries(KeRundownQueue(kqueue));
             }
         }
+    }
+
+    /// Frees the entries `KeRundownQueue` returned. `list_entries` is the first entry of the
+    /// circular list it handed back, or null when the queue was empty.
+    unsafe fn free_entries(list_entries: *mut LIST_ENTRY) {
+        if list_entries.is_null() {
+            return;
+        }
+        let mut entry = list_entries;
+        while !core::ptr::eq((*entry).Flink, list_entries) {
+            let next = (*entry).Flink;
+            dbg!("discarding entry");
+            let _ = Box::from_raw(entry as *mut Entry<T>);
+            entry = next;
+        }
+        dbg!("discarding last entry");
+        let _ = Box::from_raw(entry as *mut Entry<T>);
     }
 }
 
@@ -209,6 +272,10 @@ impl<T> Drop for IOQueue<T> {
         unsafe {
             let ptr = self.kernel_queue.get();
             if !ptr.is_null() {
+                // A push that passed the initialized check just before `rundown` can still have
+                // inserted its entry afterwards. Nothing pushes anymore by the time the queue is
+                // dropped, so take whatever is left once more.
+                Self::free_entries(KeRundownQueue(ptr));
                 *ptr = MaybeUninit::zeroed().assume_init();
             }
         }

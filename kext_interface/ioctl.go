@@ -21,8 +21,8 @@ func ctlCode(device_type, function, method, access uint32) uint32 {
 }
 
 var (
-	IOCTL_VERSION          = ctlCode(SIOCTL_TYPE, 0x800, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
-	IOCTL_SHUTDOWN_REQUEST = ctlCode(SIOCTL_TYPE, 0x801, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
+	IOCTL_VERSION = ctlCode(SIOCTL_TYPE, 0x800, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
+	// 0x801 was IOCTL_SHUTDOWN_REQUEST; shut down with SendShutdownCommand.
 )
 
 // ReadVersion queries the driver's version. A simulation pipe (OpenPipe) has no

@@ -40,14 +40,24 @@ pub enum DeferResolution {
 impl ClassifyDefer {
     /// Mirrors the real `resolve`: completing an `Initial` pend has no host-side
     /// effect, a `Reauthorization` is reported as still held by its filter.
-    pub fn resolve(self) -> DeferResolution {
-        match self {
-            ClassifyDefer::Initial(_, packet_list) => DeferResolution::Completed(packet_list),
+    pub fn resolve(mut self) -> DeferResolution {
+        match &mut self {
+            ClassifyDefer::Initial(_, packet_list) => {
+                DeferResolution::Completed(packet_list.take())
+            }
             ClassifyDefer::Reauthorization(_, packet_list) => {
-                DeferResolution::HeldByFilter(packet_list)
+                DeferResolution::HeldByFilter(packet_list.take())
             }
         }
     }
+}
+
+/// The real type completes a pended operation that is dropped without `resolve`
+/// (a safety net). There is nothing to complete on the host; the impl is here
+/// so the driver is held to the same rules as against the real type (no moving
+/// fields out of a `ClassifyDefer`).
+impl Drop for ClassifyDefer {
+    fn drop(&mut self) {}
 }
 
 /// Host mock of `wdk::filter_engine::callout_data::CalloutData`.
@@ -92,14 +102,17 @@ impl<'a> CalloutData<'a> {
         }
     }
 
-    pub fn get_value_type(&self, index: usize) -> ValueType {
-        match &self.values[index] {
+    /// The type of the value at `index`. The real accessor returns `None` for a
+    /// raw type `ValueType` does not know; every mock `Value` maps to one.
+    pub fn get_value_type(&self, index: usize) -> Option<ValueType> {
+        let value_type = match &self.values[index] {
             Value::Empty => ValueType::FwpEmpty,
             Value::U8(_) => ValueType::FwpUint8,
             Value::U16(_) => ValueType::FwpUint16,
             Value::U32(_) => ValueType::FwpUint32,
             Value::Bytes16(_) => ValueType::FwpByteArray16Type,
-        }
+        };
+        Some(value_type)
     }
 
     pub fn get_value_u8(&self, index: usize) -> u8 {
@@ -143,8 +156,13 @@ impl<'a> CalloutData<'a> {
         Some(self.ip_header_size)
     }
 
-    pub fn get_transport_header_size(&self) -> u32 {
-        self.transport_header_size
+    /// Mirrors the real accessor, which returns `None` when the layer does not
+    /// set the metadata field. The mock models an absent field as 0.
+    pub fn get_transport_header_size(&self) -> Option<u32> {
+        if self.transport_header_size == 0 {
+            return None;
+        }
+        Some(self.transport_header_size)
     }
 
     pub fn get_layer_data(&self) -> *mut c_void {

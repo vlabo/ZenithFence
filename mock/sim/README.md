@@ -26,11 +26,9 @@ The file names are `zfsim-<version>-cp39-abi3-<platform>.whl` with platform
 `macosx_10_12_x86_64`. Nothing else is needed: the driver, the mock kernel and
 the harness are compiled into the wheel.
 
-To try a pull request before it is released: CI publishes its build as the
-pre-release `pr-<number>` (version `<driver>.dev<run>`) and comments the
-`pip install` command for each OS on the PR. It is replaced on every push and
-deleted when the PR closes. PRs from forks only get the `zfsim-wheels` artifact
-on their CI run.
+To try a pull request before it is released: download the `zfsim-wheels`
+artifact from the PR's "zfsim wheels" CI run (version `<driver>.dev<run>`),
+unzip it and `pip install` the wheel for your OS.
 
 ## Build and test
 

@@ -1,6 +1,6 @@
 use core::fmt::Display;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
@@ -10,6 +10,8 @@ pub enum Status {
     Timeout,
     UserAPC,
     Abandoned,
+    /// The queue holds its maximum number of entries; the pushed entry was dropped.
+    Full,
 }
 
 impl Display for Status {
@@ -19,6 +21,7 @@ impl Display for Status {
             Status::Timeout => write!(f, "Timeout"),
             Status::UserAPC => write!(f, "UserAPC"),
             Status::Abandoned => write!(f, "Abandoned"),
+            Status::Full => write!(f, "Full"),
         }
     }
 }
@@ -26,7 +29,10 @@ impl Display for Status {
 /// Host mock of the kernel `IOQueue`, backed by a `VecDeque` guarded by a
 /// `Mutex` + `Condvar`.
 ///
-/// The driver creates its queue with `IOQueue::new()` (the same call as against
+/// Bounded to `max_len` entries like the kernel queue: `push` refuses more with
+/// `Full` and counts the drop.
+///
+/// The driver creates its queue with `IOQueue::new(max_len)` (the same call as against
 /// the real `wdk`), so the mode is a process-wide setting the harness picks
 /// before loading the driver ([`set_default_blocking`]). The host harness has
 /// two very different needs:
@@ -45,6 +51,9 @@ pub struct IOQueue<T> {
     inner: Mutex<Inner<T>>,
     cond: Condvar,
     blocking: bool,
+    max_len: usize,
+    /// Entries refused because the queue was full.
+    dropped: AtomicUsize,
 }
 
 struct Inner<T> {
@@ -54,9 +63,10 @@ struct Inner<T> {
     live: bool,
 }
 
-unsafe impl<T> Sync for IOQueue<T> {}
+// Entries move from the pushing thread to the popping one.
+unsafe impl<T: Send> Sync for IOQueue<T> {}
 
-// Mode of the queues created by `IOQueue::new()` from now on. Blocking, like the
+// Mode of the queues created by `IOQueue::new` from now on. Blocking, like the
 // kernel queue, unless a harness opts out.
 static DEFAULT_BLOCKING: AtomicBool = AtomicBool::new(true);
 
@@ -73,19 +83,18 @@ pub fn set_default_blocking(blocking: bool) {
 const BLOCKING_POLL: Duration = Duration::from_millis(50);
 
 impl<T> IOQueue<T> {
-    /// A queue in the mode chosen by [`set_default_blocking`] (see type docs).
-    pub fn new() -> Self {
-        Self::with_blocking(DEFAULT_BLOCKING.load(Ordering::SeqCst))
-    }
-
-    fn with_blocking(blocking: bool) -> Self {
+    /// A queue that holds up to `max_len` entries, in the mode chosen by
+    /// [`set_default_blocking`] (see type docs).
+    pub fn new(max_len: usize) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 queue: VecDeque::new(),
                 live: true,
             }),
             cond: Condvar::new(),
-            blocking,
+            blocking: DEFAULT_BLOCKING.load(Ordering::SeqCst),
+            max_len,
+            dropped: AtomicUsize::new(0),
         }
     }
 
@@ -96,6 +105,10 @@ impl<T> IOQueue<T> {
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         if !inner.live {
             return Err(Status::Uninitialized);
+        }
+        if inner.queue.len() >= self.max_len {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err(Status::Full);
         }
         inner.queue.push_back(entry);
         drop(inner);
@@ -159,6 +172,22 @@ impl<T> IOQueue<T> {
         }
     }
 
+    /// Whether the queue holds `max_len` entries, so a push would fail.
+    pub fn is_full(&self) -> bool {
+        self.queued_count() >= self.max_len
+    }
+
+    /// The number of entries waiting to be popped.
+    pub fn queued_count(&self) -> usize {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.queue.len()
+    }
+
+    /// The number of entries `push` refused because the queue was full.
+    pub fn dropped_count(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
     /// Closes the queue: drops all pending entries and wakes every blocked
     /// waiter with `Abandoned`. The queue must not be used afterwards (mirrors
     /// `KeRundownQueue`).
@@ -169,11 +198,5 @@ impl<T> IOQueue<T> {
             inner.queue.clear();
         }
         self.cond.notify_all();
-    }
-}
-
-impl<T> Default for IOQueue<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }

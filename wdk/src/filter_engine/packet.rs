@@ -235,19 +235,19 @@ impl Injector {
         net_buffer_list: NetBufferList,
         inject_info: InjectInfo,
     ) -> Result<(), String> {
-        if self.packet_inject_handle_v4 == INVALID_HANDLE_VALUE {
+        let inject_handle = if inject_info.ipv6 {
+            self.packet_inject_handle_v6
+        } else {
+            self.packet_inject_handle_v4
+        };
+        // Check the handle the packet goes through, not always the v4 one.
+        if inject_handle == INVALID_HANDLE_VALUE {
             return Err("failed to inject packet: invalid handle value".to_string());
         }
         // Escape the stack, so the data can be freed after inject is complete.
         let packet_boxed = Box::new(net_buffer_list);
         let nbl = packet_boxed.nbl;
         let packet_pointer = Box::into_raw(packet_boxed);
-
-        let inject_handle = if inject_info.ipv6 {
-            self.packet_inject_handle_v6
-        } else {
-            self.packet_inject_handle_v4
-        };
 
         let status = if inject_info.inbound && !inject_info.loopback {
             // Inject inbound.

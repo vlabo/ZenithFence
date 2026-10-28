@@ -5,16 +5,28 @@
 //     harness feeds raw byte buffers straight into `Device::read` / `write` /
 //     device control, with no IRP.
 //   * IRP-backed (`new`) — mirrors the real wrappers: the buffer is taken from
-//     the mock `IRP`'s system buffer, and `complete`/`timeout`/etc. write the
-//     transferred byte count and status back into the IRP so a `DriverConnection`
-//     can read them, exactly as the kernel completes a request.
+//     the mock `IRP`'s system buffer, and the `set_*` outcomes and `complete`
+//     write the transferred byte count and status back into the IRP so a
+//     `DriverConnection` can read them, exactly as the kernel completes a request.
+//
+// As in the real wrappers, `complete` consumes the request and returns the
+// status for the dispatch routine.
 
-// Status values (i32) the driver reads back via `get_status`. Single source of
-// truth in `kernel_types` so the channel client and the driver agree on, e.g.,
-// the end-of-file code used to stop a reader.
+// Status values (i32) come from `kernel_types`, the single source of truth, so
+// the channel client and the driver agree on, e.g., the end-of-file code used to
+// stop a reader.
 use crate::kernel_types::{
-    IRP, STATUS_END_OF_FILE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_TIMEOUT,
+    IRP, NTSTATUS, STATUS_END_OF_FILE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_TIMEOUT,
 };
+
+/// Completes `irp` successfully without transferring data, for requests that
+/// need no work from the driver (opening, cleaning up and closing a handle).
+/// Returns the status for the dispatch routine.
+pub fn complete_empty(irp: &mut IRP) -> NTSTATUS {
+    irp.information = 0;
+    irp.status = STATUS_SUCCESS;
+    STATUS_SUCCESS
+}
 
 pub struct ReadRequest<'a> {
     // Present for IRP-backed requests; the transferred count + status are mirrored
@@ -39,41 +51,49 @@ impl<'a> ReadRequest<'a> {
     /// Build a read request from a mock IRP (the dispatch path). The output
     /// buffer is the IRP's system buffer, sized to `output_len`.
     pub fn new(irp: &'a mut IRP) -> ReadRequest<'a> {
-        let buffer = unsafe { core::slice::from_raw_parts_mut(irp.system_buffer, irp.output_len) };
-        ReadRequest {
+        let buffer = unsafe { system_buffer(irp, irp.output_len) };
+        let mut request = ReadRequest {
             irp: Some(irp),
             buffer,
             fill_index: 0,
             status: STATUS_SUCCESS,
-        }
+        };
+        // Succeeds with whatever was written, unless an outcome is set.
+        request.set_success();
+        request
     }
 
     pub fn free_space(&self) -> usize {
         self.buffer.len() - self.fill_index
     }
 
-    pub fn complete(&mut self) {
-        self.set_status(STATUS_SUCCESS);
+    /// The read succeeds, returning the bytes written with `write`.
+    pub fn set_success(&mut self) {
+        self.set_status(STATUS_SUCCESS, self.fill_index);
     }
 
-    pub fn end_of_file(&mut self) {
-        self.set_status(STATUS_END_OF_FILE);
+    /// The read ends with end of file, returning the bytes written with `write`.
+    pub fn set_end_of_file(&mut self) {
+        self.set_status(STATUS_END_OF_FILE, self.fill_index);
     }
 
-    pub fn timeout(&mut self) {
-        self.set_status(STATUS_TIMEOUT);
+    /// The read times out.
+    pub fn set_timeout(&mut self) {
+        self.set_status(STATUS_TIMEOUT, 0);
     }
 
-    fn set_status(&mut self, status: i32) {
+    /// Completes the request with the outcome that was set. Returns the status
+    /// for the dispatch routine.
+    pub fn complete(self) -> NTSTATUS {
+        self.status
+    }
+
+    fn set_status(&mut self, status: NTSTATUS, information: usize) {
         self.status = status;
         if let Some(irp) = self.irp.as_mut() {
-            irp.information = self.fill_index;
+            irp.information = information;
             irp.status = status;
         }
-    }
-
-    pub fn get_status(&self) -> i32 {
-        self.status
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> usize {
@@ -115,7 +135,8 @@ impl<'a> WriteRequest<'a> {
     /// Build a write request from a mock IRP (the dispatch path). The input
     /// buffer is the IRP's system buffer, sized to `input_len`.
     pub fn new(irp: &'a mut IRP) -> WriteRequest<'a> {
-        let buffer = unsafe { core::slice::from_raw_parts(irp.system_buffer, irp.input_len) };
+        let buffer: &[u8] = unsafe { system_buffer(irp, irp.input_len) };
+        irp.information = 0;
         WriteRequest {
             irp: Some(irp),
             buffer,
@@ -133,15 +154,14 @@ impl<'a> WriteRequest<'a> {
         }
     }
 
-    pub fn complete(&mut self) {
+    /// Completes the request successfully. Returns the status for the dispatch
+    /// routine.
+    pub fn complete(mut self) -> NTSTATUS {
         self.status = STATUS_SUCCESS;
         if let Some(irp) = self.irp.as_mut() {
             irp.status = STATUS_SUCCESS;
         }
-    }
-
-    pub fn get_status(&self) -> i32 {
-        self.status
+        STATUS_SUCCESS
     }
 }
 
@@ -168,7 +188,7 @@ impl<'a> DeviceControlRequest<'a> {
     /// output buffer is the IRP's system buffer, sized to `output_len`.
     pub fn new(irp: &'a mut IRP) -> DeviceControlRequest<'a> {
         let control_code = irp.control_code;
-        let buffer = unsafe { core::slice::from_raw_parts_mut(irp.system_buffer, irp.output_len) };
+        let buffer = unsafe { system_buffer(irp, irp.output_len) };
         DeviceControlRequest {
             irp: Some(irp),
             buffer,
@@ -194,23 +214,26 @@ impl<'a> DeviceControlRequest<'a> {
         bytes_to_write
     }
 
-    pub fn complete(&mut self) {
+    /// Completes the request, returning the bytes written with `write`. Returns
+    /// the status for the dispatch routine.
+    pub fn complete(mut self) -> NTSTATUS {
         self.status = STATUS_SUCCESS;
         if let Some(irp) = self.irp.as_mut() {
             irp.information = self.fill_index;
             irp.status = STATUS_SUCCESS;
         }
+        STATUS_SUCCESS
     }
 
-    pub fn not_implemented(&mut self) {
+    /// Completes the request as not implemented. Returns the status for the
+    /// dispatch routine.
+    pub fn not_implemented(mut self) -> NTSTATUS {
         self.status = STATUS_NOT_IMPLEMENTED;
         if let Some(irp) = self.irp.as_mut() {
+            irp.information = 0;
             irp.status = STATUS_NOT_IMPLEMENTED;
         }
-    }
-
-    pub fn get_status(&self) -> i32 {
-        self.status
+        STATUS_NOT_IMPLEMENTED
     }
 
     pub fn get_control_code(&self) -> u32 {
@@ -220,4 +243,14 @@ impl<'a> DeviceControlRequest<'a> {
     pub fn free_space(&self) -> usize {
         self.buffer.len() - self.fill_index
     }
+}
+
+/// The system buffer of a request, `length` bytes long. A zero-length request
+/// may have no buffer, and a slice must not be built from a null pointer, even an
+/// empty one.
+unsafe fn system_buffer<'a>(irp: &IRP, length: usize) -> &'a mut [u8] {
+    if irp.system_buffer.is_null() || length == 0 {
+        return &mut [];
+    }
+    core::slice::from_raw_parts_mut(irp.system_buffer, length)
 }

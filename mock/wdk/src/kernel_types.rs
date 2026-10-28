@@ -22,9 +22,8 @@ pub const STATUS_END_OF_FILE: NTSTATUS = 0xC000_0011u32 as i32;
 pub const STATUS_TIMEOUT: NTSTATUS = 0x0000_0102;
 pub const STATUS_NOT_IMPLEMENTED: NTSTATUS = 0xC000_0002u32 as i32;
 
-/// The registry path handed to `DriverEntry`. The driver never dereferences it
-/// (it is passed straight through to `init_driver_object`), so the mock is an
-/// opaque zero-sized stand-in.
+/// The registry path handed to `DriverEntry`. The driver never uses it, so the
+/// mock is an opaque zero-sized stand-in.
 pub struct UNICODE_STRING;
 
 /// WDM device object. The driver's handlers take `&mut DEVICE_OBJECT` but ignore
@@ -63,8 +62,8 @@ pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1b;
 /// like the kernel I/O manager.
 ///
 /// `DeviceObject` models the WDM field of the same name: null until driver init
-/// creates a device (`interface::init_driver_object` here, IoCreateDevice in the
-/// kernel). The mock filter engine refuses callout registration without one,
+/// creates a device (`interface::init_driver_object` here, IoCreateDeviceSecure
+/// in the kernel) and again once `interface::delete_device` removed it. The mock filter engine refuses callout registration without one,
 /// like `FwpsCalloutRegister` does. Owned: freed on drop.
 pub struct DRIVER_OBJECT {
     pub MajorFunction: [Option<MjFnType>; IRP_MJ_MAXIMUM_FUNCTION + 1],

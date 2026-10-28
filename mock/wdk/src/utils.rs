@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // When non-zero, overrides the host clock. Lets state-machine/eviction tests
-// drive `get_system_timestamp_ms` deterministically. 0 means "use real clock".
+// drive `get_monotonic_ms` deterministically. 0 means "use real clock".
 static MOCK_TIME_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Test helper: pin the mock clock to a fixed millisecond value.
@@ -16,19 +16,19 @@ pub fn advance_mock_time_ms(delta: u64) {
     MOCK_TIME_MS.fetch_add(delta, Ordering::SeqCst);
 }
 
-/// System time in milliseconds since 1601-01-01, like the kernel's
-/// `KeQuerySystemTime` (not the Unix epoch).
-pub fn get_system_timestamp_ms() -> u64 {
-    const UNIX_EPOCH_AS_SYSTEM_MS: u64 = 11_644_473_600_000;
+/// Milliseconds since "boot", like the kernel's interrupt time. Monotonic: the
+/// host clock is `Instant`, counted from the first call in the process (the
+/// mock's boot), unless a test pinned it with `set_mock_time_ms`.
+pub fn get_monotonic_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static BOOT: OnceLock<Instant> = OnceLock::new();
+
     let pinned = MOCK_TIME_MS.load(Ordering::SeqCst);
     if pinned != 0 {
         return pinned;
     }
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64 + UNIX_EPOCH_AS_SYSTEM_MS)
-        .unwrap_or(0)
+    BOOT.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 pub fn get_startup_time_ns() -> u64 {

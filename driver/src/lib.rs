@@ -9,13 +9,12 @@ extern crate alloc;
 // harness (mock/harness) can drive and observe the very same code over the
 // mock WDK.
 pub mod ale_callouts;
-mod array_holder;
-pub mod mpsc_queue;
+mod pending_event;
 mod callouts;
 mod common;
 pub mod connection;
 pub mod connection_cache;
-mod rcu_port;
+mod port_connections;
 pub mod device;
 pub mod entry;
 mod filter_reset_queue;

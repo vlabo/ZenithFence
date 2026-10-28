@@ -1,5 +1,4 @@
 use alloc::string::String;
-use alloc::sync::Arc;
 use smoltcp::wire::{IPV4_HEADER_LEN, IPV6_HEADER_LEN};
 use wdk::filter_engine::callout_data::CalloutData;
 use wdk::filter_engine::layer;
@@ -17,20 +16,25 @@ use crate::{err, warn};
 trait IpVersion: Connection + Sized {
     const HEADER_LEN: u32;
     const IS_IPV6: bool;
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>>;
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String>;
+    fn with_connection<R>(cache: &ConnectionCache, key: &Key, f: impl FnOnce(&Self) -> R)
+        -> Option<R>;
 }
 
 impl IpVersion for ConnectionV4 {
     const HEADER_LEN: u32 = IPV4_HEADER_LEN as u32;
     const IS_IPV6: bool = false;
 
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
         get_key_from_nb_v4(nb, direction)
     }
 
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
-        cache.get_connection_v4(key)
+    fn with_connection<R>(
+        cache: &ConnectionCache,
+        key: &Key,
+        f: impl FnOnce(&Self) -> R,
+    ) -> Option<R> {
+        cache.with_connection_v4(key, f)
     }
 }
 
@@ -38,12 +42,16 @@ impl IpVersion for ConnectionV6 {
     const HEADER_LEN: u32 = IPV6_HEADER_LEN as u32;
     const IS_IPV6: bool = true;
 
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
         get_key_from_nb_v6(nb, direction)
     }
 
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>> {
-        cache.get_connection_v6(key)
+    fn with_connection<R>(
+        cache: &ConnectionCache,
+        key: &Key,
+        f: impl FnOnce(&Self) -> R,
+    ) -> Option<R> {
+        cache.with_connection_v6(key, f)
     }
 }
 
@@ -150,6 +158,10 @@ fn ip_packet_layer<T: IpVersion>(
     // a chain of net buffers, each an independent packet with its own data offset and length,
     // so all packet work below is done per net buffer. Handling only the head of the chain
     // would account for bytes that are never inspected and inject a truncated packet.
+    //
+    // A classify has one action, but the loop can set it per net buffer, so the last one wins.
+    // That is fine because everything in one classify belongs to one flow: the net buffers share
+    // a connection, and with it a verdict and an action.
     for nbl in NetBufferListIter::new(data.get_layer_data() as _) {
         for mut nb in nbl.iter_net_buffers() {
             // Special condition for inbound packets.
@@ -178,7 +190,14 @@ fn ip_packet_layer<T: IpVersion>(
 
             // Get key from packet.
             let key = match T::get_key_from_nb(&nb, direction) {
-                Ok(key) => key,
+                Ok(Some(key)) => key,
+                // A fragment other than the first has no transport header to classify by. The
+                // first fragment carries the decision: without it the datagram is never
+                // reassembled, and inbound ALE sees the reassembled packet.
+                Ok(None) => {
+                    data.action_permit();
+                    continue;
+                }
                 Err(err) => {
                     warn!("failed to get key from net buffer: {}", err);
                     return;
@@ -196,15 +215,18 @@ fn ip_packet_layer<T: IpVersion>(
             ) {
                 // TCP and UDP always need to go through ALE layer first.
 
-                // Check if there is already connection object.
-                if let Some(conn) = T::get_connection(&device.connection_cache, &key) {
-                    // Connection object found.
-
+                // Check if there is already connection object. Everything needed from it is
+                // taken while its port is locked.
+                let found = T::with_connection(&device.connection_cache, &key, |conn| {
                     conn.update_bandwidth_data(packet_size, direction);
-                    process_id = conn.get_process_id();
+                    (conn.get_verdict(), conn.get_process_id(), conn.redirect_info())
+                });
+                if let Some((verdict, conn_process_id, redirect_info)) = found {
+                    // Connection object found.
+                    process_id = conn_process_id;
 
                     // Check if there is action for this connection.
-                    match conn.get_verdict() {
+                    match verdict {
                         Verdict::Undecided | Verdict::Accept | Verdict::Block | Verdict::Drop => {
                             // Temporary verdicts have special paths.
                             is_tmp_verdict = true
@@ -215,7 +237,7 @@ fn ip_packet_layer<T: IpVersion>(
                             data.block_and_absorb()
                         }
                         Verdict::RedirectNameServer | Verdict::RedirectTunnel => {
-                            if let Some(redirect_info) = conn.redirect_info() {
+                            if let Some(redirect_info) = redirect_info {
                                 match clone_packet(
                                     device,
                                     &nb,
@@ -228,7 +250,7 @@ fn ip_packet_layer<T: IpVersion>(
                                 ) {
                                     Ok(mut packet) => {
                                         let _ = packet.redirect(redirect_info);
-                                        if let Err(err) = device.inject_packet(packet, false) {
+                                        if let Err(err) = device.inject_permitted_packet(packet) {
                                             err!("failed to inject packet: {}", err);
                                         }
                                     }
@@ -263,6 +285,11 @@ fn ip_packet_layer<T: IpVersion>(
                 // The decision for the packet is not jet made. If clone fails, it should not allow the packet.
                 data.block_and_absorb();
 
+                // User space is not keeping up: keep it blocked, without copying it.
+                if device.is_backlogged() {
+                    continue;
+                }
+
                 let packet = match clone_packet(
                     device,
                     &nb,
@@ -280,13 +307,8 @@ fn ip_packet_layer<T: IpVersion>(
                     }
                 };
 
-                let info = device
-                    .packet_cache
-                    .push((key, packet), process_id, direction, false);
                 // Send to Userspace
-                if let Some(info) = info {
-                    let _ = device.event_queue.push(info);
-                }
+                device.queue_packet(key, packet, process_id, direction, false);
             }
         }
     }
@@ -302,6 +324,11 @@ fn clone_packet(
     sub_interface_index: u32,
     compartment_id: i32,
 ) -> Result<Packet, String> {
+    // TODO: Large send (LSO). An outbound TCP packet can be up to 64 KB, left for the NIC to split
+    // as the TcpLargeSendNetBufferListInfo of the original NBL says. The copy does not carry that
+    // info, and `recalc_header_checksums` writes a full TCP checksum where LSO expects the
+    // pseudo-header seed. Copy the info, and seed instead of recompute for LSO packets. Needs
+    // testing on a real NIC with LSO enabled.
     let mut clone = nb.clone_as_nbl(&device.network_allocator)?;
     let inbound = match direction {
         Direction::Outbound => false,

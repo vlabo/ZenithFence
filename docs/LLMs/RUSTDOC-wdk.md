@@ -14,6 +14,18 @@
 pub(crate) const POOL_TAG: u32 = u32::from_ne_bytes(*b"znfc");
 ```
 
+Pool allocations are 16-byte aligned on 64-bit Windows.
+
+```rust
+const POOL_ALIGNMENT: usize = 16;
+```
+
+Cache-aligned pool allocations start on a processor cache line.
+
+```rust
+const CACHE_LINE_ALIGNMENT: usize = 64;
+```
+
 ### Types
 
 #### `PoolType`
@@ -290,7 +302,6 @@ pub trait Device {
 
 ```rust
 pub struct Driver {
-    _device_handle: HANDLE,
     driver_object: *mut DRIVER_OBJECT,
     device_object: *mut DEVICE_OBJECT,
 }
@@ -300,8 +311,7 @@ pub struct Driver {
 impl Driver {
     pub(crate) fn new(
         driver_object: *mut DRIVER_OBJECT,
-        _driver_handle: HANDLE,
-        device_handle: HANDLE,
+        device_object: *mut DEVICE_OBJECT,
     ) -> Driver;
     pub fn get_device_object(&self) -> *mut DEVICE_OBJECT;
     pub fn get_device_object_ref(&self) -> Option<&mut DEVICE_OBJECT>;
@@ -332,82 +342,6 @@ pub type MjFnType = unsafe extern "system" fn(&mut DEVICE_OBJECT, &mut IRP) -> N
 
 ```rust
 unsafe impl Sync for Driver
-```
-
----
-
-## `wdk/src/fast_mutex.rs`
-
-### Types
-
-#### `FastMutex`
-
-```rust
-pub struct FastMutex<T> {
-    kmutex: UnsafeCell<Option<*mut FAST_MUTEX>>,
-    val: UnsafeCell<T>,
-}
-```
-
-```rust
-impl<T> FastMutex<T> {
-    pub const fn default(val: T) -> Self;
-    pub fn init(&self);
-    pub fn deinit(&self);
-    pub fn lock(&self) -> Result<LockGuard<T>, ()>;
-    pub fn try_lock(&self) -> Option<LockGuard<T>>;
-    fn get<'a>(&self) -> *mut T;
-    fn unlock(&self);
-}
-```
-
-#### `LockGuard`
-
-```rust
-pub struct LockGuard<'a, T> {
-    mutex: &'a FastMutex<T>,
-}
-```
-
-```rust
-impl<'a, T> LockGuard<'a, T> {
-    fn new(mutex: &'a FastMutex<T>) -> Self;
-}
-```
-
-### Trait implementations
-
-```rust
-impl<T> Drop for FastMutex<T>
-
-impl<'a, T> Drop for LockGuard<'a, T>
-
-impl<'a, T> Deref for LockGuard<'a, T>
-
-impl<'a, T> DerefMut for LockGuard<'a, T>
-```
-
-### Functions
-
-The ExInitializeFastMutex routine initializes a fast mutex variable, used to synchronize mutually exclusive access by a set of threads to a shared resource.
-ExInitializeFastMutex must be called before any calls to other ExXxxFastMutex routines occur.
-
-```rust
-unsafe fn ExInitializeFastMutex(kmutex: *mut FAST_MUTEX);
-```
-
-### Extern blocks
-
-```rust
-#[link(name = "NtosKrnl", kind = "static")]
-extern "C" {
-    fn KeInitializeEvent(event: *mut KEVENT, event_type: EVENT_TYPE, state: bool);
-    /// The ExAcquireFastMutex routine acquires the given fast mutex with APCs to the current thread disabled.
-    fn ExAcquireFastMutex(kmutex: *mut FAST_MUTEX);
-    /// The ExTryToAcquireFastMutex routine acquires the given fast mutex, if possible, with APCs to the current thread disabled.
-    fn ExTryToAcquireFastMutex(kmutex: *mut FAST_MUTEX) -> bool;
-    fn ExReleaseFastMutex(kmutex: *mut FAST_MUTEX);
-}
 ```
 
 ---
@@ -446,6 +380,11 @@ pub(crate) const NDIS_OBJECT_TYPE_DEFAULT: u8 = 0x80;
 
 ```rust
 pub(crate) const NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1: u8 = 1;
+```
+
+```rust
+#[cfg(target_arch = "x86_64")]
+const _: () = ...;
 ```
 
 ### Types
@@ -507,35 +446,6 @@ pub(crate) struct FWPS_FILTER_CONDITION0 {
     reserved: u16,
     matchType: FWP_MATCH_TYPE,
     conditionValue: FWP_CONDITION_VALUE0,
-}
-```
-
-#### `WdfExecutionLevel`
-
-The WdfExecutionLevel enumeration type specifies the maximum IRQL at which the framework will call the event callback functions that a driver has supplied for a framework object.
-
-```rust
-#[repr(C)]
-enum WdfExecutionLevel {
-    Invalid = 0,
-    InheritFromParent,
-    Passive,
-    Dispatch,
-}
-```
-
-#### `WdfSynchronizationScope`
-
-The WDF_SYNCHRONIZATION_SCOPE enumeration type specifies how the framework will synchronize execution of an object's event callback functions.
-
-```rust
-#[repr(C)]
-enum WdfSynchronizationScope {
-    Invalid = 0x00,
-    InheritFromParent,
-    Device,
-    Queue,
-    None,
 }
 ```
 
@@ -628,10 +538,21 @@ pub(crate) struct NBListHeader {
 }
 ```
 
+#### `Aligned16`
+
+A field aligned to MEMORY_ALLOCATION_ALIGNMENT (16 bytes on 64-bit), the
+`DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT)` of the NDIS headers.
+
+```rust
+#[repr(C, align(16))]
+pub(crate) struct Aligned16<T>(pub(crate) T);
+```
+
 #### `NET_BUFFER_LIST`
 
 The NET_BUFFER_LIST structure specifies a linked list of NET_BUFFER structures.
 This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
+Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 
 ```rust
 #[repr(C)]
@@ -640,9 +561,9 @@ pub struct NET_BUFFER_LIST {
     pub(crate) Context: *mut c_void,
     pub(crate) ParentNetBufferList: *mut NET_BUFFER_LIST,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 4],
-    pub(crate) MiniportReserved: [*mut c_void; 2],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 4]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 2]>,
     pub(crate) Scratch: *mut c_void,
     pub(crate) SourceHandle: NDIS_HANDLE,
     pub(crate) NblFlags: u32,
@@ -667,6 +588,7 @@ pub union NBSize {
 
 This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 The NET_BUFFER structure specifies data that is transmitted or received over the network.
+Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 
 ```rust
 #[repr(C)]
@@ -677,12 +599,13 @@ pub struct NET_BUFFER {
     pub(crate) nbSize: NBSize,
     pub(crate) MdlChain: *mut MDL,
     pub(crate) DataOffset: u32,
+    _HeaderPadding: u32,
     pub(crate) ChecksumBias: u16,
     pub(crate) Reserved: u16,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 6],
-    pub(crate) MiniportReserved: [*mut c_void; 4],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 6]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 4]>,
     pub(crate) DataPhysicalAddress: u64,
     pub(crate) SharedMemoryInfo: *mut c_void,
 }
@@ -734,70 +657,11 @@ pub(crate) struct NET_BUFFER_LIST_POOL_PARAMETERS {
 }
 ```
 
-#### `WdfObjectContextTypeInfo`
-
-WdfObjectContextTypeInfo is a description of the device context.
-
-```rust
-#[repr(C)]
-pub struct WdfObjectContextTypeInfo {
-    size: u32,
-    context_name: *const u8,
-    context_size: usize,
-    unique_type: *const WdfObjectContextTypeInfo,
-    _evt_driver_get_unique_context_type: *const c_void,
-}
-```
-
-```rust
-impl WdfObjectContextTypeInfo {
-    pub const fn default(null_terminated_name: &'static str) -> Self;
-}
-```
-
-#### `WdfObjectAttributes`
-
-WdfObjectAttributes contains attributes for the device context.
-
-```rust
-#[repr(C)]
-pub struct WdfObjectAttributes {
-    size: u32,
-    evt_cleanup_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
-    evt_destroy_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
-    execution_level: WdfExecutionLevel,
-    synchronization_scope: WdfSynchronizationScope,
-    parent_object: HANDLE,
-    context_size_override: usize,
-    context_type_info: *const WdfObjectContextTypeInfo,
-}
-```
-
-```rust
-impl WdfObjectAttributes {
-    pub fn new() -> Self;
-    pub fn add_context<T>(
-        &mut self,
-        context_info: &'static mut WdfObjectContextTypeInfo,
-    );
-    pub fn set_cleanup_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE));
-    pub fn set_destroy_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE));
-}
-```
-
-### Trait implementations
-
-```rust
-unsafe impl Sync for WdfObjectContextTypeInfo
-```
-
 ### Extern blocks
 
 ```rust
 #[link(name = "Fwpkclnt", kind = "static")]
 #[link(name = "Fwpuclnt", kind = "static")]
-#[link(name = "WdfDriverEntry", kind = "static")]
-#[link(name = "WdfLdr", kind = "static")]
 #[link(name = "BufferOverflowK", kind = "static")]
 #[link(name = "uuid", kind = "static")]
 #[link(name = "wdmsec", kind = "static")]
@@ -805,7 +669,6 @@ unsafe impl Sync for WdfObjectContextTypeInfo
 #[link(name = "NtosKrnl", kind = "static")]
 #[link(name = "ndis", kind = "static")]
 #[link(name = "hal", kind = "static")]
-#[link(name = "c_helper", kind = "static")]
 extern "C" {
     /// The FwpsCalloutUnregisterById0 function unregisters a callout from the filter engine.
     pub(crate) fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
@@ -860,24 +723,22 @@ extern "C" {
         modifiedLayerData: *mut *mut c_void,
         flags: u32,
     );
-    /// pm_InitDriverObject initialize driver object. This function initializes requerd memory for the device context.
-    pub(crate) fn pm_InitDriverObject(
+    /// The IoCreateDeviceSecure routine creates a named device object and applies the specified security settings.
+    /// It is a macro for this function in wdmsec.h; the implementation is in wdmsec.lib.
+    pub(crate) fn WdmlibIoCreateDeviceSecure(
         driver_object: *mut DRIVER_OBJECT,
-        registry_path: *mut UNICODE_STRING,
-        wdf_driver: *mut HANDLE,
-        wdf_device: *mut HANDLE,
-        win_driver_path: PCWSTR,
-        dos_driver_path: PCWSTR,
-        object_attributes: *mut WdfObjectAttributes,
-        wdf_driver_unload: extern "C" fn(HANDLE),
+        device_extension_size: u32,
+        device_name: *const UNICODE_STRING,
+        device_type: u32,
+        device_characteristics: u32,
+        exclusive: BOOLEAN,
+        default_sddl_string: *const UNICODE_STRING,
+        device_class_guid: *const GUID,
+        device_object: *mut *mut DEVICE_OBJECT,
     ) -> NTSTATUS;
-    /// pm_WdfObjectGetTypedContextWerker 1to1 reference to the WdfObjectGetTypedContextWorker macro. The WdfObjectGetTypedContext macro returns a pointer to an object's context space.
-    pub(crate) fn pm_WdfObjectGetTypedContextWorker(
-        wdf_object: HANDLE,
-        type_info: *const WdfObjectContextTypeInfo,
-    ) -> *mut c_void;
-    /// WdfObjectGetTypedContext 1to1 reference to WdfDeviceWdmGetDeviceObject. The WdfDeviceWdmGetDeviceObject method returns the Windows Driver Model (WDM) device object that is associated with a specified framework device object.
-    pub(crate) fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
+    /// Security descriptor that gives the system and administrators full access, and nobody else any.
+    /// Defined in wdmsec.lib as "D:P(A;;GA;;;SY)(A;;GA;;;BA)".
+    pub(crate) static SDDL_DEVOBJ_SYS_ALL_ADM_ALL: UNICODE_STRING;
     /// The FwpsInjectNetworkSendAsync0 function injects packet data into the send data path.
     pub(crate) fn FwpsInjectNetworkSendAsync0(
         injectionHandle: HANDLE,
@@ -1004,14 +865,25 @@ extern "C" {
         FreeMdl: bool,
         FreeMdlHandler: *mut c_void,
     );
-    /// The KeQuerySystemTime routine obtains the current system time.
-    /// System time is a count of 100-nanosecond intervals since January 1, 1601. System time is typically updated approximately every ten milliseconds. This value is computed for the GMT time zone.
-    pub(crate) fn pm_QuerySystemTime() -> u64;
     /// The KeQueryPerformanceCounter routine retrieves the current value and frequency of the performance counter.
     /// Use KeQueryPerformanceCounter to acquire high resolution (<1µs) time stamps for time interval measurements.
     pub(crate) fn KeQueryPerformanceCounter(frequency: *mut i64) -> i64;
     /// The KeGetCurrentIrql routine returns the current IRQL.
     pub(crate) fn KeGetCurrentIrql() -> u8;
+    /// The PsCreateSystemThread routine creates a system thread that executes in kernel mode.
+    /// Declared here because windows-sys types the start routine without its context argument.
+    pub(crate) fn PsCreateSystemThread(
+        thread_handle: *mut HANDLE,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        process_handle: HANDLE,
+        client_id: *mut c_void,
+        start_routine: unsafe extern "system" fn(start_context: *mut c_void),
+        start_context: *mut c_void,
+    ) -> NTSTATUS;
+    /// The ZwClose routine closes an object handle. Declared here because windows-sys links it
+    /// against ntdll.dll.
+    pub(crate) fn ZwClose(handle: HANDLE) -> NTSTATUS;
     /// The KeDelayExecutionThread routine puts the current thread into an alertable or
     /// nonalertable wait state for a given interval.
     /// `interval` is a count of 100-nanosecond units: negative is relative to now, positive is an
@@ -1101,7 +973,7 @@ pub enum ClassifyDefer {
 impl ClassifyDefer {
     /// Completes the deferral where there is something to complete, and reports the resulting state
     /// of the connection together with the packet that was captured with it.
-    pub fn resolve(self) -> DeferResolution;
+    pub fn resolve(mut self) -> DeferResolution;
 }
 ```
 
@@ -1136,7 +1008,8 @@ pub struct CalloutData<'a> {
 
 ```rust
 impl<'a> CalloutData<'a> {
-    pub fn get_value_type(&self, index: usize) -> ValueType;
+    /// The type of the value at `index`. `None` for a type `ValueType` does not know.
+    pub fn get_value_type(&self, index: usize) -> Option<ValueType>;
     pub fn get_value_u8(&'a self, index: usize) -> u8;
     pub fn get_value_u16(&'a self, index: usize) -> u16;
     pub fn get_value_u32(&'a self, index: usize) -> u32;
@@ -1147,7 +1020,8 @@ impl<'a> CalloutData<'a> {
     /// Size of the IP header, including options (IPv4) or the extension header
     /// chain (IPv6). `None` if the layer does not provide the field.
     pub fn get_ip_header_size(&self) -> Option<u32>;
-    pub fn get_transport_header_size(&self) -> u32;
+    /// Size of the transport header. `None` if the layer does not provide the field.
+    pub fn get_transport_header_size(&self) -> Option<u32>;
     pub fn get_remote_scope_id(&self) -> Option<SCOPE_ID>;
     pub fn get_control_data(&self) -> Option<NonNull<[u8]>>;
     pub fn get_control_data_copy(&self) -> Option<Box<[u8]>>;
@@ -1171,6 +1045,12 @@ impl<'a> CalloutData<'a> {
     pub fn parmit_and_absorb(&mut self);
     pub fn get_callout_id(&self) -> usize;
 }
+```
+
+### Trait implementations
+
+```rust
+impl Drop for ClassifyDefer
 ```
 
 ---
@@ -1522,7 +1402,7 @@ pub(crate) fn filter_engine_transaction_abort(
 ```rust
 #[repr(C)]
 pub(crate) struct Value {
-    pub(crate) value_type: ValueType,
+    pub(crate) value_type: u32,
     pub(crate) value: ValueData,
 }
 ```
@@ -1581,6 +1461,13 @@ pub enum ValueType {
     FwpV6AddrMask = 0xff + 2,
     FwpRangeType = 0xff + 3,
     FwpDataTypeMax = 0xff + 4,
+}
+```
+
+```rust
+impl ValueType {
+    /// Maps a raw FWP_DATA_TYPE. `None` for a value this enum does not know.
+    pub fn from_raw(value: u32) -> Option<Self>;
 }
 ```
 
@@ -3208,6 +3095,13 @@ pub enum FieldsOutboundNetworkConnectionPolicyV6 {
 
 ## `wdk/src/filter_engine/metadata.rs`
 
+### Constants & statics
+
+```rust
+#[cfg(target_arch = "x86_64")]
+const _: () = ...;
+```
+
 ### Types
 
 #### `FwpsIncomingMetadataValues`
@@ -3263,7 +3157,7 @@ pub(crate) struct FwpsIncomingMetadataValues {
     parent_endpoint_handle: u64,
     icmp_id_and_sequence: u32,
     /// PID of the process that will be accepting the redirected connection
-    local_redirect_target_pid: u64,
+    local_redirect_target_pid: u32,
     /// original destination of a redirected connection
     original_destination: *mut c_void,
     redirect_records: HANDLE,
@@ -3273,9 +3167,9 @@ pub(crate) struct FwpsIncomingMetadataValues {
     l2_flags: u32,
     ethernet_mac_header_size: u32,
     wifi_operation_mode: u32,
-    padding0: u32,
-    padding1: u16,
-    padding2: u32,
+    v_switch_source_port_id: u32,
+    v_switch_source_nic_index: u16,
+    v_switch_destination_port_id: u32,
     v_switch_packet_context: HANDLE,
     sub_process_tag: *mut c_void,
     reserved1: u64,
@@ -3291,7 +3185,7 @@ impl FwpsIncomingMetadataValues {
     /// inbound IP packet layers it is the amount the net buffer has to be
     /// retreated by to expose the IP header.
     pub(crate) fn get_ip_header_size(&self) -> Option<u32>;
-    pub(crate) fn get_transport_header_size(&self) -> u32;
+    pub(crate) fn get_transport_header_size(&self) -> Option<u32>;
     pub(crate) fn get_process_id(&self) -> Option<u64>;
     pub(crate) unsafe fn get_process_path(&self) -> Option<String>;
     pub(crate) fn get_completion_handle(&self) -> Option<HANDLE>;
@@ -3372,6 +3266,14 @@ pub struct FilterEngine {
 impl FilterEngine {
     pub fn new(driver: &Driver, layer_guid: u128) -> Result<Self, String>;
     pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String>;
+    fn commit_in_transaction(&mut self, callouts: Vec<Callout>) -> Result<(), String>;
+    /// The filter id of every callout, in order. Taken before a transaction so it can be put back
+    /// with `restore_filter_ids` if the transaction is aborted.
+    fn filter_ids(&self) -> Vec<u64>;
+    /// Puts back the filter ids taken by `filter_ids`. An aborted transaction leaves WFP with the
+    /// filters it had before, so the ids recorded for them must match again. Callouts added after
+    /// the snapshot have no filter.
+    fn restore_filter_ids(&mut self, filter_ids: &[u64]);
     /// Reports whether any filter is still registered.
     fn has_registered_filters(&self) -> bool;
     /// Removes all registered filters, leaving the callouts in place. Once the transaction is
@@ -3381,6 +3283,7 @@ impl FilterEngine {
     ///
     /// Does nothing when the filters are already gone, so it is safe to call more than once.
     pub fn unregister_filters(&mut self) -> Result<(), String>;
+    fn unregister_filters_in_transaction(&mut self) -> Result<(), String>;
     /// Unregisters all registered callouts. This is the last step of the teardown and must run
     /// after `unregister_filters` and after every pended operation has been completed:
     /// `FwpsCalloutUnregisterById0` fails with STATUS_DEVICE_BUSY while an operation is still
@@ -3400,6 +3303,7 @@ impl FilterEngine {
     /// real failures and leaves the decision of when to try again to the caller, which can batch
     /// several deferred connections into one reset instead of racing per connection.
     pub fn reset_all_filters(&mut self) -> Result<(), ResetError>;
+    fn reset_all_filters_in_transaction(&mut self) -> Result<(), ResetError>;
     fn register_sublayer(&self) -> Result<(), String>;
 }
 ```
@@ -3408,6 +3312,8 @@ impl FilterEngine {
 
 ```rust
 impl From<ResetError> for String
+
+unsafe impl Send for FilterEngine
 
 impl Drop for FilterEngine
 ```
@@ -3556,7 +3462,9 @@ impl NetworkAllocator {
         &self,
         packet_data: &[u8],
     ) -> Result<*mut NET_BUFFER_LIST, String>;
-    pub fn free_net_buffer(nbl: *mut NET_BUFFER_LIST);
+    /// Frees a net buffer list allocated by `wrap_packet_in_nbl`, and its MDL. Only this one list:
+    /// whatever its `Next` points to is not ours to free.
+    pub(crate) fn free_net_buffer(nbl: *mut NET_BUFFER_LIST);
     /// Retreats the data start of the first net buffer.
     ///
     /// Returns an error if the retreat failed; the returned guard is `None` when
@@ -3863,49 +3771,72 @@ impl<'a> Drop for Transaction<'a>
 
 ## `wdk/src/interface.rs`
 
+### Constants & statics
+
+Device type FILE_DEVICE_NETWORK (winioctl.h).
+
+```rust
+const FILE_DEVICE_NETWORK: u32 = 0x12;
+```
+
+GUID_DEVCLASS_NET (devguid.h). IoCreateDeviceSecure looks up administrator overrides of the
+default security descriptor under this device class.
+
+```rust
+const GUID_DEVCLASS_NET: GUID = GUID::from_u128(0x4d36e972_e325_11ce_bfc1_08002be10318);
+```
+
 ### Functions
 
 ```rust
 pub fn dbg_print(str: String);
 ```
 
+Creates the driver's device (`\Device\<driver_name>`) and the symbolic link user space opens it
+by (`\\.\<driver_name>`). Only the system and administrators can open it.
+Call it from DriverEntry. The device stays in its initializing state until DriverEntry returns
+(the I/O manager clears DO_DEVICE_INITIALIZING then), so no request reaches it before the
+driver has finished setting up. Undo it with `delete_device`, also when DriverEntry fails later.
+
 ```rust
 pub fn init_driver_object(
     driver_object: *mut DRIVER_OBJECT,
-    registry_path: *mut UNICODE_STRING,
     driver_name: &str,
-    object_attributes: *mut WdfObjectAttributes,
 ) -> Result<Driver, String>;
 ```
 
+Removes what `init_driver_object` created: the symbolic link and the device.
+Call it from the unload routine, once nothing uses the device object any more (the callouts
+registered on it are unregistered), or when DriverEntry fails after `init_driver_object`.
+
 ```rust
-pub fn get_device_context_from_wdf_device<T>(
-    wdf_device: HANDLE,
-    type_info: &'static WdfObjectContextTypeInfo,
-) -> *mut T;
+pub fn delete_device(driver_object: *const DRIVER_OBJECT, driver_name: &str);
 ```
 
+The device name (`\Device\<driver_name>`) and the symbolic link name (`\??\<driver_name>`).
+
 ```rust
-pub(crate) fn wdf_device_wdm_get_device_object(
-    wdf_device: HANDLE,
-) -> *mut DEVICE_OBJECT;
+fn device_names(driver_name: &str) -> Result<(U16CString, U16CString), String>;
 ```
 
-```rust
-pub fn get_device_context_from_device_object<'a, T>(
-    device_object: &mut DEVICE_OBJECT,
-) -> Result<&'a mut T, ()>;
-```
-
-Empty unload event
+Borrows `string` as a UNICODE_STRING. The result points into `string`, so it must not outlive it.
 
 ```rust
-extern "C" fn empty_wdf_driver_unload(_driver: HANDLE);
+fn as_unicode_string(string: &U16CString) -> UNICODE_STRING;
 ```
 
 ---
 
 ## `wdk/src/ioqueue.rs`
+
+### Constants & statics
+
+How long a blocking pop waits before checking again whether the queue was run down, in
+100-nanosecond units (negative: relative to now). One second.
+
+```rust
+const WAIT_RECHECK_INTERVAL: i64 = -10_000_000;
+```
 
 ### Types
 
@@ -3918,6 +3849,8 @@ pub enum Status {
     Timeout,
     UserAPC,
     Abandoned,
+    /// The queue holds its maximum number of entries; the pushed entry was dropped.
+    Full,
 }
 ```
 
@@ -3947,15 +3880,22 @@ struct Entry<T> {
 pub struct IOQueue<T> {
     kernel_queue: Pin<Box<UnsafeCell<KQUEUE>>>,
     initialized: AtomicBool,
+    /// Entries pushed and not popped yet, counting the ones being pushed right now.
+    len: AtomicUsize,
+    max_len: usize,
+    /// Entries refused because the queue was full.
+    dropped: AtomicUsize,
     _type: PhantomData<T>,
 }
 ```
 
 ```rust
 impl<T> IOQueue<T> {
-    /// Make sure `rundown` is called on exit, if `drop()` is not called for queue.
-    pub fn new() -> Self;
-    /// Pushes new entry of any type.
+    /// A queue that holds up to `max_len` entries. Make sure `rundown` is called on exit, if
+    /// `drop()` is not called for queue.
+    pub fn new(max_len: usize) -> Self;
+    /// Pushes new entry of any type. Fails with `Full`, dropping the entry, when the queue already
+    /// holds `max_len` entries: nothing is reading it, and it must not grow without bound.
     pub fn push(&self, entry: T) -> Result<(), Status>;
     /// Returns an Element or a status.
     fn pop_internal(&self, timeout: *const i64) -> Result<T, Status>;
@@ -3965,8 +3905,17 @@ impl<T> IOQueue<T> {
     pub fn pop(&self) -> Result<T, Status>;
     /// Returns element or a status. Waits the specified timeout.
     pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status>;
+    /// Whether the queue holds `max_len` entries, so a push would fail.
+    pub fn is_full(&self) -> bool;
+    /// The number of entries waiting to be popped.
+    pub fn queued_count(&self) -> usize;
+    /// The number of entries `push` refused because the queue was full.
+    pub fn dropped_count(&self) -> usize;
     /// Removes all elements and frees all the memory. The object can't be used after this function is called.
     pub fn rundown(&self);
+    /// Frees the entries `KeRundownQueue` returned. `list_entries` is the first entry of the
+    /// circular list it handed back, or null when the queue was empty.
+    unsafe fn free_entries(list_entries: *mut LIST_ENTRY);
 }
 ```
 
@@ -3975,7 +3924,7 @@ impl<T> IOQueue<T> {
 ```rust
 impl Display for Status
 
-unsafe impl<T> Sync for IOQueue<T>
+unsafe impl<T: Send> Sync for IOQueue<T>
 
 impl<T> Drop for IOQueue<T>
 ```
@@ -4016,10 +3965,16 @@ pub struct ReadRequest<'a> {
 impl ReadRequest<'_> {
     pub fn new(irp: &'_ mut IRP) -> ReadRequest<'_>;
     pub fn free_space(&self) -> usize;
-    pub fn complete(&mut self);
-    pub fn end_of_file(&mut self);
-    pub fn timeout(&mut self);
-    pub fn get_status(&self) -> NTSTATUS;
+    /// The read succeeds, returning the bytes written with `write`.
+    pub fn set_success(&mut self);
+    /// The read ends with end of file, returning the bytes written with `write`.
+    pub fn set_end_of_file(&mut self);
+    /// The read times out.
+    pub fn set_timeout(&mut self);
+    /// Completes the request with the outcome that was set, handing the IRP back to the I/O
+    /// manager. Returns the status for the dispatch routine: the IRP must not be read once it is
+    /// completed.
+    pub fn complete(self) -> NTSTATUS;
     pub fn write(&mut self, bytes: &[u8]) -> usize;
 }
 ```
@@ -4038,8 +3993,9 @@ impl WriteRequest<'_> {
     pub fn new(irp: &'_ mut IRP) -> WriteRequest<'_>;
     pub fn get_buffer(&self) -> &[u8];
     pub fn mark_all_as_read(&mut self);
-    pub fn complete(&mut self);
-    pub fn get_status(&self) -> NTSTATUS;
+    /// Completes the request successfully, handing the IRP back to the I/O manager. Returns the
+    /// status for the dispatch routine: the IRP must not be read once it is completed.
+    pub fn complete(self) -> NTSTATUS;
 }
 ```
 
@@ -4059,9 +4015,11 @@ impl DeviceControlRequest<'_> {
     pub fn new(irp: &'_ mut IRP) -> DeviceControlRequest<'_>;
     pub fn get_buffer(&self) -> &[u8];
     pub fn write(&mut self, bytes: &[u8]) -> usize;
-    pub fn complete(&mut self);
-    pub fn not_implemented(&mut self);
-    pub fn get_status(&self) -> NTSTATUS;
+    /// Completes the request, returning the bytes written with `write`. Returns the status for the
+    /// dispatch routine: the IRP belongs to the I/O manager once it is completed and must not be read.
+    pub fn complete(self) -> NTSTATUS;
+    /// Completes the request as not implemented. Returns the status for the dispatch routine.
+    pub fn not_implemented(self) -> NTSTATUS;
     pub fn get_control_code(&self) -> u32;
     pub fn free_space(&self) -> usize;
 }
@@ -4079,6 +4037,76 @@ struct DeviceIOControlParams {
     io_control_code: u32,
     _padding3: u32,
 }
+```
+
+### Functions
+
+Completes `irp` successfully without transferring data, for requests that need no work from the
+driver (opening, cleaning up and closing a handle). Returns the status for the dispatch routine.
+
+```rust
+pub fn complete_empty(irp: &mut IRP) -> NTSTATUS;
+```
+
+The buffered-I/O system buffer of a request, `length` bytes long. A zero-length request has no
+system buffer, and a slice must not be built from a null pointer, even an empty one.
+
+```rust
+unsafe fn system_buffer<'a>(irp: &IRP, length: usize) -> &'a mut [u8];
+```
+
+---
+
+## `wdk/src/kmutex.rs`
+
+### Types
+
+#### `KMutex`
+
+A mutex backed by a kernel mutex object (KMUTEX), for data that is only used at PASSIVE_LEVEL.
+Unlike a spin lock or a FAST_MUTEX, holding it leaves the IRQL where it was (it only disables
+normal kernel APCs), so the holder can call routines that require PASSIVE_LEVEL, such as the
+filter engine management functions, and can wait.
+`lock` must be called at IRQL <= APC_LEVEL, because it waits. Never lock it again while holding
+it: kernel mutexes are recursive, so the second lock would succeed and hand out a second `&mut`.
+
+```rust
+pub struct KMutex<T> {
+    mutex: Box<UnsafeCell<KMUTANT>>,
+    data: UnsafeCell<T>,
+}
+```
+
+```rust
+impl<T> KMutex<T> {
+    pub fn new(data: T) -> Self;
+    /// Waits until the mutex is free and takes it. IRQL <= APC_LEVEL only.
+    pub fn lock(&self) -> KMutexGuard<'_, T>;
+}
+```
+
+#### `KMutexGuard`
+
+Owns the mutex until dropped.
+
+```rust
+pub struct KMutexGuard<'a, T> {
+    lock: &'a KMutex<T>,
+}
+```
+
+### Trait implementations
+
+```rust
+unsafe impl<T: Send> Sync for KMutex<T>
+
+unsafe impl<T: Send> Send for KMutex<T>
+
+impl<'a, T> Deref for KMutexGuard<'a, T>
+
+impl<'a, T> DerefMut for KMutexGuard<'a, T>
+
+impl<'a, T> Drop for KMutexGuard<'a, T>
 ```
 
 ---
@@ -4192,7 +4220,7 @@ pub struct MutexReadGuard<'a, T> {
 ### Trait implementations
 
 ```rust
-unsafe impl<T: Send> Sync for Mutex<T>
+unsafe impl<T: Send + Sync> Sync for Mutex<T>
 
 unsafe impl<T: Send> Send for Mutex<T>
 
@@ -4209,52 +4237,6 @@ impl<'a, T> Drop for MutexReadGuard<'a, T>
 
 ---
 
-## `wdk/src/spin_lock.rs`
-
-### Types
-
-#### `KSpinLockQueue`
-
-```rust
-#[repr(C)]
-struct KSpinLockQueue {
-    next: *mut c_void,
-    lock: *mut c_void,
-}
-```
-
-#### `KLockQueueHandle`
-
-```rust
-pub struct KLockQueueHandle {
-    lock: KLOCK_QUEUE_HANDLE,
-}
-```
-
-#### `KSpinLock`
-
-```rust
-#[repr(C)]
-pub struct KSpinLock {
-    ptr: *mut usize,
-}
-```
-
-```rust
-impl KSpinLock {
-    pub fn create() -> Self;
-    pub fn lock(&mut self) -> KLockQueueHandle;
-}
-```
-
-### Trait implementations
-
-```rust
-impl Drop for KLockQueueHandle
-```
-
----
-
 ## `wdk/src/utils.rs`
 
 ### Constants & statics
@@ -4263,6 +4245,12 @@ Kernel wait intervals are counted in 100-nanosecond units.
 
 ```rust
 const HUNDRED_NANOS_PER_MILLISECOND: i64 = 10_000;
+```
+
+Address of `KUSER_SHARED_DATA.InterruptTime` (64-bit kernel: `KI_USER_SHARED_DATA` + 0x8).
+
+```rust
+const SHARED_INTERRUPT_TIME: *const u64 = 0xFFFF_F780_0000_0008 as *const u64;
 ```
 
 ### Functions
@@ -4277,8 +4265,13 @@ pub fn ntstatus_name(status: i32) -> String;
 pub fn check_ntstatus(status: i32) -> Result<(), String>;
 ```
 
+Milliseconds since boot, including time spent in sleep and hibernation.
+Monotonic: unlike the system (wall-clock) time it is not moved by NTP or by the user setting the
+clock, so differences and comparisons between two readings are always meaningful. It is not a
+date; never send it to user space as one.
+
 ```rust
-pub fn get_system_timestamp_ms() -> u64;
+pub fn get_monotonic_ms() -> u64;
 ```
 
 Blocks the calling thread for at least `milliseconds`, giving the rest of the system a chance
@@ -4292,6 +4285,75 @@ pub fn sleep_ms(milliseconds: u32) -> Result<(), String>;
 
 ```rust
 pub fn get_startup_time_ns() -> u64;
+```
+
+---
+
+## `wdk/src/worker.rs`
+
+### Constants & statics
+
+THREAD_ALL_ACCESS (winnt.h).
+
+```rust
+const THREAD_ALL_ACCESS: u32 = 0x001F_FFFF;
+```
+
+### Types
+
+#### `Shared`
+
+What the thread works with. Boxed by `PeriodicWorker`, so its address stays the same for as
+long as the thread runs.
+
+```rust
+struct Shared {
+    stop: UnsafeCell<KEVENT>,
+    /// The wait between two runs, in 100-nanosecond units (negative: relative to now).
+    interval: i64,
+    routine: fn(),
+}
+```
+
+#### `PeriodicWorker`
+
+A kernel thread that calls a routine at a fixed interval, at PASSIVE_LEVEL, until stopped.
+The routine runs on a thread of its own, so it may wait and call routines that require
+PASSIVE_LEVEL. It is never called again once `stop` has returned.
+
+```rust
+pub struct PeriodicWorker {
+    shared: Box<Shared>,
+    /// The referenced thread object; null once the worker was stopped.
+    thread: AtomicPtr<c_void>,
+}
+```
+
+```rust
+impl PeriodicWorker {
+    /// Starts a thread that calls `routine` every `interval_ms` milliseconds, the first time one
+    /// interval from now. PASSIVE_LEVEL only.
+    pub fn start(interval_ms: u32, routine: fn()) -> Result<Self, String>;
+    /// Stops the thread and waits until it has ended; a routine that is running finishes first.
+    /// Safe to call more than once. PASSIVE_LEVEL only, and never from the routine itself.
+    pub fn stop(&self);
+}
+```
+
+### Trait implementations
+
+```rust
+unsafe impl Sync for PeriodicWorker
+
+unsafe impl Send for PeriodicWorker
+
+impl Drop for PeriodicWorker
+```
+
+### Functions
+
+```rust
+unsafe extern "system" fn thread_main(context: *mut c_void);
 ```
 
 ---

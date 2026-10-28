@@ -12,8 +12,10 @@ pub mod interface;
 pub mod ioqueue;
 pub mod irp_helpers;
 pub mod kernel_types;
+pub mod kmutex;
 pub mod rw_spin_lock;
 pub mod utils;
+pub mod worker;
 
 // Logging macros. The driver calls these through the renamed crate path
 // (`wdk::dbg!`, `wdk::info!`, `wdk::err!`). They expand to a no-op that still

@@ -13,14 +13,13 @@ Files: `command.go`, `info.go`, `ioctl.go`, `kext.go`, `kext_file.go`, `pipe_con
 ### Variables
 
 ```go
-var (
-	IOCTL_VERSION          = ctlCode(SIOCTL_TYPE, 0x800, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
-	IOCTL_SHUTDOWN_REQUEST = ctlCode(SIOCTL_TYPE, 0x801, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
-)
+var ErrorUnknownInfoType = errors.New("unknown info type")
 ```
 
 ```go
-var ErrorUnknownInfoType = errors.New("unknown info type")
+var (
+	IOCTL_VERSION = ctlCode(SIOCTL_TYPE, 0x800, METHOD_BUFFERED, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA)
+)
 ```
 
 ```go

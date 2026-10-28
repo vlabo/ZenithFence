@@ -397,7 +397,7 @@ pub enum ClassifyDefer {
 impl ClassifyDefer {
     /// Mirrors the real `resolve`: completing an `Initial` pend has no host-side
     /// effect, a `Reauthorization` is reported as still held by its filter.
-    pub fn resolve(self) -> DeferResolution;
+    pub fn resolve(mut self) -> DeferResolution;
 }
 ```
 
@@ -448,7 +448,9 @@ impl<'a> CalloutData<'a> {
         ip_header_size: u32,
         transport_header_size: u32,
     ) -> Self;
-    pub fn get_value_type(&self, index: usize) -> ValueType;
+    /// The type of the value at `index`. The real accessor returns `None` for a
+    /// raw type `ValueType` does not know; every mock `Value` maps to one.
+    pub fn get_value_type(&self, index: usize) -> Option<ValueType>;
     pub fn get_value_u8(&self, index: usize) -> u8;
     pub fn get_value_u16(&self, index: usize) -> u16;
     pub fn get_value_u32(&self, index: usize) -> u32;
@@ -457,7 +459,9 @@ impl<'a> CalloutData<'a> {
     /// Mirrors the real accessor, which returns `None` when the layer does not
     /// set the metadata field. The mock models an absent field as 0.
     pub fn get_ip_header_size(&self) -> Option<u32>;
-    pub fn get_transport_header_size(&self) -> u32;
+    /// Mirrors the real accessor, which returns `None` when the layer does not
+    /// set the metadata field. The mock models an absent field as 0.
+    pub fn get_transport_header_size(&self) -> Option<u32>;
     pub fn get_layer_data(&self) -> *mut c_void;
     pub fn pend_operation(
         &mut self,
@@ -477,6 +481,12 @@ impl<'a> CalloutData<'a> {
     pub fn is_reauthorize(&self, flags_index: usize) -> bool;
     pub fn get_callout_id(&self) -> usize;
 }
+```
+
+### Trait implementations
+
+```rust
+impl Drop for ClassifyDefer
 ```
 
 ---
@@ -2066,33 +2076,32 @@ Host mock of `wdk::interface`. Just enough to let the driver's real
 `DriverEntry` run: bind a [`Driver`] to the caller-provided `DRIVER_OBJECT`
 so handler registration writes into it.
 
-### Types
-
-#### `WdfObjectAttributes`
-
-Mock of `wdk::ffi::WdfObjectAttributes`. The driver only ever passes a null
-pointer for it, so the mock is an opaque stand-in to type the argument.
-
-```rust
-pub struct WdfObjectAttributes;
-```
-
 ### Functions
 
 Mock of `wdk::interface::init_driver_object`.
-The real version creates the WDF driver/device objects via FFI and returns a
-`Driver` wrapping them. The mock has no WDF: it binds the `Driver` to the
-caller-owned `DRIVER_OBJECT` (so the subsequent `set_*_fn` calls land in
-`MajorFunction`) and creates the device object (the IoCreateDevice step),
-which the filter engine requires for callout registration.
+The real version creates the device (IoCreateDeviceSecure) and its symbolic
+link, and returns a `Driver` wrapping them. The mock has no object namespace:
+it creates the device object in the caller-owned `DRIVER_OBJECT` (which the
+filter engine requires for callout registration) and binds the `Driver` to it,
+so the subsequent `set_*_fn` calls land in `MajorFunction`. Undo it with
+[`delete_device`].
 
 ```rust
 pub fn init_driver_object(
     driver_object: *mut DRIVER_OBJECT,
-    _registry_path: *mut UNICODE_STRING,
     _driver_name: &str,
-    _object_attributes: *mut WdfObjectAttributes,
 ) -> Result<Driver, String>;
+```
+
+Mock of `wdk::interface::delete_device`: removes the device object
+[`init_driver_object`] created (IoDeleteDevice), so a later use of it shows
+up as a null device object, as in the kernel.
+Like `IoDeleteDevice`, it changes the driver object it is handed, so the
+pointer must come from one the caller may write (the loader passes its owned
+`DRIVER_OBJECT`).
+
+```rust
+pub fn delete_device(driver_object: *const DRIVER_OBJECT, _driver_name: &str);
 ```
 
 ---
@@ -2120,6 +2129,8 @@ pub enum Status {
     Timeout,
     UserAPC,
     Abandoned,
+    /// The queue holds its maximum number of entries; the pushed entry was dropped.
+    Full,
 }
 ```
 
@@ -2127,7 +2138,9 @@ pub enum Status {
 
 Host mock of the kernel `IOQueue`, backed by a `VecDeque` guarded by a
 `Mutex` + `Condvar`.
-The driver creates its queue with `IOQueue::new()` (the same call as against
+Bounded to `max_len` entries like the kernel queue: `push` refuses more with
+`Full` and counts the drop.
+The driver creates its queue with `IOQueue::new(max_len)` (the same call as against
 the real `wdk`), so the mode is a process-wide setting the harness picks
 before loading the driver ([`set_default_blocking`]). The host harness has
 two very different needs:
@@ -2147,14 +2160,17 @@ pub struct IOQueue<T> {
     inner: Mutex<Inner<T>>,
     cond: Condvar,
     blocking: bool,
+    max_len: usize,
+    /// Entries refused because the queue was full.
+    dropped: AtomicUsize,
 }
 ```
 
 ```rust
 impl<T> IOQueue<T> {
-    /// A queue in the mode chosen by [`set_default_blocking`] (see type docs).
-    pub fn new() -> Self;
-    fn with_blocking(blocking: bool) -> Self;
+    /// A queue that holds up to `max_len` entries, in the mode chosen by
+    /// [`set_default_blocking`] (see type docs).
+    pub fn new(max_len: usize) -> Self;
     pub fn push(&self, entry: T) -> Result<(), Status>;
     /// Non-blocking pop. Returns `Timeout` when empty (mirrors the real `pop()`
     /// with a zero timeout).
@@ -2163,6 +2179,12 @@ impl<T> IOQueue<T> {
     /// Blocks up to `timeout` milliseconds for an entry. Returns `Timeout` if the
     /// deadline passes with the queue still empty, or `Abandoned` after rundown.
     pub fn pop_timeout(&self, timeout: i64) -> Result<T, Status>;
+    /// Whether the queue holds `max_len` entries, so a push would fail.
+    pub fn is_full(&self) -> bool;
+    /// The number of entries waiting to be popped.
+    pub fn queued_count(&self) -> usize;
+    /// The number of entries `push` refused because the queue was full.
+    pub fn dropped_count(&self) -> usize;
     /// Closes the queue: drops all pending entries and wakes every blocked
     /// waiter with `Abandoned`. The queue must not be used afterwards (mirrors
     /// `KeRundownQueue`).
@@ -2184,9 +2206,7 @@ struct Inner<T> {
 ```rust
 impl Display for Status
 
-unsafe impl<T> Sync for IOQueue<T>
-
-impl<T> Default for IOQueue<T>
+unsafe impl<T: Send> Sync for IOQueue<T>
 ```
 
 ### Functions
@@ -2224,11 +2244,16 @@ impl<'a> ReadRequest<'a> {
     /// buffer is the IRP's system buffer, sized to `output_len`.
     pub fn new(irp: &'a mut IRP) -> ReadRequest<'a>;
     pub fn free_space(&self) -> usize;
-    pub fn complete(&mut self);
-    pub fn end_of_file(&mut self);
-    pub fn timeout(&mut self);
-    fn set_status(&mut self, status: i32);
-    pub fn get_status(&self) -> i32;
+    /// The read succeeds, returning the bytes written with `write`.
+    pub fn set_success(&mut self);
+    /// The read ends with end of file, returning the bytes written with `write`.
+    pub fn set_end_of_file(&mut self);
+    /// The read times out.
+    pub fn set_timeout(&mut self);
+    /// Completes the request with the outcome that was set. Returns the status
+    /// for the dispatch routine.
+    pub fn complete(self) -> NTSTATUS;
+    fn set_status(&mut self, status: NTSTATUS, information: usize);
     pub fn write(&mut self, bytes: &[u8]) -> usize;
     /// Test helper: the bytes written so far.
     pub fn written(&self) -> &[u8];
@@ -2256,8 +2281,9 @@ impl<'a> WriteRequest<'a> {
     pub fn new(irp: &'a mut IRP) -> WriteRequest<'a>;
     pub fn get_buffer(&self) -> &[u8];
     pub fn mark_all_as_read(&mut self);
-    pub fn complete(&mut self);
-    pub fn get_status(&self) -> i32;
+    /// Completes the request successfully. Returns the status for the dispatch
+    /// routine.
+    pub fn complete(mut self) -> NTSTATUS;
 }
 ```
 
@@ -2284,12 +2310,33 @@ impl<'a> DeviceControlRequest<'a> {
     pub fn new(irp: &'a mut IRP) -> DeviceControlRequest<'a>;
     pub fn get_buffer(&self) -> &[u8];
     pub fn write(&mut self, bytes: &[u8]) -> usize;
-    pub fn complete(&mut self);
-    pub fn not_implemented(&mut self);
-    pub fn get_status(&self) -> i32;
+    /// Completes the request, returning the bytes written with `write`. Returns
+    /// the status for the dispatch routine.
+    pub fn complete(mut self) -> NTSTATUS;
+    /// Completes the request as not implemented. Returns the status for the
+    /// dispatch routine.
+    pub fn not_implemented(mut self) -> NTSTATUS;
     pub fn get_control_code(&self) -> u32;
     pub fn free_space(&self) -> usize;
 }
+```
+
+### Functions
+
+Completes `irp` successfully without transferring data, for requests that
+need no work from the driver (opening, cleaning up and closing a handle).
+Returns the status for the dispatch routine.
+
+```rust
+pub fn complete_empty(irp: &mut IRP) -> NTSTATUS;
+```
+
+The system buffer of a request, `length` bytes long. A zero-length request
+may have no buffer, and a slice must not be built from a null pointer, even an
+empty one.
+
+```rust
+unsafe fn system_buffer<'a>(irp: &IRP, length: usize) -> &'a mut [u8];
 ```
 
 ---
@@ -2365,9 +2412,8 @@ pub type NTSTATUS = i32;
 
 #### `UNICODE_STRING`
 
-The registry path handed to `DriverEntry`. The driver never dereferences it
-(it is passed straight through to `init_driver_object`), so the mock is an
-opaque zero-sized stand-in.
+The registry path handed to `DriverEntry`. The driver never uses it, so the
+mock is an opaque zero-sized stand-in.
 
 ```rust
 pub struct UNICODE_STRING;
@@ -2415,8 +2461,8 @@ pointers into `MajorFunction[IRP_MJ_*]` / `DriverUnload`; the mock `Driver`
 does the same so a `DriverConnection` can read them back and dispatch exactly
 like the kernel I/O manager.
 `DeviceObject` models the WDM field of the same name: null until driver init
-creates a device (`interface::init_driver_object` here, IoCreateDevice in the
-kernel). The mock filter engine refuses callout registration without one,
+creates a device (`interface::init_driver_object` here, IoCreateDeviceSecure
+in the kernel) and again once `interface::delete_device` removed it. The mock filter engine refuses callout registration without one,
 like `FwpsCalloutRegister` does. Owned: freed on drop.
 
 ```rust
@@ -2480,6 +2526,56 @@ unsafe impl Sync for DRIVER_OBJECT
 impl Drop for DRIVER_OBJECT
 
 impl Default for DRIVER_OBJECT
+```
+
+---
+
+## `mock/wdk/src/kmutex.rs`
+
+Host mock of `wdk::kmutex`, backed by `std::sync::Mutex`.
+The kernel version waits on a KMUTEX and leaves the IRQL alone, so its holder
+may call PASSIVE_LEVEL routines and wait. The host has no IRQL; only the
+mutual exclusion matters here.
+
+### Types
+
+#### `KMutex`
+
+```rust
+pub struct KMutex<T> {
+    inner: Mutex<T>,
+}
+```
+
+```rust
+impl<T> KMutex<T> {
+    pub fn new(data: T) -> Self;
+    /// Waits until the mutex is free and takes it. Recovers from poison: a
+    /// panicking holder must not wedge every later caller and hide the failure.
+    ///
+    /// Unlike the kernel mutex this one is not recursive: locking it again while
+    /// holding it deadlocks instead of handing out a second `&mut`, which the
+    /// real type forbids anyway.
+    pub fn lock(&self) -> KMutexGuard<'_, T>;
+}
+```
+
+#### `KMutexGuard`
+
+Owns the mutex until dropped.
+
+```rust
+pub struct KMutexGuard<'a, T> {
+    guard: MutexGuard<'a, T>,
+}
+```
+
+### Trait implementations
+
+```rust
+impl<T> Deref for KMutexGuard<'_, T>
+
+impl<T> DerefMut for KMutexGuard<'_, T>
 ```
 
 ---
@@ -2621,11 +2717,12 @@ after `set_mock_time_ms` has pinned the clock to a non-zero value.
 pub fn advance_mock_time_ms(delta: u64);
 ```
 
-System time in milliseconds since 1601-01-01, like the kernel's
-`KeQuerySystemTime` (not the Unix epoch).
+Milliseconds since "boot", like the kernel's interrupt time. Monotonic: the
+host clock is `Instant`, counted from the first call in the process (the
+mock's boot), unless a test pinned it with `set_mock_time_ms`.
 
 ```rust
-pub fn get_system_timestamp_ms() -> u64;
+pub fn get_monotonic_ms() -> u64;
 ```
 
 ```rust
@@ -2637,6 +2734,55 @@ fails above APC_LEVEL. The host has no IRQL, so this just sleeps the thread.
 
 ```rust
 pub fn sleep_ms(milliseconds: u32) -> Result<(), String>;
+```
+
+---
+
+## `mock/wdk/src/worker.rs`
+
+Host mock of `wdk::worker::PeriodicWorker`: a `std::thread` instead of a
+kernel system thread, stopped through a `Condvar` instead of a KEVENT.
+
+### Types
+
+#### `StopSignal`
+
+Set once the worker is stopped; the thread waits on it between runs.
+
+```rust
+struct StopSignal {
+    stopped: Mutex<bool>,
+    cond: Condvar,
+}
+```
+
+#### `PeriodicWorker`
+
+A thread that calls a routine at a fixed interval until stopped. Like the
+kernel version, the routine is never called again once `stop` has returned.
+
+```rust
+pub struct PeriodicWorker {
+    signal: Arc<StopSignal>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+```
+
+```rust
+impl PeriodicWorker {
+    /// Starts a thread that calls `routine` every `interval_ms` milliseconds, the
+    /// first time one interval from now.
+    pub fn start(interval_ms: u32, routine: fn()) -> Result<Self, String>;
+    /// Stops the thread and waits until it has ended; a routine that is running
+    /// finishes first. Safe to call more than once. Never from the routine itself.
+    pub fn stop(&self);
+}
+```
+
+### Trait implementations
+
+```rust
+impl Drop for PeriodicWorker
 ```
 
 ---

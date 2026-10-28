@@ -122,32 +122,6 @@ pub fn ale_resource_monitor(data: CalloutData);
 
 ---
 
-## `driver/src/array_holder.rs`
-
-### Types
-
-#### `ArrayHolder`
-
-```rust
-pub struct ArrayHolder(RefCell<Option<Vec<u8>>>);
-```
-
-```rust
-impl ArrayHolder {
-    pub const fn default() -> Self;
-    pub fn save(&self, data: &[u8]);
-    pub fn load(&self) -> Option<Vec<u8>>;
-}
-```
-
-### Trait implementations
-
-```rust
-unsafe impl Sync for ArrayHolder
-```
-
----
-
 ## `driver/src/callouts.rs`
 
 ### Functions
@@ -236,9 +210,6 @@ pub enum ControlCode {
     Version = ctl_code!(
         SIOCTL_TYPE, 0x800, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA
     ),
-    ShutdownRequest = ctl_code!(
-        SIOCTL_TYPE, 0x801, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA
-    ),
 }
 ```
 
@@ -310,13 +281,15 @@ pub enum Direction {
 
 ```rust
 pub trait Connection {
+    /// What tells apart the connections on one local port (the cache slot already fixes the
+    /// protocol and the local port). The cache keeps it inline, next to the pointer to the
+    /// connection, so a lookup scans contiguous memory and only dereferences the match.
+    type CompactKey: Copy + PartialEq;
+    /// The compact key of this connection.
+    fn compact_key(&self) -> Self::CompactKey;
+    /// The compact key of `key`, or `None` if `key` is of the other IP version.
+    fn compact_key_of(key: &Key) -> Option<Self::CompactKey>;
     fn redirect_info(&self) -> Option<RedirectInfo>;
-    /// Builds the [`Key`] that identifies this connection (protocol, local and
-    /// remote address/port). Relies on the address/port accessors, so it works
-    /// for both IPv4 and IPv6 connections without per-type duplication.
-    fn get_key(&self) -> Key;
-    /// Returns true if the connection is equal to the given key.
-    fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
     /// Returns the protocol of the connection.
@@ -347,7 +320,13 @@ pub trait Connection {
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
     fn set_verdict(&self, verdict: Verdict);
+    /// Sets the verdict to `new` only if it is `current`. Returns whether it did.
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool;
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
+    /// The event that tells user space the connection ended, with its final counters.
+    fn end_info(&self, process_id: u64) -> Info;
+    /// The event that reports the connection's counters (GetConnectionsUpdate).
+    fn update_info(&self) -> Info;
     fn update_bandwidth_data(&self, bytes: u64, direction: Direction);
 }
 ```
@@ -429,6 +408,32 @@ impl ConnectionV6 {
 }
 ```
 
+#### `CompactKeyV4`
+
+`Connection::CompactKey` of an IPv4 connection.
+
+```rust
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV4 {
+    local_address: Ipv4Address,
+    remote_address: Ipv4Address,
+    remote_port: u16,
+}
+```
+
+#### `CompactKeyV6`
+
+`Connection::CompactKey` of an IPv6 connection.
+
+```rust
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV6 {
+    local_address: Ipv6Address,
+    remote_address: Ipv6Address,
+    remote_port: u16,
+}
+```
+
 #### `RedirectInfo`
 
 ```rust
@@ -496,12 +501,19 @@ impl core::fmt::Display for Key
 const PORT_COUT: usize = u16::MAX as usize + 1;
 ```
 
+The most stale connections one `clean_ended_connections` call evicts per IP version, which
+bounds the end events it sends at once.
+
+```rust
+const MAX_STALE_EVICTIONS: usize = 100;
+```
+
 ### Types
 
 #### `PortArray`
 
 ```rust
-type PortArray<T> = [RCUPort<T>; PORT_COUT];
+type PortArray<T> = [PortConnections<T>; PORT_COUT];
 ```
 
 #### `ConnectionCache`
@@ -512,47 +524,62 @@ pub struct ConnectionCache {
     udp_v4: Box<PortArray<ConnectionV4>>,
     tcp_v6: Box<PortArray<ConnectionV6>>,
     udp_v6: Box<PortArray<ConnectionV6>>,
-    unlinked_ports_v4: MpscQueue<ConnectionArray<ConnectionV4>>,
-    unlinked_ports_v6: MpscQueue<ConnectionArray<ConnectionV6>>,
 }
 ```
 
 ```rust
 impl ConnectionCache {
-    pub fn new() -> Self;
+    pub fn new() -> Result<Self, String>;
     pub fn add_v4(&self, new: ConnectionV4);
     pub fn add_v6(&self, new: ConnectionV6);
-    pub fn end_v4(&self, key: Key) -> Option<Arc<ConnectionV4>>;
-    pub fn end_v6(&self, key: Key) -> Option<Arc<ConnectionV6>>;
-    pub fn end_all_on_port_v4(
+    /// Marks the connection matching `key` as ended and runs `f` on it.
+    pub fn end_v4<R>(&self, key: Key, f: impl FnOnce(&ConnectionV4) -> R) -> Option<R>;
+    /// Marks the connection matching `key` as ended and runs `f` on it.
+    pub fn end_v6<R>(&self, key: Key, f: impl FnOnce(&ConnectionV6) -> R) -> Option<R>;
+    /// Marks every active connection on the port as ended and runs `f` on each.
+    pub fn end_all_on_port_v4<R>(
         &self,
         key: (IpProtocol, u16),
-    ) -> Option<Vec<Arc<ConnectionV4>>>;
-    pub fn end_all_on_port_v6(
+        f: impl FnMut(&ConnectionV4) -> R,
+    ) -> Vec<R>;
+    /// Marks every active connection on the port as ended and runs `f` on each.
+    pub fn end_all_on_port_v6<R>(
         &self,
         key: (IpProtocol, u16),
-    ) -> Option<Vec<Arc<ConnectionV6>>>;
+        f: impl FnMut(&ConnectionV6) -> R,
+    ) -> Vec<R>;
+    /// Sets the verdict of the connection matching `key`, returning any redirect info.
     pub fn update_connection(&self, key: Key, verdict: Verdict) -> Option<RedirectInfo>;
-    pub fn clean_ended_connections(
+    pub fn clean_ended_connections<R>(
         &self,
-    ) -> (Vec<Arc<ConnectionV4>>, Vec<Arc<ConnectionV6>>);
+        on_stale_v4: impl FnMut(&ConnectionV4) -> R,
+        on_stale_v6: impl FnMut(&ConnectionV6) -> R,
+    ) -> Vec<R>;
+    /// Fails the connection matching `key` if it is still undecided, so a verdict that arrived in
+    /// the meantime is kept.
+    pub fn fail_if_undecided(&self, key: &Key);
+    /// The verdict of the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time.
     pub fn get_verdict(&self, key: &Key) -> Option<Verdict>;
     pub fn walk_over_connections_v4<F: FnMut(&ConnectionV4)>(&self, iter: F);
     pub fn walk_over_connections_v6<F: FnMut(&ConnectionV6)>(&self, iter: F);
-    pub fn get_unlinked_queue_counts(&self) -> (usize, usize);
     pub fn get_entries_count(&self) -> (usize, usize);
-    pub fn get_connection_v4(&self, key: &Key) -> Option<Arc<ConnectionV4>>;
-    pub fn get_connection_v6(&self, key: &Key) -> Option<Arc<ConnectionV6>>;
+    /// Runs `f` on the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time. Takes the port's lock shared.
+    pub fn with_connection_v4<R>(
+        &self,
+        key: &Key,
+        f: impl FnOnce(&ConnectionV4) -> R,
+    ) -> Option<R>;
+    /// Runs `f` on the connection matching `key`, including redirect matches. Refreshes the
+    /// last-accessed time. Takes the port's lock shared.
+    pub fn with_connection_v6<R>(
+        &self,
+        key: &Key,
+        f: impl FnOnce(&ConnectionV6) -> R,
+    ) -> Option<R>;
     pub fn clear(&self);
 }
-```
-
-### Trait implementations
-
-```rust
-impl Default for ConnectionCache
-
-impl Drop for ConnectionCache
 ```
 
 ### Functions
@@ -563,70 +590,71 @@ fn get_port<'a, T: Connection>(
     udp: &'a PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
-) -> Option<&'a RCUPort<T>>;
+) -> Option<&'a PortConnections<T>>;
 ```
 
 ```rust
-fn alloc_port_array<T: Connection>() -> Box<PortArray<T>>;
+fn alloc_port_array<T: Connection>() -> Result<Box<PortArray<T>>, String>;
+```
+
+The connection `key` names exactly.
+
+```rust
+fn find_exact<'a, T: Connection>(entries: &'a [Entry<T>], key: &Key) -> Option<&'a T>;
+```
+
+The connection `key` names, or the redirected connection a packet with `key` belongs to.
+
+```rust
+fn find_exact_or_redirect<'a, T: Connection>(
+    entries: &'a [Entry<T>],
+    key: &Key,
+) -> Option<&'a T>;
 ```
 
 ```rust
-fn ports_clear<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-);
-```
-
-```rust
-fn get_connection<T: Connection>(
+fn with_exact<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     key: &Key,
-) -> Option<Arc<T>>;
+    f: impl FnOnce(&T) -> R,
+) -> Option<R>;
 ```
 
 ```rust
-fn add_connection<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-    new: T,
-);
-```
-
-```rust
-fn end_connection<T: Connection>(
+fn with_exact_or_redirect<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     key: &Key,
-) -> Option<Arc<T>>;
+    f: impl FnOnce(&T) -> R,
+) -> Option<R>;
 ```
 
 ```rust
-fn end_all_on_port<T: Connection>(
+fn ports_clear<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>);
+```
+
+```rust
+fn add_connection<T: Connection>(tcp: &PortArray<T>, udp: &PortArray<T>, new: T);
+```
+
+```rust
+fn end_connection<T: Connection, R>(
+    tcp: &PortArray<T>,
+    udp: &PortArray<T>,
+    key: &Key,
+    f: impl FnOnce(&T) -> R,
+) -> Option<R>;
+```
+
+```rust
+fn end_all_on_port<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
     protocol: IpProtocol,
     local_port: u16,
-) -> Option<Vec<Arc<T>>>;
-```
-
-```rust
-fn set_connection_verdict<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    key: &Key,
-    verdict: Verdict,
-) -> Option<RedirectInfo>;
-```
-
-```rust
-fn find_verdict<T: Connection>(
-    tcp: &PortArray<T>,
-    udp: &PortArray<T>,
-    key: &Key,
-) -> Option<Verdict>;
+    mut f: impl FnMut(&T) -> R,
+) -> Vec<R>;
 ```
 
 ```rust
@@ -638,17 +666,38 @@ fn ports_walk<T: Connection, F: FnMut(&T)>(
 ```
 
 ```rust
-fn ports_clean_ended<T: Connection>(
+fn ports_clean_ended<T: Connection, R>(
     tcp: &PortArray<T>,
     udp: &PortArray<T>,
-    removed_connections: &mut Vec<Arc<T>>,
-    queue: &MpscQueue<ConnectionArray<T>>,
-);
+    mut on_stale: impl FnMut(&T) -> R,
+) -> Vec<R>;
 ```
 
 ---
 
 ## `driver/src/device.rs`
+
+### Constants & statics
+
+The most events waiting for user space to read them. Past it, events are dropped (packet
+events: the packet is blocked), so a stalled reader cannot make the queue grow without bound.
+
+```rust
+const MAX_EVENTS: usize = 16384;
+```
+
+How long a packet waits for its verdict. User space answers in milliseconds; a packet still
+waiting after this is blocked, so a connect does not hang on an agent that stopped answering.
+
+```rust
+const PACKET_VERDICT_TIMEOUT_MS: u64 = 30_000;
+```
+
+How often the maintenance thread runs (`maintenance`).
+
+```rust
+const MAINTENANCE_INTERVAL_MS: u32 = 1000;
+```
 
 ### Types
 
@@ -666,24 +715,21 @@ pub enum Packet {
 Gives `&self` access to the `FilterEngine`, which needs `&mut` for its WFP transactions.
 It cannot sit behind the `rw_spin_lock::Mutex` like the rest of the shared state: acquiring
 that raises the IRQL to DISPATCH_LEVEL, while the filter engine calls (`FwpmTransaction*`,
-filter and callout (un)registration) must run at PASSIVE_LEVEL, and the reset and teardown
-paths wait between attempts (`wdk::utils::sleep_ms` refuses to above APC_LEVEL).
-In the kernel build the mutable access is serialized by the driver instead: a filter reset
-only ever runs on the thread holding the `filter_reset_queue` drain claim, and the teardown
-runs from `shutdown`. WFP itself rejects overlapping transactions with
-`STATUS_FWP_TXN_IN_PROGRESS`, which both paths retry on.
+filter and callout (un)registration) must run at PASSIVE_LEVEL. A kernel mutex keeps the IRQL
+where it is, so the teardown (`shutdown`) and the filter resets (`reset_filters_and_inject`)
+take turns, and a reset sees the filters the teardown removed instead of adding them back.
 
 ```rust
 pub struct FilterEngineCell {
-    inner: core::cell::UnsafeCell<FilterEngine>,
+    inner: KMutex<FilterEngine>,
 }
 ```
 
 ```rust
 impl FilterEngineCell {
     fn new(filter_engine: FilterEngine) -> Self;
-    /// Runs `f` with mutable access to the filter engine. Must only be called at PASSIVE_LEVEL,
-    /// from the paths described on the type, and never re-entered from within `f`.
+    /// Runs `f` with exclusive access to the filter engine. Must only be called at PASSIVE_LEVEL,
+    /// and never from within `f`.
     pub fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R;
 }
 ```
@@ -693,7 +739,7 @@ impl FilterEngineCell {
 ```rust
 pub struct Device {
     pub filter_engine: FilterEngineCell,
-    pub(crate) read_leftover: ArrayHolder,
+    pub(crate) pending_event: PendingEvent,
     pub(crate) event_queue: IOQueue<Info>,
     pub packet_cache: IdCache,
     pub connection_cache: ConnectionCache,
@@ -705,6 +751,9 @@ pub struct Device {
     /// Set once the teardown has begun. Callouts check it and stop pending operations, because
     /// from that point on nothing is left to answer a pend.
     shutdown_started: AtomicBool,
+    /// Blocks the packets that waited too long for a verdict. Runs at PASSIVE_LEVEL, because
+    /// releasing a connection held by a filter takes a filter reset.
+    maintenance: PeriodicWorker,
 }
 ```
 
@@ -717,6 +766,27 @@ impl Device {
     /// is set: the packet cache is being drained and the user space handle is on its way out, so
     /// a pend made now would never be completed.
     pub fn is_shutting_down(&self) -> bool;
+    /// Whether user space is not keeping up: the packet cache or the event queue is full. Callouts
+    /// check it before capturing a packet, and block the packet (fail closed) instead of pending it.
+    pub fn is_backlogged(&self) -> bool;
+    /// Hands a captured packet to user space: into the packet cache to wait for its verdict, and
+    /// its event into the event queue. Callable at DISPATCH_LEVEL.
+    pub fn queue_packet(
+        &self,
+        key: Key,
+        packet: Packet,
+        process_id: u64,
+        direction: Direction,
+        ale_layer: bool,
+    );
+    /// Blocks a captured packet that user space did not answer. A pended connection that is still
+    /// undecided is failed first, so the classify its reinjection triggers blocks it; one that got
+    /// a verdict in the meantime keeps it. PASSIVE_LEVEL only: a connection held by a filter is
+    /// released by a filter reset.
+    fn resolve_unanswered(&self, key: Key, packet: Packet);
+    /// Blocks the packets that have waited `PACKET_VERDICT_TIMEOUT_MS` for a verdict.
+    /// PASSIVE_LEVEL only.
+    fn expire_unanswered_packets(&self);
     /// Cleanup is called just before drop.
     fn write_buffer(&self, read_request: &mut ReadRequest, info: Info);
     /// Called when handle. Read is called from user-space.
@@ -725,7 +795,7 @@ impl Device {
     /// Tears the device down, in the only order that leaves nothing behind for the unload:
     /// remove the filters, complete everything that is still pended, then remove the callouts.
     ///
-    /// Reachable from the shutdown command (write and device-control) and from the unload path,
+    /// Reachable from the shutdown command (write) and from the unload path,
     /// and safe to call more than once: the one-time part runs once, the rest runs on every call
     /// so anything that raced in afterwards is still resolved.
     pub fn shutdown(&self);
@@ -735,7 +805,18 @@ impl Device {
     /// process can no longer be terminated. Everything is resolved with a verdict here so the
     /// callouts can be unregistered cleanly.
     fn complete_pending_packets(&self);
-    pub fn inject_packet(&self, packet: Packet, blocked: bool) -> Result<(), String>;
+    /// Injects a captured packet that was permitted: a copy from the packet layer goes out, a
+    /// pended ALE packet is reinjected (`reinject_ale`).
+    pub fn inject_permitted_packet(&self, packet: Packet) -> Result<(), String>;
+    /// Injects a captured packet that was blocked, where an injection is needed. A pended ALE
+    /// packet is reinjected (`reinject_ale`) and the cached verdict blocks it; Windows waits for
+    /// it. A copy from the packet layer needs no injection and is dropped.
+    pub fn inject_blocked_packet(&self, packet: Packet) -> Result<(), String>;
+    /// Completes a pended ALE packet and reinjects it, whatever the verdict. The first packet of a
+    /// new connection was pended, and Windows waits for it. Injecting it runs it through the
+    /// classify again, where the cached verdict (blocked or not) decides it. A pended packet must
+    /// never be left without a verdict.
+    fn reinject_ale(&self, defer: ClassifyDefer) -> Result<(), String>;
     /// Resets the filters to let go of the connections that are still held by one, and injects the
     /// packets that were captured with them.
     ///
@@ -773,9 +854,21 @@ impl Device {
 ### Trait implementations
 
 ```rust
-unsafe impl Sync for FilterEngineCell
-
 impl Drop for Device
+```
+
+### Functions
+
+Logs one line describing `conn`, for PrintMemoryStats.
+
+```rust
+fn log_connection<T: Connection>(conn: &T);
+```
+
+The maintenance thread's routine, every `MAINTENANCE_INTERVAL_MS` at PASSIVE_LEVEL.
+
+```rust
+fn maintenance();
 ```
 
 ---
@@ -786,6 +879,10 @@ impl Drop for Device
 
 ```rust
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
+```
+
+```rust
+const DRIVER_NAME: &str = "ZenithFence";
 ```
 
 ```rust
@@ -801,12 +898,21 @@ pub fn get_device() -> Option<&'static device::Device>;
 ```rust
 pub extern "system" fn driver_entry(
     driver_object: *mut DRIVER_OBJECT,
-    registry_path: *mut UNICODE_STRING,
+    _registry_path: *mut UNICODE_STRING,
 ) -> NTSTATUS;
 ```
 
 ```rust
-unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT);
+unsafe extern "system" fn driver_unload(object: *const DRIVER_OBJECT);
+```
+
+Opening, cleaning up and closing a handle need no work from the driver; they only have to succeed.
+
+```rust
+unsafe extern "system" fn driver_open_close(
+    _device_object: &mut DEVICE_OBJECT,
+    irp: &mut IRP,
+) -> NTSTATUS;
 ```
 
 ```rust
@@ -921,6 +1027,15 @@ impl FilterResetQueue {
 pub const PACKET_MISSING_ID: u64 = u64::MAX;
 ```
 
+The most packets held for a verdict at once. Each one is a copy of up to an MTU-sized packet,
+so this bounds the memory a stalled user space can make the driver hold to a few megabytes.
+Callers check `is_full` before capturing a packet, so concurrent callouts can overshoot it by
+about one entry per processor.
+
+```rust
+pub const MAX_PENDING_PACKETS: usize = 32_768;
+```
+
 ### Types
 
 #### `Entry`
@@ -929,6 +1044,8 @@ pub const PACKET_MISSING_ID: u64 = u64::MAX;
 pub struct Entry<T> {
     pub value: T,
     id: u64,
+    /// When the entry was pushed (`get_monotonic_ms`).
+    queued_at_ms: u64,
 }
 ```
 
@@ -938,23 +1055,33 @@ pub struct Entry<T> {
 pub struct IdCache {
     values: Mutex<VecDeque<Entry<(Key, Packet)>>>,
     next_id: AtomicU64,
+    /// Packets taken out by `pop_expired`.
+    expired: AtomicUsize,
 }
 ```
 
 ```rust
 impl IdCache {
     pub fn new() -> Self;
+    /// Whether the cache holds `MAX_PENDING_PACKETS`, so no more packets should be captured.
+    pub fn is_full(&self) -> bool;
+    /// Adds a packet awaiting a verdict. Returns its id and the event that tells user space about
+    /// it.
     pub fn push(
         &self,
         value: (Key, Packet),
         process_id: u64,
         direction: Direction,
         ale_layer: bool,
-    ) -> Option<Info>;
+    ) -> (u64, Option<Info>);
     pub fn pop_id(&self, id: u64) -> Option<(Key, Packet)>;
     pub fn get_entries_count(&self) -> usize;
     /// Ids of the packets currently waiting for a verdict, oldest first.
-    pub fn pending_ids(&self) -> alloc::vec::Vec<u64>;
+    pub fn pending_ids(&self) -> Vec<u64>;
+    /// Takes out every packet pushed at or before `cutoff_ms` (`get_monotonic_ms`).
+    pub fn pop_expired(&self, cutoff_ms: u64) -> Vec<(Key, Packet)>;
+    /// The number of packets that expired without a verdict.
+    pub fn get_expired_count(&self) -> usize;
     pub fn pop_all(&self) -> VecDeque<Entry<(Key, Packet)>>;
 }
 ```
@@ -1074,89 +1201,6 @@ pub fn flush() -> Vec<Info>;
 
 ---
 
-## `driver/src/mpsc_queue.rs`
-
-### Types
-
-#### `Node`
-
-```rust
-struct Node<T> {
-    /// Raw pointer to the caller-owned element.
-    /// Null on the sentinel node; non-null (though possibly a null payload) on
-    /// every real node.
-    data: *mut T,
-    /// Link to the next node closer to the front of the queue.
-    /// Written exactly once by the producer that owns the previous tail slot,
-    /// then never modified again.
-    next: AtomicPtr<Node<T>>,
-}
-```
-
-#### `MpscQueue`
-
-Lock-free MPSC FIFO queue storing raw `*mut T` pointers.
-
-```rust
-pub struct MpscQueue<T> {
-    /// Always points to the sentinel node. Only the consumer advances this
-    /// pointer (via `store`). Producers never read or write `head`.
-    head: AtomicPtr<Node<T>>,
-    /// Always points to the last node in the chain (sentinel when empty).
-    /// Producers advance this with a single atomic `swap`; the consumer never
-    /// touches it.
-    tail: AtomicPtr<Node<T>>,
-}
-```
-
-```rust
-impl<T> MpscQueue<T> {
-    /// Creates an empty queue.
-    ///
-    /// Allocates the sentinel node. Both `head` and `tail` start pointing to
-    /// it; `tail` moves forward on every push while `head` moves forward on
-    /// every pop.
-    pub fn new() -> Self;
-    /// Appends `ptr` to the back of the queue.
-    ///
-    /// Uses a single atomic `swap` — no CAS loop, no retries.
-    ///
-    /// `prev` returned by the swap is always a valid node (at minimum the
-    /// sentinel) so the `prev.is_null()` branch that would be needed in a
-    /// sentinel-free design does not exist here.
-    ///
-    /// Safe to call from any number of concurrent threads.
-    pub fn push(&self, ptr: *mut T);
-    /// Returns the `*mut T` at the front of the queue without removing it.
-    ///
-    /// Returns `null` if the queue is empty or if a push is mid-flight (see
-    /// module-level note on transient emptiness).
-    pub fn peek(&self) -> Option<&T>;
-    /// Removes and returns the `*mut T` at the front of the queue.
-    /// Returns `null` if the queue is empty or transiently appears so.
-    pub fn pop(&self) -> *mut T;
-    /// Returns `true` if no elements are currently visible to the consumer.
-    /// May return `true` spuriously during a push (see module-level note).
-    pub fn is_empty(&self) -> bool;
-    /// Returns the approximate number of elements visible to the consumer.
-    /// May under-count by items that are mid-push (see module-level note on
-    /// transient emptiness). Must only be called from the single consumer thread.
-    pub fn count(&self) -> usize;
-}
-```
-
-### Trait implementations
-
-```rust
-unsafe impl<T: Send> Send for MpscQueue<T>
-
-unsafe impl<T: Send> Sync for MpscQueue<T>
-
-impl<T> Drop for MpscQueue<T>
-```
-
----
-
 ## `driver/src/packet_callouts.rs`
 
 ### Types
@@ -1167,8 +1211,15 @@ impl<T> Drop for MpscQueue<T>
 trait IpVersion: Connection + Sized {
     const HEADER_LEN: u32;
     const IS_IPV6: bool;
-    fn get_key_from_nb(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
-    fn get_connection(cache: &ConnectionCache, key: &Key) -> Option<Arc<Self>>;
+    fn get_key_from_nb(
+        nb: &NetBuffer,
+        direction: Direction,
+    ) -> Result<Option<Key>, String>;
+    fn with_connection<R>(
+        cache: &ConnectionCache,
+        key: &Key,
+        f: impl FnOnce(&Self) -> R,
+    ) -> Option<R>;
 }
 ```
 
@@ -1345,14 +1396,7 @@ pub fn recalc_header_checksums(packet: &mut [u8], ipv6: bool);
 fn print_packet(packet: &[u8]);
 ```
 
-This function extracts a key from a given IPv4 net buffer.
-The key contains the protocol, local and remote addresses and ports.
-# Arguments
-* `nb` - A reference to the net buffer from which the key will be extracted.
-* `direction` - The direction of the packet (Inbound or Outbound).
-# Returns
-* `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
-* `Err(String)` - An error message if the function fails to get net_buffer data.
+Reads the source and destination ports from the start of a TCP or UDP header.
 
 ```rust
 fn get_ports(packet: &[u8], protocol: smoltcp::wire::IpProtocol) -> (u16, u16);
@@ -1368,8 +1412,21 @@ reached by reading successively larger prefixes and indexing into them.
 fn read_prefix(nb: &NetBuffer, buffer: &mut [u8], len: usize) -> Result<(), ()>;
 ```
 
+This function extracts a key from a given IPv4 net buffer.
+The key contains the protocol, local and remote addresses and ports.
+# Arguments
+* `nb` - A reference to the net buffer from which the key will be extracted.
+* `direction` - The direction of the packet (Inbound or Outbound).
+# Returns
+* `Ok(Some(Key))` - A key containing the protocol, local and remote addresses and ports.
+* `Ok(None)` - The packet is a fragment other than the first; it has no transport header.
+* `Err(String)` - An error message if the function fails to get net_buffer data.
+
 ```rust
-pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
+pub fn get_key_from_nb_v4(
+    nb: &NetBuffer,
+    direction: Direction,
+) -> Result<Option<Key>, String>;
 ```
 
 This function extracts a key from a given IPv6 net buffer.
@@ -1382,88 +1439,98 @@ and ports rather than the first extension header.
 * `nb` - A reference to the net buffer from which the key will be extracted.
 * `direction` - The direction of the packet (Inbound or Outbound).
 # Returns
-* `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
+* `Ok(Some(Key))` - A key containing the protocol, local and remote addresses and ports.
+* `Ok(None)` - The packet is a fragment other than the first; it has no transport header.
 * `Err(String)` - An error message if the function fails to get net_buffer data
   or the packet carries a malformed extension-header chain.
 
 ```rust
-pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Key, String>;
+pub fn get_key_from_nb_v6(
+    nb: &NetBuffer,
+    direction: Direction,
+) -> Result<Option<Key>, String>;
 ```
 
 ---
 
-## `driver/src/rcu_port.rs`
+## `driver/src/pending_event.rs`
 
 ### Types
 
-#### `ConnectionArray`
+#### `PendingEvent`
+
+The part of an event that did not fit in the last read: the serialized event and how much of it
+was already sent. The next read sends the rest first, so user space receives every event whole
+and in order.
+That holds for one reader at a time. Concurrent reads are memory safe (each method is a single
+critical section) but two threads reading one byte stream each get pieces of it, as with any
+stream.
 
 ```rust
-pub(crate) struct ConnectionArray<T: Connection> {
-    array: Box<[Arc<T>]>,
-    pub(crate) readers: AtomicU16,
-    pub(crate) unlinked_timestamp: AtomicU64,
-}
-```
-
-#### `RCUPort`
-
-```rust
-pub(crate) struct RCUPort<T: Connection> {
-    connections: AtomicPtr<ConnectionArray<T>>,
-    write_mutex: Mutex<()>,
-}
+pub struct PendingEvent(Mutex<Option<(Vec<u8>, usize)>>);
 ```
 
 ```rust
-impl<T: Connection> RCUPort<T> {
+impl PendingEvent {
+    pub const fn new() -> Self;
+    /// Writes as much of the pending event as fits into `read_request`, and forgets it once all of
+    /// it is sent. Returns whether there was a pending event.
+    pub fn send(&self, read_request: &mut ReadRequest) -> bool;
+    /// Keeps the event `bytes`, of which the first `sent` were already sent, for the next read.
+    pub fn stash(&self, bytes: Vec<u8>, sent: usize);
+}
+```
+
+---
+
+## `driver/src/port_connections.rs`
+
+### Types
+
+#### `Entry`
+
+One connection on a port: its compact key inline, so a lookup scans contiguous memory and only
+dereferences the match.
+
+```rust
+pub(crate) struct Entry<T: Connection> {
+    pub(crate) key: T::CompactKey,
+    pub(crate) conn: Box<T>,
+}
+```
+
+```rust
+impl<T: Connection> Entry<T> {
+    pub(crate) fn new(conn: Box<T>) -> Self;
+}
+```
+
+#### `PortConnections`
+
+```rust
+pub(crate) struct PortConnections<T: Connection> {
+    entries: AtomicPtr<Vec<Entry<T>>>,
+    lock: Mutex<()>,
+}
+```
+
+```rust
+impl<T: Connection> PortConnections<T> {
     pub(crate) fn is_empty(&self) -> bool;
-    pub(crate) fn read(&self) -> RCUPortReadGuard<'_, T>;
-    pub(crate) fn lock(&self) -> RCUPortWriteGuard<'_, T>;
-}
-```
-
-#### `RCUPortReadGuard`
-
-```rust
-pub(crate) struct RCUPortReadGuard<'a, T: Connection> {
-    _port: &'a RCUPort<T>,
-    snapshot: *const ConnectionArray<T>,
-}
-```
-
-```rust
-impl<T: Connection> RCUPortReadGuard<'_, T> {
-    pub(crate) fn get(&self) -> Option<&[Arc<T>]>;
-}
-```
-
-#### `RCUPortWriteGuard`
-
-```rust
-pub(crate) struct RCUPortWriteGuard<'a, T: Connection> {
-    port: &'a RCUPort<T>,
-    _guard: MutexWriteGuard<'a, ()>,
-}
-```
-
-```rust
-impl<T: Connection> RCUPortWriteGuard<'_, T> {
-    pub(crate) fn snapshot(&self) -> Option<&[Arc<T>]>;
-    pub(crate) fn publish(
-        &self,
-        new: Option<Box<[Arc<T>]>>,
-        queue: &MpscQueue<ConnectionArray<T>>,
-    );
+    /// Runs `f` on the connections of this port, holding the lock shared. `f` must not use the
+    /// connection cache again: a writer waiting on this port would deadlock it.
+    pub(crate) fn read<R>(&self, f: impl FnOnce(&[Entry<T>]) -> R) -> R;
+    /// Runs `f` on the connections of this port, holding the lock exclusive, so it can change
+    /// them. Connections `f` removes are freed right away: no reader can be looking at them. `f`
+    /// must not use the connection cache again.
+    pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Vec<Entry<T>>) -> R) -> R;
 }
 ```
 
 ### Trait implementations
 
 ```rust
-impl<T: Connection> Drop for RCUPort<T>
-
-impl<T: Connection> Drop for RCUPortReadGuard<'_, T>
+impl<T: Connection> Drop for PortConnections<T>
 ```
 
 ---

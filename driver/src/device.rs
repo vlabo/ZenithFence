@@ -14,12 +14,14 @@ use wdk::{
     },
     ioqueue::{self, IOQueue},
     irp_helpers::{ReadRequest, WriteRequest},
+    kmutex::KMutex,
+    worker::PeriodicWorker,
 };
 
 use crate::{
-    array_holder::ArrayHolder,
+    pending_event::PendingEvent,
     callouts,
-    connection::{Connection, ConnectionV4, ConnectionV6, Key},
+    connection::{Connection, ConnectionV4, ConnectionV6, Direction, Key},
     connection_cache::ConnectionCache,
     dbg, err,
     filter_reset_queue::{FilterResetQueue, PendingReset},
@@ -27,6 +29,17 @@ use crate::{
     info, logger,
     packet_util::Redirect,
 };
+
+/// The most events waiting for user space to read them. Past it, events are dropped (packet
+/// events: the packet is blocked), so a stalled reader cannot make the queue grow without bound.
+const MAX_EVENTS: usize = 16384;
+
+/// How long a packet waits for its verdict. User space answers in milliseconds; a packet still
+/// waiting after this is blocked, so a connect does not hang on an agent that stopped answering.
+const PACKET_VERDICT_TIMEOUT_MS: u64 = 30_000;
+
+/// How often the maintenance thread runs (`maintenance`).
+const MAINTENANCE_INTERVAL_MS: u32 = 1000;
 
 pub enum Packet {
     PacketLayer(NetBufferList, InjectInfo),
@@ -37,32 +50,25 @@ pub enum Packet {
 ///
 /// It cannot sit behind the `rw_spin_lock::Mutex` like the rest of the shared state: acquiring
 /// that raises the IRQL to DISPATCH_LEVEL, while the filter engine calls (`FwpmTransaction*`,
-/// filter and callout (un)registration) must run at PASSIVE_LEVEL, and the reset and teardown
-/// paths wait between attempts (`wdk::utils::sleep_ms` refuses to above APC_LEVEL).
-///
-/// In the kernel build the mutable access is serialized by the driver instead: a filter reset
-/// only ever runs on the thread holding the `filter_reset_queue` drain claim, and the teardown
-/// runs from `shutdown`. WFP itself rejects overlapping transactions with
-/// `STATUS_FWP_TXN_IN_PROGRESS`, which both paths retry on.
+/// filter and callout (un)registration) must run at PASSIVE_LEVEL. A kernel mutex keeps the IRQL
+/// where it is, so the teardown (`shutdown`) and the filter resets (`reset_filters_and_inject`)
+/// take turns, and a reset sees the filters the teardown removed instead of adding them back.
 pub struct FilterEngineCell {
-    inner: core::cell::UnsafeCell<FilterEngine>,
+    inner: KMutex<FilterEngine>,
 }
-
-// See the type documentation for how access is serialized.
-unsafe impl Sync for FilterEngineCell {}
 
 impl FilterEngineCell {
     fn new(filter_engine: FilterEngine) -> Self {
         Self {
-            inner: core::cell::UnsafeCell::new(filter_engine),
+            inner: KMutex::new(filter_engine),
         }
     }
 
-    /// Runs `f` with mutable access to the filter engine. Must only be called at PASSIVE_LEVEL,
-    /// from the paths described on the type, and never re-entered from within `f`.
+    /// Runs `f` with exclusive access to the filter engine. Must only be called at PASSIVE_LEVEL,
+    /// and never from within `f`.
     pub fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
-        // SAFETY: see the type documentation.
-        f(unsafe { &mut *self.inner.get() })
+        let mut filter_engine = self.inner.lock();
+        f(&mut filter_engine)
     }
 }
 
@@ -72,7 +78,7 @@ pub struct Device {
     // and consumer (read) threads can share one `&Device` soundly. Every field
     // is interior-mutable; the filter engine through `FilterEngineCell`.
     pub filter_engine: FilterEngineCell,
-    pub(crate) read_leftover: ArrayHolder,
+    pub(crate) pending_event: PendingEvent,
     pub(crate) event_queue: IOQueue<Info>,
     pub packet_cache: IdCache,
     pub connection_cache: ConnectionCache,
@@ -84,6 +90,9 @@ pub struct Device {
     /// Set once the teardown has begun. Callouts check it and stop pending operations, because
     /// from that point on nothing is left to answer a pend.
     shutdown_started: AtomicBool,
+    /// Blocks the packets that waited too long for a verdict. Runs at PASSIVE_LEVEL, because
+    /// releasing a connection held by a filter takes a filter reset.
+    maintenance: PeriodicWorker,
 }
 
 impl Device {
@@ -100,16 +109,21 @@ impl Device {
             return Err(err);
         }
 
+        // Started last, so a failure above leaves no thread behind. Until the device is published
+        // (`entry::DEVICE`) its runs find nothing to do.
+        let maintenance = PeriodicWorker::start(MAINTENANCE_INTERVAL_MS, maintenance)?;
+
         Ok(Self {
             filter_engine: FilterEngineCell::new(filter_engine),
-            read_leftover: ArrayHolder::default(),
-            event_queue: IOQueue::new(),
+            pending_event: PendingEvent::new(),
+            event_queue: IOQueue::new(MAX_EVENTS),
             packet_cache: IdCache::new(),
-            connection_cache: ConnectionCache::new(),
+            connection_cache: ConnectionCache::new()?,
             injector: Injector::new(),
             network_allocator: NetworkAllocator::new(),
             filter_reset_queue: FilterResetQueue::new(),
             shutdown_started: AtomicBool::new(false),
+            maintenance,
         })
     }
 
@@ -120,32 +134,89 @@ impl Device {
         self.shutdown_started.load(Ordering::SeqCst)
     }
 
+    /// Whether user space is not keeping up: the packet cache or the event queue is full. Callouts
+    /// check it before capturing a packet, and block the packet (fail closed) instead of pending it.
+    pub fn is_backlogged(&self) -> bool {
+        self.packet_cache.is_full() || self.event_queue.is_full()
+    }
+
+    /// Hands a captured packet to user space: into the packet cache to wait for its verdict, and
+    /// its event into the event queue. Callable at DISPATCH_LEVEL.
+    pub fn queue_packet(
+        &self,
+        key: Key,
+        packet: Packet,
+        process_id: u64,
+        direction: Direction,
+        ale_layer: bool,
+    ) {
+        let (id, info) = self
+            .packet_cache
+            .push((key, packet), process_id, direction, ale_layer);
+
+        // Without an event (no address to report) the packet waits until it expires.
+        let Some(info) = info else {
+            return;
+        };
+        // The queue filled up since the caller checked `is_backlogged`, and user space will never
+        // hear of the packet. A copy from the packet layer is simply dropped. A pended ALE
+        // operation is left to expire: completing it here, inside the classify that pended it,
+        // would reenter the classify.
+        if self.event_queue.push(info).is_err() && !ale_layer {
+            _ = self.packet_cache.pop_id(id);
+        }
+    }
+
+    /// Blocks a captured packet that user space did not answer. A pended connection that is still
+    /// undecided is failed first, so the classify its reinjection triggers blocks it; one that got
+    /// a verdict in the meantime keeps it. PASSIVE_LEVEL only: a connection held by a filter is
+    /// released by a filter reset.
+    fn resolve_unanswered(&self, key: Key, packet: Packet) {
+        if let Packet::AleLayer(_) = packet {
+            self.connection_cache.fail_if_undecided(&key);
+        }
+        if let Err(err) = self.inject_blocked_packet(packet) {
+            err!("failed to inject packet: {} key={}", err, key);
+        }
+    }
+
+    /// Blocks the packets that have waited `PACKET_VERDICT_TIMEOUT_MS` for a verdict.
+    /// PASSIVE_LEVEL only.
+    fn expire_unanswered_packets(&self) {
+        let cutoff = wdk::utils::get_monotonic_ms().saturating_sub(PACKET_VERDICT_TIMEOUT_MS);
+        let expired = self.packet_cache.pop_expired(cutoff);
+        if expired.is_empty() {
+            return;
+        }
+
+        err!(
+            "no verdict for {} packet(s) after {} ms, blocking them",
+            expired.len(),
+            PACKET_VERDICT_TIMEOUT_MS
+        );
+        for (key, packet) in expired {
+            self.resolve_unanswered(key, packet);
+        }
+    }
+
     /// Cleanup is called just before drop.
     // pub fn cleanup(&mut self) {}
 
     fn write_buffer(&self, read_request: &mut ReadRequest, info: Info) {
-        let bytes = info.as_bytes();
-        let count = read_request.write(bytes);
+        let count = read_request.write(info.as_bytes());
 
-        // Check if the full buffer was written.
-        if count < bytes.len() {
-            // Save the leftovers for later.
-            self.read_leftover.save(&bytes[count..]);
+        // Check if the full event was written.
+        if count < info.as_bytes().len() {
+            // Keep the rest for the next read.
+            self.pending_event.stash(info.into_bytes(), count);
         }
     }
 
     /// Called when handle. Read is called from user-space.
+    // TODO: Waits on this thread until an event arrives; see the TODO at `entry::driver_read`.
     pub fn read(&self, read_request: &mut ReadRequest) {
-        if let Some(data) = self.read_leftover.load() {
-            // There are leftovers from previous request.
-            let count = read_request.write(&data);
-
-            // Check if full command was written.
-            if count < data.len() {
-                // Save the leftovers for later.
-                self.read_leftover.save(&data[count..]);
-            }
-        } else {
+        // The rest of an event that did not fit in the previous read goes first.
+        if !self.pending_event.send(read_request) {
             // Noting left from before. Wait for next commands.
             match self.event_queue.wait_and_pop() {
                 Ok(info) => {
@@ -153,13 +224,13 @@ impl Device {
                 }
                 Err(ioqueue::Status::Timeout) => {
                     // Timeout. This will only trigger if pop function is called with timeout.
-                    read_request.timeout();
+                    read_request.set_timeout();
                     return;
                 }
                 Err(err) => {
                     // Queue failed. Send EOF, to notify user-space. Usually happens on rundown.
                     err!("failed to pop value: {}", err);
-                    read_request.end_of_file();
+                    read_request.set_end_of_file();
                     return;
                 }
             }
@@ -176,7 +247,7 @@ impl Device {
                 }
             }
         }
-        read_request.complete();
+        read_request.set_success();
     }
 
     // Called when handle.Write is called from user-space.
@@ -207,38 +278,51 @@ impl Device {
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
-                    if let Some(verdict) = FromPrimitive::from_u8(verdict.verdict) {
-                        dbg!("Verdict received {}: {}", key, verdict);
-                        // Add verdict in the cache.
-                        let redirect_info = self.connection_cache.update_connection(key, verdict);
+                    // Every packet taken from the cache must be injected, as allowed or as blocked:
+                    // dropping a pended connection leaves it waiting forever. An out-of-range verdict
+                    // is a user space bug, so the connection is blocked rather than left pended.
+                    let verdict_value = verdict.verdict;
+                    let verdict = FromPrimitive::from_u8(verdict_value).unwrap_or_else(|| {
+                        err!("invalid verdict value {} for {}, blocking", verdict_value, key);
+                        crate::connection::Verdict::Failed
+                    });
+                    dbg!("Verdict received {}: {}", key, verdict);
+                    // Add verdict in the cache.
+                    let redirect_info = self.connection_cache.update_connection(key, verdict);
 
-                        match verdict {
-                            crate::connection::Verdict::Accept
-                            | crate::connection::Verdict::PermanentAccept => {
-                                if let Err(err) = self.inject_packet(packet, false) {
+                    match verdict {
+                        crate::connection::Verdict::Accept
+                        | crate::connection::Verdict::PermanentAccept => {
+                            if let Err(err) = self.inject_permitted_packet(packet) {
+                                err!("failed to inject packet: {} key={}", err, key);
+                            } else {
+                                dbg!("packet injected: {}", key);
+                            }
+                        }
+                        crate::connection::Verdict::RedirectNameServer
+                        | crate::connection::Verdict::RedirectTunnel => {
+                            if let Some(redirect_info) = redirect_info {
+                                if let Err(err) = packet.redirect(redirect_info) {
+                                    err!("failed to redirect packet: {} key={}", err, key);
+                                }
+                                if let Err(err) = self.inject_permitted_packet(packet) {
                                     err!("failed to inject packet: {} key={}", err, key);
-                                } else {
-                                    dbg!("packet injected: {}", key);
                                 }
-                            }
-                            crate::connection::Verdict::RedirectNameServer
-                            | crate::connection::Verdict::RedirectTunnel => {
-                                if let Some(redirect_info) = redirect_info {
-                                    if let Err(err) = packet.redirect(redirect_info) {
-                                        err!("failed to redirect packet: {} key={}", err, key);
-                                    }
-                                    if let Err(err) = self.inject_packet(packet, false) {
-                                        err!("failed to inject packet: {} key={}", err, key);
-                                    }
-                                }
-                            }
-                            _ => {
-                                if let Err(err) = self.inject_packet(packet, true) {
+                            } else {
+                                // The connection is no longer in the cache (cleared since the
+                                // packet was pended), so there is nowhere to redirect it to.
+                                err!("no redirect info for {}, blocking", key);
+                                if let Err(err) = self.inject_blocked_packet(packet) {
                                     err!("failed to inject packet: {} key={}", err, key);
                                 }
                             }
                         }
-                    };
+                        _ => {
+                            if let Err(err) = self.inject_blocked_packet(packet) {
+                                err!("failed to inject packet: {} key={}", err, key);
+                            }
+                        }
+                    }
                 } else {
                     // Id was not in the packet cache.
                     let id = verdict.id;
@@ -315,7 +399,7 @@ impl Device {
                 let since = update.timestamp;
                 // Taken before the walk, and `since` is inclusive: a connection touched
                 // while the walk runs is reported again next time rather than missed.
-                let now = wdk::utils::get_system_timestamp_ms();
+                let now = wdk::utils::get_monotonic_ms();
                 wdk::dbg!("GetConnectionsUpdate command");
 
                 let send_event_v4 = |conn: &ConnectionV4| {
@@ -324,17 +408,7 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v4_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = conn.update_info();
                     _ = self.event_queue.push(info);
                 };
 
@@ -344,17 +418,7 @@ impl Device {
                         return;
                     }
 
-                    let info = protocol::info::connection_update_event_v6_info(
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                    let info = conn.update_info();
                     _ = self.event_queue.push(info);
                 };
 
@@ -380,8 +444,8 @@ impl Device {
 
                 let (active, ended) = self.connection_cache.get_entries_count();
                 let packet_cache_count = self.packet_cache.get_entries_count();
-                let (unlinked_v4, unlinked_v6) = self.connection_cache.get_unlinked_queue_counts();
                 let filter_reset_count = self.filter_reset_queue.get_entries_count();
+                let packets_expired = self.packet_cache.get_expired_count();
 
                 {
                     let mut log_line = protocol::info::log_line(
@@ -390,109 +454,34 @@ impl Device {
                     );
                     _ = write!(
                         log_line,
-                        "MemStats: connections active={} ended={} | packet_cache={} | unlinked_ports v4={} v6={} | filter_reset_queue={}",
-                        active, ended, packet_cache_count, unlinked_v4, unlinked_v6, filter_reset_count
+                        "MemStats: connections active={} ended={} | packet_cache={} expired={} | events queued={} dropped={} | filter_reset_queue={}",
+                        active,
+                        ended,
+                        packet_cache_count,
+                        packets_expired,
+                        self.event_queue.queued_count(),
+                        self.event_queue.dropped_count(),
+                        filter_reset_count
                     );
                     logger::add_line(log_line);
                 }
 
-                self.connection_cache
-                    .walk_over_connections_v4(|conn: &ConnectionV4| {
-                        let proto = match conn.protocol {
-                            IpProtocol::Tcp => "TCP",
-                            IpProtocol::Udp => "UDP",
-                            _ => "???",
-                        };
-                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
-                        let mut log_line = protocol::info::log_line(
-                            protocol::info::Severity::Info,
-                            logger::MAX_LOG_LINE_SIZE,
-                        );
-                        _ = write!(
-                            log_line,
-                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
-                            proto,
-                            conn.direction,
-                            conn.local_address,
-                            conn.local_port,
-                            conn.remote_address,
-                            conn.remote_port,
-                            conn.process_id,
-                            conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            status,
-                        );
-                        logger::add_line(log_line);
-                    });
-
-                self.connection_cache
-                    .walk_over_connections_v6(|conn: &ConnectionV6| {
-                        let proto = match conn.protocol {
-                            IpProtocol::Tcp => "TCP",
-                            IpProtocol::Udp => "UDP",
-                            _ => "???",
-                        };
-                        let status = if conn.has_ended() { " [ENDED]" } else { "" };
-                        let mut log_line = protocol::info::log_line(
-                            protocol::info::Severity::Info,
-                            logger::MAX_LOG_LINE_SIZE,
-                        );
-                        _ = write!(
-                            log_line,
-                            "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
-                            proto,
-                            conn.direction,
-                            conn.local_address,
-                            conn.local_port,
-                            conn.remote_address,
-                            conn.remote_port,
-                            conn.process_id,
-                            conn.get_verdict(),
-                            conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                            conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                            status,
-                        );
-                        logger::add_line(log_line);
-                    });
+                self.connection_cache.walk_over_connections_v4(log_connection);
+                self.connection_cache.walk_over_connections_v6(log_connection);
             }
             CommandType::CleanEndedConnections => {
                 wdk::dbg!("CleanEndedConnections command");
-                let (conn_v4, conn_v6) = self.connection_cache.clean_ended_connections();
-
-                // Process ended ipv4 connections
-                for conn in conn_v4.iter() {
-                    let info = protocol::info::connection_end_event_v4_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
-                    _ = self.event_queue.push(info);
-                }
-
-                // Process ended ipv6 connections
-                for conn in conn_v6.iter() {
-                    let info = protocol::info::connection_end_event_v6_info(
-                        conn.get_process_id(),
-                        conn.get_direction() as u8,
-                        conn.protocol.into(),
-                        conn.local_address.octets(),
-                        conn.remote_address.octets(),
-                        conn.local_port,
-                        conn.remote_port,
-                        conn.bandwidth_usage.rx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.rx_packets.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_bytes.load(Ordering::SeqCst),
-                        conn.bandwidth_usage.tx_packets.load(Ordering::SeqCst),
-                    );
+                // The events are built while the evicted connections are still alive: they are
+                // freed as they are removed.
+                let infos = self.connection_cache.clean_ended_connections(
+                    |conn: &ConnectionV4| {
+                        conn.end_info(conn.get_process_id())
+                    },
+                    |conn: &ConnectionV6| {
+                        conn.end_info(conn.get_process_id())
+                    },
+                );
+                for info in infos {
                     _ = self.event_queue.push(info);
                 }
             }
@@ -502,11 +491,14 @@ impl Device {
     /// Tears the device down, in the only order that leaves nothing behind for the unload:
     /// remove the filters, complete everything that is still pended, then remove the callouts.
     ///
-    /// Reachable from the shutdown command (write and device-control) and from the unload path,
+    /// Reachable from the shutdown command (write) and from the unload path,
     /// and safe to call more than once: the one-time part runs once, the rest runs on every call
     /// so anything that raced in afterwards is still resolved.
     pub fn shutdown(&self) {
         if !self.shutdown_started.swap(true, Ordering::SeqCst) {
+            // Stop expiring packets first: from here on the teardown resolves them all.
+            self.maintenance.stop();
+
             // Remove the filters before anything else. Once they are gone no new classify call can
             // reach the callouts, so no new connection can be pended while the teardown runs. The
             // flag set above covers the classify calls that are already in flight.
@@ -556,30 +548,46 @@ impl Device {
                 _ = self
                     .connection_cache
                     .update_connection(key, crate::connection::Verdict::PermanentBlock);
-                _ = self.inject_packet(packet, true); // Blocked must be set, so it only handles the ALE layer.
+                _ = self.inject_blocked_packet(packet);
             }
         }
     }
 
-    pub fn inject_packet(&self, packet: Packet, blocked: bool) -> Result<(), String> {
+    /// Injects a captured packet that was permitted: a copy from the packet layer goes out, a
+    /// pended ALE packet is reinjected (`reinject_ale`).
+    pub fn inject_permitted_packet(&self, packet: Packet) -> Result<(), String> {
         match packet {
             Packet::PacketLayer(nbl, inject_info) => {
-                if !blocked {
-                    self.injector.inject_net_buffer_list(nbl, inject_info)
-                } else {
-                    Ok(())
-                }
+                self.injector.inject_net_buffer_list(nbl, inject_info)
             }
-            Packet::AleLayer(defer) => match defer.resolve() {
-                // The pended operation has been completed, so the packet can go out right away.
-                DeferResolution::Completed(packet_list) => self.inject_pending(packet_list),
-                // The connection is still held by the filter that blocked it. Reset the filters to
-                // let it go, then inject.
-                DeferResolution::HeldByFilter(packet_list) => {
-                    self.reset_filters_and_inject(packet_list);
-                    Ok(())
-                }
-            },
+            Packet::AleLayer(defer) => self.reinject_ale(defer),
+        }
+    }
+
+    /// Injects a captured packet that was blocked, where an injection is needed. A pended ALE
+    /// packet is reinjected (`reinject_ale`) and the cached verdict blocks it; Windows waits for
+    /// it. A copy from the packet layer needs no injection and is dropped.
+    pub fn inject_blocked_packet(&self, packet: Packet) -> Result<(), String> {
+        match packet {
+            Packet::PacketLayer(..) => Ok(()),
+            Packet::AleLayer(defer) => self.reinject_ale(defer),
+        }
+    }
+
+    /// Completes a pended ALE packet and reinjects it, whatever the verdict. The first packet of a
+    /// new connection was pended, and Windows waits for it. Injecting it runs it through the
+    /// classify again, where the cached verdict (blocked or not) decides it. A pended packet must
+    /// never be left without a verdict.
+    fn reinject_ale(&self, defer: ClassifyDefer) -> Result<(), String> {
+        match defer.resolve() {
+            // The pended operation has been completed, so the packet can go out right away.
+            DeferResolution::Completed(packet_list) => self.inject_pending(packet_list),
+            // The connection is still held by the filter that blocked it. Reset the filters to
+            // let it go, then inject.
+            DeferResolution::HeldByFilter(packet_list) => {
+                self.reset_filters_and_inject(packet_list);
+                Ok(())
+            }
         }
     }
 
@@ -632,6 +640,8 @@ impl Device {
 
             match self.filter_engine.with(|fe| fe.reset_all_filters()) {
                 Ok(()) => {
+                    // This attempt counts too.
+                    let attempts_taken = attempts + 1;
                     attempts = 0;
                     let len = batch.len();
                     for pending in batch {
@@ -640,8 +650,8 @@ impl Device {
                         }
                     }
                     info!(
-                        "injected {} reauthorized packets after {} attempts",
-                        len, attempts
+                        "injected {} reauthorized packets after {} attempt(s)",
+                        len, attempts_taken
                     )
                 }
                 Err(ResetError::TransactionInProgress) => {
@@ -687,6 +697,45 @@ impl Device {
 
         return self.injector.inject_packet_list_transport(packet_list);
     }
+}
+
+/// Logs one line describing `conn`, for PrintMemoryStats.
+fn log_connection<T: Connection>(conn: &T) {
+    use core::fmt::Write;
+
+    let proto = match conn.get_protocol() {
+        IpProtocol::Tcp => "TCP",
+        IpProtocol::Udp => "UDP",
+        _ => "???",
+    };
+    let status = if conn.has_ended() { " [ENDED]" } else { "" };
+    let bandwidth = conn.get_bandwidth_usage();
+    let mut log_line =
+        protocol::info::log_line(protocol::info::Severity::Info, logger::MAX_LOG_LINE_SIZE);
+    _ = write!(
+        log_line,
+        "[{}][{}] {}:{}-{}:{} pid={} {} rx={}B tx={}B{}",
+        proto,
+        conn.get_direction(),
+        conn.get_local_address(),
+        conn.get_local_port(),
+        conn.get_remote_address(),
+        conn.get_remote_port(),
+        conn.get_process_id(),
+        conn.get_verdict(),
+        bandwidth.rx_bytes.load(Ordering::SeqCst),
+        bandwidth.tx_bytes.load(Ordering::SeqCst),
+        status,
+    );
+    logger::add_line(log_line);
+}
+
+/// The maintenance thread's routine, every `MAINTENANCE_INTERVAL_MS` at PASSIVE_LEVEL.
+fn maintenance() {
+    let Some(device) = crate::entry::get_device() else {
+        return;
+    };
+    device.expire_unanswered_packets();
 }
 
 impl Drop for Device {

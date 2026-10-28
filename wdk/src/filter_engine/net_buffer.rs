@@ -421,15 +421,17 @@ impl NetworkAllocator {
         }
     }
 
-    pub fn free_net_buffer(nbl: *mut NET_BUFFER_LIST) {
-        NetBufferListIter::new(nbl).for_each(|nbl| unsafe {
-            if let Some(nbl) = nbl.nbl.as_mut() {
+    /// Frees a net buffer list allocated by `wrap_packet_in_nbl`, and its MDL. Only this one list:
+    /// whatever its `Next` points to is not ours to free.
+    pub(crate) fn free_net_buffer(nbl: *mut NET_BUFFER_LIST) {
+        unsafe {
+            if let Some(nbl) = nbl.as_mut() {
                 if let Some(nb) = nbl.Header.first_net_buffer.as_mut() {
                     IoFreeMdl(nb.MdlChain);
                 }
                 FwpsFreeNetBufferList0(nbl);
             }
-        });
+        }
     }
 
     /// Retreats the data start of the first net buffer.
