@@ -1,0 +1,15 @@
+# Only what the image needs from the repo root.
+*
+!driver/src
+!kext_interface/version.txt
+!protocol
+!mock
+**/target
+**/__pycache__
+**/.mypy_cache
+**/.ruff_cache
+protocol/*.bin
+mock/sim/dist
+mock/sim/python/zfsim/_native.*
+!mock/sim/python/zfsim/_native.pyi
+mock/sim/docker/.env

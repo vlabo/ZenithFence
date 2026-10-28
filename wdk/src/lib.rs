@@ -12,12 +12,24 @@ pub mod filter_engine;
 pub mod interface;
 pub mod ioqueue;
 pub mod irp_helpers;
+pub mod kmutex;
 pub mod rw_spin_lock;
-pub mod spin_lock;
 pub mod utils;
+pub mod worker;
 
 #[allow(dead_code)]
 pub mod ffi;
+
+/// Re-exports of the kernel / Win32 types the driver's entry plumbing names
+/// (`DriverEntry`, the IRP dispatch handlers). The driver refers to them through
+/// `wdk::kernel_types::*` so the host mock can provide API-compatible stand-ins
+/// under the same path, letting the same `entry.rs` compile in both builds.
+pub mod kernel_types {
+    pub use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
+    pub use windows_sys::Win32::Foundation::{
+        NTSTATUS, STATUS_FAILED_DRIVER_ENTRY, STATUS_SUCCESS, UNICODE_STRING,
+    };
+}
 
 // Needed by the linker for legacy reasons. Not important for rust.
 #[cfg(not(test))]

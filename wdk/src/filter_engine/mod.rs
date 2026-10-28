@@ -58,6 +58,10 @@ pub struct FilterEngine {
     callouts: Option<Vec<Box<Callout>>>,
 }
 
+// The device object and the filter engine session handle are kernel objects usable from any
+// thread; the engine itself is not thread safe, so callers serialize access (it needs `&mut`).
+unsafe impl Send for FilterEngine {}
+
 impl FilterEngine {
     pub fn new(driver: &Driver, layer_guid: u128) -> Result<Self, String> {
         let filter_engine_handle: HANDLE;
@@ -79,61 +83,71 @@ impl FilterEngine {
     }
 
     pub fn commit(&mut self, callouts: Vec<Callout>) -> Result<(), String> {
-        {
-            // Begin write transaction. This is also a lock guard.
-            let mut filter_engine = match Transaction::begin_write_retrying(self) {
-                Ok(transaction) => transaction,
-                Err(err) => {
-                    return Err(err);
-                }
-            };
-
-            if let Err(err) = filter_engine.register_sublayer() {
-                return Err(format!("filter_engine: {}", err));
-            }
-
-            dbg!("Callouts count: {}", callouts.len());
-            let mut boxed_callouts = Vec::new();
-            // Register all callouts
-            for callout in callouts {
-                let mut callout = Box::new(callout);
-                callout.address = callout.as_ref() as *const Callout as u64;
-
-                if let Err(err) = callout.register_callout(
-                    filter_engine.handle,
-                    filter_engine.device_object,
-                    catch_all_callout,
-                ) {
-                    // This will destroy the callout structs.
-                    return Err(err);
-                }
-                if let Err(err) =
-                    callout.register_filter(filter_engine.handle, filter_engine.sublayer_guid)
-                {
-                    // This will destroy the callout structs.
-                    return Err(err);
-                }
-                dbg!(
-                    "registering callout: {} -> {}",
-                    callout.name,
-                    callout.filter_id
-                );
-                boxed_callouts.push(callout)
-            }
-            if let Some(callouts) = &mut filter_engine.callouts {
-                callouts.append(&mut boxed_callouts);
-            } else {
-                filter_engine.callouts = Some(boxed_callouts);
-            }
-
-            if let Err(err) = filter_engine.commit() {
-                return Err(err);
-            }
+        let filter_ids = self.filter_ids();
+        if let Err(err) = self.commit_in_transaction(callouts) {
+            // The transaction was aborted, so none of its filters exist.
+            self.restore_filter_ids(&filter_ids);
+            return Err(err);
         }
         self.committed = true;
         info!("transaction committed");
 
         return Ok(());
+    }
+
+    fn commit_in_transaction(&mut self, callouts: Vec<Callout>) -> Result<(), String> {
+        // Begin write transaction. This is also a lock guard.
+        let mut filter_engine = Transaction::begin_write_retrying(self)?;
+
+        if let Err(err) = filter_engine.register_sublayer() {
+            return Err(format!("filter_engine: {}", err));
+        }
+
+        dbg!("Callouts count: {}", callouts.len());
+        let handle = filter_engine.handle;
+        let device_object = filter_engine.device_object;
+        let sublayer_guid = filter_engine.sublayer_guid;
+        let registered = filter_engine.callouts.get_or_insert_with(Vec::new);
+        // Register all callouts. Each one is kept as soon as it is registered: the registration is
+        // not part of the transaction, so a later failure must still find it to unregister it
+        // (`unregister_callouts`, also run by the drop).
+        for callout in callouts {
+            let mut callout = Box::new(callout);
+            callout.address = callout.as_ref() as *const Callout as u64;
+
+            callout.register_callout(handle, device_object, catch_all_callout)?;
+            registered.push(callout);
+            let callout = registered.last_mut().unwrap();
+
+            callout.register_filter(handle, sublayer_guid)?;
+            dbg!(
+                "registering callout: {} -> {}",
+                callout.name,
+                callout.filter_id
+            );
+        }
+
+        filter_engine.commit()
+    }
+
+    /// The filter id of every callout, in order. Taken before a transaction so it can be put back
+    /// with `restore_filter_ids` if the transaction is aborted.
+    fn filter_ids(&self) -> Vec<u64> {
+        match &self.callouts {
+            Some(callouts) => callouts.iter().map(|callout| callout.filter_id).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Puts back the filter ids taken by `filter_ids`. An aborted transaction leaves WFP with the
+    /// filters it had before, so the ids recorded for them must match again. Callouts added after
+    /// the snapshot have no filter.
+    fn restore_filter_ids(&mut self, filter_ids: &[u64]) {
+        if let Some(callouts) = &mut self.callouts {
+            for (index, callout) in callouts.iter_mut().enumerate() {
+                callout.filter_id = filter_ids.get(index).copied().unwrap_or(0);
+            }
+        }
     }
 
     /// Reports whether any filter is still registered.
@@ -156,6 +170,16 @@ impl FilterEngine {
             return Ok(());
         }
 
+        let filter_ids = self.filter_ids();
+        let result = self.unregister_filters_in_transaction();
+        if result.is_err() {
+            // The transaction was aborted, so every filter is still there.
+            self.restore_filter_ids(&filter_ids);
+        }
+        return result;
+    }
+
+    fn unregister_filters_in_transaction(&mut self) -> Result<(), String> {
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         // Waits out a transaction that is in progress instead of failing: leaving the filters
         // registered here would make `unregister_callouts` fail too, and the teardown has no
@@ -241,6 +265,16 @@ impl FilterEngine {
             return Ok(());
         }
 
+        let filter_ids = self.filter_ids();
+        let result = self.reset_all_filters_in_transaction();
+        if result.is_err() {
+            // The transaction was aborted (or never began), so the old filters are still there.
+            self.restore_filter_ids(&filter_ids);
+        }
+        return result;
+    }
+
+    fn reset_all_filters_in_transaction(&mut self) -> Result<(), ResetError> {
         // Begin to write transaction. This is also a lock guard. It will abort if transaction is not committed.
         let mut filter_engine = match Transaction::begin_write(self) {
             Ok(transaction) => transaction,

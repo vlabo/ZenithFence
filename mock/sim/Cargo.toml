@@ -1,0 +1,28 @@
+[package]
+name = "zfsim"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# The Python extension module `zfsim._native`: the *real* driver over the mock
+# WDK (loaded through `driver_harness`, ../harness), driven from Python through
+# plain function calls. Scripts inject traffic and serve the driver to a real
+# agent on a named pipe (a Unix socket on Linux/macOS), and assert on what
+# happens. Built by `just sim-build` (build.py), which copies the cdylib into
+# python/zfsim/; release wheels by `just sim-wheels` (maturin, see
+# pyproject.toml). A member of the mock/ workspace; nothing in driver/ or wdk/
+# depends on it, so pyo3 stays out of the driver build.
+
+[lib]
+name = "_native"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# generate-import-lib: link against python3.dll without a Windows Python
+# install, so the Windows wheel cross-builds in the wheels container.
+pyo3 = { version = "0.30", features = ["abi3-py39", "extension-module", "generate-import-lib"] }
+driver_harness = { package = "driver-harness", path = "../harness" }
+# The user-space connection type and its status constants. This resolves to the
+# same `mock_wdk` instance the driver links, so `DriverConnection` matches.
+mock_wdk = { path = "../wdk" }
