@@ -1,0 +1,16 @@
+[package]
+name = "mock_wdk"
+version = "0.1.0"
+edition = "2021"
+
+# A pure-safe-std, windows-sys-free reimplementation of the subset of the `wdk`
+# crate's public API that the `driver` crate uses. mock/driver compiles the real
+# driver sources with this crate standing in for `wdk` (a Cargo dependency
+# rename), so the driver runs in user space (mock/sim, the zfsim module). NOT part of
+# the production driver build: nothing in driver/ or wdk/ refers to it.
+
+[lib]
+name = "mock_wdk"
+path = "src/lib.rs"
+
+[dependencies]

@@ -71,7 +71,7 @@ impl Redirect for Packet {
 /// It also updates the checksums for the IP and transport layer headers.
 /// If the `unify` parameter is true, it sets the source and destination addresses to be the same.
 /// If the remote address is a loopback address, it sets the source address to the loopback address.
-fn redirect_outbound_packet(
+pub fn redirect_outbound_packet(
     packet: &mut [u8],
     remote_address: IpAddress,
     remote_port: u16,
@@ -153,7 +153,7 @@ fn redirect_outbound_packet(
 /// * `original_remote_address` - The original remote IP address of the packet.
 /// * `original_remote_port` - The original remote port of the packet.
 ///
-fn redirect_inbound_packet(
+pub fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: IpAddress,
     original_remote_address: IpAddress,
@@ -272,18 +272,7 @@ fn print_packet(packet: &[u8]) {
     }
 }
 
-/// This function extracts a key from a given IPv4 net buffer.
-/// The key contains the protocol, local and remote addresses and ports.
-///
-/// # Arguments
-///
-/// * `nb` - A reference to the net buffer from which the key will be extracted.
-/// * `direction` - The direction of the packet (Inbound or Outbound).
-///
-/// # Returns
-///
-/// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
-/// * `Err(String)` - An error message if the function fails to get net_buffer data.
+/// Reads the source and destination ports from the start of a TCP or UDP header.
 fn get_ports(packet: &[u8], protocol: smoltcp::wire::IpProtocol) -> (u16, u16) {
     match protocol {
         smoltcp::wire::IpProtocol::Tcp => {
@@ -315,7 +304,20 @@ fn read_prefix(nb: &NetBuffer, buffer: &mut [u8], len: usize) -> Result<(), ()> 
     nb.read_bytes(&mut buffer[..len])
 }
 
-pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+/// This function extracts a key from a given IPv4 net buffer.
+/// The key contains the protocol, local and remote addresses and ports.
+///
+/// # Arguments
+///
+/// * `nb` - A reference to the net buffer from which the key will be extracted.
+/// * `direction` - The direction of the packet (Inbound or Outbound).
+///
+/// # Returns
+///
+/// * `Ok(Some(Key))` - A key containing the protocol, local and remote addresses and ports.
+/// * `Ok(None)` - The packet is a fragment other than the first; it has no transport header.
+/// * `Err(String)` - An error message if the function fails to get net_buffer data.
+pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
     // Buffer large enough for the largest possible IPv4 header, options included, and the
     // first 4 transport bytes (source + destination ports).
     let mut headers = [0u8; MAX_IPV4_HEADER_LEN + 4];
@@ -324,15 +326,22 @@ pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Key, S
     if read_prefix(nb, &mut headers, IPV4_HEADER_LEN).is_err() {
         return Err("failed to get net_buffer data".to_string());
     }
-    let (src_addr, dst_addr, protocol, header_len) = {
+    let (src_addr, dst_addr, protocol, header_len, frag_offset) = {
         let ip_packet = Ipv4Packet::new_unchecked(&headers[..IPV4_HEADER_LEN]);
         (
             ip_packet.src_addr(),
             ip_packet.dst_addr(),
             ip_packet.next_header(),
             ip_packet.header_len() as usize,
+            ip_packet.frag_offset(),
         )
     };
+
+    // Only the first fragment carries the transport header. In a later one the bytes after the IP
+    // header are payload, not ports.
+    if frag_offset != 0 {
+        return Ok(None);
+    }
 
     // The header length comes from the packet itself, so validate it before using it as an
     // offset. IHL < 5 is malformed; IHL > 15 cannot be expressed in 4 bits.
@@ -355,20 +364,20 @@ pub fn get_key_from_nb_v4(nb: &NetBuffer, direction: Direction) -> Result<Key, S
 
     // Build key
     match direction {
-        Direction::Outbound => Ok(Key {
+        Direction::Outbound => Ok(Some(Key {
             protocol,
             local_address: IpAddress::Ipv4(src_addr),
             local_port: src_port,
             remote_address: IpAddress::Ipv4(dst_addr),
             remote_port: dst_port,
-        }),
-        Direction::Inbound => Ok(Key {
+        })),
+        Direction::Inbound => Ok(Some(Key {
             protocol,
             local_address: IpAddress::Ipv4(dst_addr),
             local_port: dst_port,
             remote_address: IpAddress::Ipv4(src_addr),
             remote_port: src_port,
-        }),
+        })),
     }
 }
 
@@ -406,10 +415,11 @@ const MAX_IPV6_EXT_HEADER_LEN: usize = 256;
 ///
 /// # Returns
 ///
-/// * `Ok(Key)` - A key containing the protocol, local and remote addresses and ports.
+/// * `Ok(Some(Key))` - A key containing the protocol, local and remote addresses and ports.
+/// * `Ok(None)` - The packet is a fragment other than the first; it has no transport header.
 /// * `Err(String)` - An error message if the function fails to get net_buffer data
 ///   or the packet carries a malformed extension-header chain.
-pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Key, String> {
+pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Option<Key>, String> {
     // Buffer large enough for the fixed IPv6 header, the bounded extension-header
     // chain, and the first 4 transport bytes (source + destination ports).
     let mut headers = [0u8; IPV6_HEADER_LEN + MAX_IPV6_EXT_HEADERS * MAX_IPV6_EXT_HEADER_LEN + 4];
@@ -458,6 +468,20 @@ pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Key, S
             return Err("ipv6 extension header too large".to_string());
         }
 
+        // Only the first fragment carries the transport header. The Fragment header holds the
+        // offset in the upper 13 bits of bytes 2-3; in a later fragment the bytes after the
+        // extension headers are payload, not ports.
+        if nexthdr == IPPROTO_FRAGMENT {
+            if read_prefix(nb, &mut headers, l4_offset + 4).is_err() {
+                return Err("failed to read ipv6 fragment header".to_string());
+            }
+            let offset_and_flags =
+                u16::from_be_bytes([headers[l4_offset + 2], headers[l4_offset + 3]]);
+            if offset_and_flags >> 3 != 0 {
+                return Ok(None);
+            }
+        }
+
         // Move past this extension header; its Next Header drives the next step.
         l4_offset += ext_hdr_len;
         nexthdr = ext_next_header;
@@ -479,20 +503,20 @@ pub fn get_key_from_nb_v6(nb: &NetBuffer, direction: Direction) -> Result<Key, S
 
     // Build key
     match direction {
-        Direction::Outbound => Ok(Key {
+        Direction::Outbound => Ok(Some(Key {
             protocol,
             local_address: IpAddress::Ipv6(src_addr),
             local_port: src_port,
             remote_address: IpAddress::Ipv6(dst_addr),
             remote_port: dst_port,
-        }),
-        Direction::Inbound => Ok(Key {
+        })),
+        Direction::Inbound => Ok(Some(Key {
             protocol,
             local_address: IpAddress::Ipv6(dst_addr),
             local_port: dst_port,
             remote_address: IpAddress::Ipv6(src_addr),
             remote_port: src_port,
-        }),
+        })),
     }
 }
 

@@ -1,45 +1,33 @@
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
 #![allow(clippy::needless_return)]
 
 extern crate alloc;
 
-mod ale_callouts;
-mod array_holder;
-pub mod mpsc_queue;
+// The modules marked `pub` are the driver's public API: the callout entry
+// points, the device and its caches, the packet helpers. The kernel image
+// (kernel/) only needs `driver_entry`; the rest is public so the host test
+// harness (mock/harness) can drive and observe the very same code over the
+// mock WDK.
+pub mod ale_callouts;
+mod pending_event;
 mod callouts;
 mod common;
-mod connection;
-mod connection_cache;
-mod rcu_port;
-mod device;
-mod entry;
+pub mod connection;
+pub mod connection_cache;
+mod event;
+mod port_connections;
+pub mod device;
+pub mod entry;
 mod filter_reset_queue;
-mod id_cache;
+pub mod id_cache;
 pub mod logger;
-mod packet_callouts;
-mod packet_util;
+pub mod packet_callouts;
+pub mod packet_util;
 
-#[cfg(not(test))]
-use wdk::allocator::WindowsAllocator;
+// The driver entry point. The production build root (kernel/) exports it as
+// `DriverEntry`.
+pub use entry::driver_entry;
 
-#[cfg(not(test))]
-use core::panic::PanicInfo;
-
-// Declaration of the global memory allocator
-#[cfg(not(test))]
-#[global_allocator]
-static HEAP: WindowsAllocator = WindowsAllocator {};
-
-#[cfg(not(test))]
-#[no_mangle]
-pub extern "system" fn _DllMainCRTStartup() {}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    use wdk::err;
-
-    err!("{}", info);
-    loop {}
-}
+// The global allocator, panic handler and the exported `DriverEntry` are not
+// here: they belong to the kernel image, so they live in the production build
+// root (kernel/src/lib.rs).

@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Before exploring the source, read the relevant generated reference in `docs/LLMs/`** (every type, signature and doc comment; bodies stripped):
+> driver → `RUSTDOC-driver.md` · protocol → `RUSTDOC-protocol.md` · `wdk/` → `RUSTDOC-wdk.md` · `mock/` (incl. `mock/sim`) → `RUSTDOC-mock.md` · `release/` → `RUSTDOC-tools.md` · Go (`kext_interface`, `kext_tester`) → `GODOC.md`.
+> See `docs/LLMs/README.md` for sizes and when to load which. Regenerate with `just gen-llm-docs` after significant changes.
+
 ## Project Overview
 
 ZenithFence is a Windows kernel network filtering driver (`.sys`) written in Rust, with Go bindings for user-space communication. It hooks into the Windows Filtering Platform (WFP) to intercept, inspect, and make allow/block decisions on network traffic at the kernel level. Target architecture: **amd64 only**.
@@ -11,7 +15,7 @@ ZenithFence is a Windows kernel network filtering driver (`.sys`) written in Rus
 All top-level tasks are in the `Justfile` (run `just` to list them).
 
 ```bash
-# Build the Rust driver static lib
+# Build the Rust driver static lib (driver/kernel -> driver_kernel.lib)
 just build              # debug
 just build --release    # release
 
@@ -26,6 +30,12 @@ just test
 just test-protocol          # Rust serialization tests (protocol/)
 just test-kext-interface    # Go parsing tests (kext_interface/)
 just kext-interface-gen     # Regenerate binary test fixtures
+just test-driver            # The driver's own unit tests, built for the host over the mock WDK
+just sim-test               # Python scenario tests (mock/sim/): the mock driver served to a PipeAgent / kext_tester
+just sim-wheels             # zfsim wheels for Windows/Linux/macOS into mock/sim/dist/ (Docker); CI attaches them to each release
+
+# Regenerate the LLM reference files in docs/LLMs/
+just gen-llm-docs
 
 # One-time: generate test signing certificate
 just generate-cert
@@ -34,7 +44,7 @@ just generate-cert
 To run a single Rust test:
 ```bash
 cd protocol && cargo test <test_name>
-cd driver   && cargo test <test_name>
+cd mock     && cargo test <test_name>   # driver tests, over the mock WDK
 ```
 
 To run a single Go test:
@@ -48,13 +58,15 @@ cd kext_interface && go test -run <TestName>
 
 | Directory | Language | Role |
 |-----------|----------|------|
-| `driver/` | Rust (`no_std`) | Kernel driver — WFP callouts, packet decisions, I/O with user space |
+| `driver/` | Rust (`no_std`) | Kernel driver core library — WFP callouts, packet decisions, I/O with user space |
+| `driver/kernel/` | Rust (`no_std`) | Production build root — the only crate that produces the shipped `driver.lib` (allocator, panic handler, `DriverEntry` export); links `driver` against the real `wdk` only. Keep it free of logic |
+| `mock/` | Rust (host) | Test-only: the real `driver/src` compiled against `mock/wdk` (a host mock of the Windows kernel API) as `mock/driver`; `mock/harness` (loader, callout API, event decoding); `mock/sim` (below). Nothing in `driver/` or `wdk/` refers to it |
+| `mock/sim/` | Rust (host) + Python | The Python module `zfsim` (a member of the `mock/` workspace): the real driver (through `mock/harness`) loaded in-process and served on a named pipe (Unix socket on Linux/macOS) to a real agent. Scripts inject traffic like the OS and assert on events and verdicts. Scenario tests `just sim-test`; random traffic for a real agent `just mock-serve` |
 | `protocol/` | Rust | Shared serialization of commands (user→kernel) and info events (kernel→user) |
 | `wdk/` | Rust (unsafe) | Thin wrappers over Windows kernel APIs (NDIS, WFP, IRP, etc.) |
 | `kext_interface/` | Go | User-space library: open the driver device, send commands, receive events |
 | `kext_tester/` | Go | Manual test app that loads and exercises the driver |
 | `release/` | Rust | Packages the signed `.sys` into a `.zip`/`.cab` for Microsoft submission |
-| `c_helper/` | C | Small ASM/C helpers needed by the linker |
 | `libs/` | — | Pre-compiled Windows import libraries |
 
 ### Data Flow
@@ -91,7 +103,8 @@ Treated as temporary verdict — no cache entry, every packet sent to user space
 
 | File | Purpose |
 |------|---------|
-| `driver/src/entry.rs` | `DriverEntry`, IRP dispatch table, I/O routing |
+| `driver/kernel/src/lib.rs` | Exported `DriverEntry` symbol, global allocator, panic handler |
+| `driver/src/entry.rs` | `driver_entry` (driver init), IRP dispatch table, I/O routing |
 | `driver/src/device.rs` | `DeviceContext` — global state, `read()`, `write()`, command processing |
 | `driver/src/connection.rs` | `Connection`, `Verdict` enum, bandwidth tracking |
 | `driver/src/connection_cache.rs` | Per-port arrays, RCU-style concurrent access, 1-min/10-min eviction |

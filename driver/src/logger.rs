@@ -1,30 +1,24 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::{
-    mem::MaybeUninit,
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
-};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use protocol::info::{Info, Severity};
 
 pub const LOG_LEVEL: u8 = Severity::Error as u8;
 
 pub const MAX_LOG_LINE_SIZE: usize = 150;
 const SIZE_OF_LOG_LINE_BUFFER: usize = 1024;
-static mut LOG_LINES: [AtomicPtr<Info>; SIZE_OF_LOG_LINE_BUFFER] =
-    unsafe { MaybeUninit::zeroed().assume_init() };
-static START_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
-static END_INDEX: AtomicUsize = unsafe { MaybeUninit::zeroed().assume_init() };
+static LOG_LINES: [AtomicPtr<Info>; SIZE_OF_LOG_LINE_BUFFER] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; SIZE_OF_LOG_LINE_BUFFER];
+static START_INDEX: AtomicUsize = AtomicUsize::new(0);
+static END_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 pub fn add_line(log_line: Info) {
-    let mut index = END_INDEX.fetch_add(1, Ordering::SeqCst);
-    unsafe {
-        index %= SIZE_OF_LOG_LINE_BUFFER;
-        let ptr = &mut LOG_LINES[index];
-        let line = Box::new(log_line);
-        let old = ptr.swap(Box::into_raw(line), Ordering::SeqCst);
-        if !old.is_null() {
-            _ = Box::from_raw(old);
-        }
+    let index = END_INDEX.fetch_add(1, Ordering::SeqCst) % SIZE_OF_LOG_LINE_BUFFER;
+    let line = Box::new(log_line);
+    let old = LOG_LINES[index].swap(Box::into_raw(line), Ordering::SeqCst);
+    if !old.is_null() {
+        // `old` was produced by `Box::into_raw` in a previous `add_line`.
+        unsafe { _ = Box::from_raw(old) };
     }
 }
 
@@ -35,14 +29,13 @@ pub fn flush() -> Vec<Info> {
     if end_index <= start_index {
         return vec;
     }
-    unsafe {
-        let count = end_index - start_index;
-        for i in start_index..start_index + count {
-            let index = i % SIZE_OF_LOG_LINE_BUFFER;
-            let ptr = LOG_LINES[index].swap(core::ptr::null_mut(), Ordering::SeqCst);
-            if !ptr.is_null() {
-                vec.push(*Box::from_raw(ptr));
-            }
+    let count = end_index - start_index;
+    for i in start_index..start_index + count {
+        let index = i % SIZE_OF_LOG_LINE_BUFFER;
+        let ptr = LOG_LINES[index].swap(core::ptr::null_mut(), Ordering::SeqCst);
+        if !ptr.is_null() {
+            // `ptr` was produced by `Box::into_raw` in `add_line`.
+            vec.push(*unsafe { Box::from_raw(ptr) });
         }
     }
 
@@ -64,8 +57,8 @@ macro_rules! log_internal {
 macro_rules! crit {
     ($($arg:tt)*) => ({
         if protocol::info::Severity::Critical as u8 >= $crate::logger::LOG_LEVEL {
-            let message = alloc::format!($($arg)*);
-            $crate::logger::add_line(protocol::info::Severity::Critical, alloc::format!("{}:{} ", file!(), line!()), message)
+            let mut log_line = protocol::info::log_line(protocol::info::Severity::Critical, $crate::logger::MAX_LOG_LINE_SIZE);
+            $crate::log_internal!(log_line, $($arg)*);
         }
     });
 }

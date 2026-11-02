@@ -153,7 +153,12 @@ type ConnectionUpdateV6 struct {
 	TxPackets  uint64
 }
 
-type ConnectionUpdateEnd struct{}
+// ConnectionUpdateEnd closes the events of one GetConnectionsUpdate request.
+// Timestamp is opaque (the kext's clock): pass it to the next
+// SendGetConnectionsUpdateCommand.
+type ConnectionUpdateEnd struct {
+	Timestamp uint64
+}
 
 func parseGenericInfo[T any](data []byte) (Info, error) {
 	var new T
@@ -163,11 +168,6 @@ func parseGenericInfo[T any](data []byte) (Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &new, nil
-}
-
-func parseEmptyInfo[T any](data []byte) (Info, error) {
-	var new T
 	return &new, nil
 }
 
@@ -276,7 +276,7 @@ func RecvInfo(reader io.Reader) (Info, error) {
 		infoConnectionEndEventV6:    parseGenericInfo[ConnectionEndV6],
 		infoConnectionUpdateEventV4: parseGenericInfo[ConnectionUpdateV4],
 		infoConnectionUpdateEventV6: parseGenericInfo[ConnectionUpdateV6],
-		infoConnectionUpdateEnd:     parseEmptyInfo[ConnectionUpdateEnd],
+		infoConnectionUpdateEnd:     parseGenericInfo[ConnectionUpdateEnd],
 	}
 
 	parser, ok := parsers[infoType]

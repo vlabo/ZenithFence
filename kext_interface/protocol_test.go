@@ -141,7 +141,10 @@ func TestRustInfoFile(t *testing.T) {
 			}
 		case *ConnectionUpdateEnd:
 			t.Logf("ConnectionUpdateEnd: %+v\n", v)
-			// Empty struct
+			expected := ConnectionUpdateEnd{Timestamp: 1}
+			if *v != expected {
+				t.Errorf("unexpected ConnectionUpdateEnd: %+v\n", v)
+			}
 		default:
 			t.Errorf("unexpected info type: %T\n", v)
 		}

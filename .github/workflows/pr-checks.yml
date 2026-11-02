@@ -1,0 +1,51 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # `just test` runs:
+      #   - kext-interface-gen   (regenerate Go command fixture)
+      #   - test-protocol        (Rust protocol parsers + bounds regression tests)
+      #   - test-kext-interface  (Go <-> Rust differential on the .bin fixtures)
+      #   - test-driver          (the driver's own unit tests, over the mock WDK)
+      # None of these need the WDK / a kernel.
+      - name: Run tests
+        run: just test
+
+      # `go test` above already compiles kext_interface on Windows and runs a
+      # subset of vet; this is the full set.
+      - name: Vet kext_interface
+        working-directory: ./kext_interface
+        run: go vet ./...
+
+  # The scenario tests in mock/sim/tests run in zfsim-wheels.yml, against the
+  # installed Windows and Linux wheels.

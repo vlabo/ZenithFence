@@ -8,7 +8,10 @@ edition = "2021"
 [lib]
 name = "driver"
 path = "src/lib.rs"
-crate-type = ["staticlib"]
+# A plain Rust library. The shipped driver.lib is produced by kernel/ (the
+# production build root), which links this crate against the real `wdk`.
+# mock/driver compiles these same sources against a host mock of `wdk` for
+# testing; keep its dependency list in sync with this one.
 
 [profile.dev]
 panic = "abort"

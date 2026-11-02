@@ -11,6 +11,10 @@ This file contains the entry point and calling all the needed initialization cod
 
 `fn driver_entry()` -> entry pointer of the driver.
 
+This crate is a plain library. The shipped `driver.lib` is built by `kernel/`
+(the production build root), which adds the global allocator, the panic handler
+and exports `driver_entry` as `DriverEntry`, linking against the real `wdk`.
+
 `device.rs`:  
 Holds the global state of the driver.  
 Initialization: Setting up global state, Filter engine and callouts.  

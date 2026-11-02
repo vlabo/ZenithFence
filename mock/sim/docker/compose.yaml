@@ -1,0 +1,20 @@
+# `just mock-docker` builds and starts this. Put the agent's bootstrap data in
+# mock/sim/docker/.env (gitignored):  NX_BOOTSTRAP=nxbootstrap:...
+services:
+  agent:
+    build:
+      context: ../../..
+      dockerfile: mock/sim/docker/Dockerfile
+    image: zfsim-agent
+    container_name: zfsim-agent
+    init: true
+    env_file: .env
+    environment:
+      # The container's own resolver is a loopback stub; look sites up for real.
+      ZF_DNS_SERVER: 1.1.1.1
+    volumes:
+      # Keeps the agent's identity, so the device stays approved across runs.
+      - zfsim-agent-data:/data
+
+volumes:
+  zfsim-agent-data:

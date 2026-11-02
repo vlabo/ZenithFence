@@ -14,7 +14,8 @@ use std::sync::OnceLock;
 use zip::{write::FileOptions, ZipWriter};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
-static LIB_PATH: &'static str = "./build/x86_64-pc-windows-msvc/release/driver.lib";
+// Built by driver/kernel (the production build root); packaged as driver.lib.
+static LIB_PATH: &'static str = "./build/x86_64-pc-windows-msvc/release/driver_kernel.lib";
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -122,11 +123,11 @@ fn load_config() -> &'static Config {
 
 fn build_driver() {
     let output = Command::new("cargo")
-        .current_dir("../driver")
+        .current_dir("../driver/kernel")
         .arg("build")
         .arg("--release")
         .args(["--target", "x86_64-pc-windows-msvc"])
-        .args(["--target-dir", "../release/build"])
+        .args(["--target-dir", "../../release/build"])
         .output()
         .unwrap();
     println!("{}", String::from_utf8(output.stderr).unwrap());
@@ -250,7 +251,7 @@ fn create_release_dir(dir_path: &Path, with_bat: bool) {
         .arg("/MACHINE:X64")
         .arg("/OPT:REF,ICF")
         .arg("/SUBSYSTEM:NATIVE,6.01")
-        .arg("/ENTRY:FxDriverEntry")
+        .arg("/ENTRY:GsDriverEntry")
         .arg("/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE")
         .arg("/MERGE:.rustc=.data")
         .arg("/INTEGRITYCHECK")

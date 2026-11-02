@@ -1,0 +1,15 @@
+[package]
+name = "rustdoc-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generates docs/LLMs/RUSTDOC-*.md item references for LLM assistants"
+
+# Standalone tool, not part of any workspace.
+[workspace]
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing", "printing"] }
+prettyplease = "0.2"
+quote = "1"
+proc-macro2 = "1"

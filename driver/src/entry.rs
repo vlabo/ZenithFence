@@ -3,42 +3,50 @@ use crate::device;
 use alloc::boxed::Box;
 use num_traits::FromPrimitive;
 use wdk::irp_helpers::{DeviceControlRequest, ReadRequest, WriteRequest};
+use wdk::kernel_types::{
+    DEVICE_OBJECT, DRIVER_OBJECT, IRP, NTSTATUS, STATUS_FAILED_DRIVER_ENTRY, STATUS_SUCCESS,
+    UNICODE_STRING,
+};
 use wdk::{err, info, interface};
-use windows_sys::Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, IRP};
-use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_SUCCESS};
 
 static VERSION: [u8; 4] = include!("../../kext_interface/version.txt");
 
+// Name of the device user space opens (`\\.\ZenithFence`).
+const DRIVER_NAME: &str = "ZenithFence";
+
+// Global device pointer. `get_device` hands out a shared `&'static` so callout
+// and read/write threads can share one device soundly (every `Device` field is
+// interior-mutable).
 static mut DEVICE: *mut device::Device = core::ptr::null_mut();
-pub fn get_device() -> Option<&'static mut device::Device> {
-    return unsafe { DEVICE.as_mut() };
+pub fn get_device() -> Option<&'static device::Device> {
+    return unsafe { DEVICE.as_ref() };
 }
 
-// DriverEntry is the entry point of the driver (main function). Will be called when driver is loaded.
-// Name should not be changed
-#[export_name = "DriverEntry"]
+// Entry point of the driver (main function). Called when the driver is loaded.
+// The production build root (kernel/src/lib.rs) exports it as the `DriverEntry`
+// symbol. The kernel types come through `wdk::kernel_types`, so this plumbing
+// does not depend on `windows_sys` directly.
 pub extern "system" fn driver_entry(
-    driver_object: *mut windows_sys::Wdk::Foundation::DRIVER_OBJECT,
-    registry_path: *mut windows_sys::Win32::Foundation::UNICODE_STRING,
-) -> windows_sys::Win32::Foundation::NTSTATUS {
+    driver_object: *mut DRIVER_OBJECT,
+    _registry_path: *mut UNICODE_STRING,
+) -> NTSTATUS {
     info!("Starting initialization...");
 
-    // Initialize driver object.
-    let mut driver = match interface::init_driver_object(
-        driver_object,
-        registry_path,
-        "ZenithFence",
-        core::ptr::null_mut(),
-    ) {
+    // Create the device user space opens.
+    let mut driver = match interface::init_driver_object(driver_object, DRIVER_NAME) {
         Ok(driver) => driver,
         Err(status) => {
             err!("driver_entry: failed to initialize driver: {}", status);
-            return windows_sys::Win32::Foundation::STATUS_FAILED_DRIVER_ENTRY;
+            return STATUS_FAILED_DRIVER_ENTRY;
         }
     };
 
-    // Set driver functions.
+    // Set driver functions. Every request type user space sends needs a handler: the I/O manager
+    // rejects the ones without.
     driver.set_driver_unload(driver_unload);
+    driver.set_create_fn(driver_open_close);
+    driver.set_cleanup_fn(driver_open_close);
+    driver.set_close_fn(driver_open_close);
     driver.set_read_fn(driver_read);
     driver.set_write_fn(driver_write);
     driver.set_device_control_fn(device_control);
@@ -49,7 +57,9 @@ pub extern "system" fn driver_entry(
             Ok(device) => Box::new(device),
             Err(err) => {
                 wdk::err!("filed to initialize device: {}", err);
-                return -1;
+                // The unload routine is not called when DriverEntry fails, so undo it here.
+                interface::delete_device(driver_object, DRIVER_NAME);
+                return STATUS_FAILED_DRIVER_ENTRY;
             }
         };
         DEVICE = Box::into_raw(device);
@@ -59,7 +69,7 @@ pub extern "system" fn driver_entry(
 }
 
 // driver_unload function is called when service delete is called from user-space.
-unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
+unsafe extern "system" fn driver_unload(object: *const DRIVER_OBJECT) {
     info!("Unloading complete");
     unsafe {
         if !DEVICE.is_null() {
@@ -70,6 +80,18 @@ unsafe extern "system" fn driver_unload(_object: *const DRIVER_OBJECT) {
             DEVICE = core::ptr::null_mut();
         }
     }
+    // The callouts were registered on the device object, so it goes last.
+    interface::delete_device(object, DRIVER_NAME);
+}
+
+/// Opening, cleaning up and closing a handle need no work from the driver; they only have to succeed.
+// TODO: Closing the agent's handle leaves its pended packets to the 30 s timeout and keeps the
+// cached verdicts. Decide on a policy for an agent that goes away (see `interface::init_driver_object`).
+unsafe extern "system" fn driver_open_close(
+    _device_object: &mut DEVICE_OBJECT,
+    irp: &mut IRP,
+) -> NTSTATUS {
+    wdk::irp_helpers::complete_empty(irp)
 }
 
 // driver_read event triggered from user-space on file.Read.
@@ -78,14 +100,13 @@ unsafe extern "system" fn driver_read(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut read_request = ReadRequest::new(irp);
-    let Some(device) = get_device() else {
-        read_request.complete();
-
-        return read_request.get_status();
-    };
-
-    device.read(&mut read_request);
-    read_request.get_status()
+    // TODO: The read blocks this thread in `device.read` until an event arrives, so the request
+    // cannot be cancelled (CancelIoEx) while it waits. Pend read IRPs in a cancel-safe queue
+    // instead (IoCsqInitialize) and complete them as events are pushed.
+    if let Some(device) = get_device() {
+        device.read(&mut read_request);
+    }
+    read_request.complete()
 }
 
 /// driver_write event triggered from user-space on file.Write.
@@ -94,16 +115,11 @@ unsafe extern "system" fn driver_write(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut write_request = WriteRequest::new(irp);
-    let Some(device) = get_device() else {
-        write_request.complete();
-        return write_request.get_status();
-    };
-
-    device.write(&mut write_request);
-
-    write_request.mark_all_as_read();
-    write_request.complete();
-    write_request.get_status()
+    if let Some(device) = get_device() {
+        device.write(&mut write_request);
+        write_request.mark_all_as_read();
+    }
+    write_request.complete()
 }
 
 /// device_control event triggered from user-space on file.deviceIOControl.
@@ -112,17 +128,15 @@ unsafe extern "system" fn device_control(
     irp: &mut IRP,
 ) -> NTSTATUS {
     let mut control_request = DeviceControlRequest::new(irp);
-    let Some(device) = get_device() else {
-        control_request.complete();
-        return control_request.get_status();
-    };
+    if get_device().is_none() {
+        return control_request.complete();
+    }
 
     let Some(control_code): Option<ControlCode> =
         FromPrimitive::from_u32(control_request.get_control_code())
     else {
         wdk::info!("Unknown IOCTL code: {}", control_request.get_control_code());
-        control_request.not_implemented();
-        return control_request.get_status();
+        return control_request.not_implemented();
     };
 
     wdk::info!("IOCTL: {}", control_code);
@@ -131,9 +145,8 @@ unsafe extern "system" fn device_control(
         ControlCode::Version => {
             control_request.write(&VERSION);
         }
-        ControlCode::ShutdownRequest => device.shutdown(),
     };
 
-    control_request.complete();
-    control_request.get_status()
+    // Completing hands the IRP back to the I/O manager; the status comes from the call, not the IRP.
+    control_request.complete()
 }

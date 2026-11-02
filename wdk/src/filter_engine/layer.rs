@@ -39,7 +39,9 @@ use windows_sys::{
 
 #[repr(C)]
 pub(crate) struct Value {
-    pub(crate) value_type: ValueType,
+    // Read as the raw FWP_DATA_TYPE: a value outside `ValueType` would make the enum invalid.
+    // `ValueType::from_raw` maps it.
+    pub(crate) value_type: u32,
     pub(crate) value: ValueData,
 }
 
@@ -87,6 +89,40 @@ pub enum ValueType {
     FwpV6AddrMask = 0xff + 2,
     FwpRangeType = 0xff + 3,
     FwpDataTypeMax = 0xff + 4,
+}
+
+impl ValueType {
+    /// Maps a raw FWP_DATA_TYPE. `None` for a value this enum does not know.
+    pub fn from_raw(value: u32) -> Option<Self> {
+        let value_type = match value {
+            0 => Self::FwpEmpty,
+            1 => Self::FwpUint8,
+            2 => Self::FwpUint16,
+            3 => Self::FwpUint32,
+            4 => Self::FwpUint64,
+            5 => Self::FwpInt8,
+            6 => Self::FwpInt16,
+            7 => Self::FwpInt32,
+            8 => Self::FwpInt64,
+            9 => Self::FwpFloat,
+            10 => Self::FwpDouble,
+            11 => Self::FwpByteArray16Type,
+            12 => Self::FwpByteBlobType,
+            13 => Self::FwpSid,
+            14 => Self::FwpSecurityDescriptorType,
+            15 => Self::FwpTokenInformationType,
+            16 => Self::FwpTokenAccessInformationType,
+            17 => Self::FwpUnicodeStringType,
+            18 => Self::FwpByteArray6Type,
+            0xff => Self::FwpSingleDataTypeMax,
+            0x100 => Self::FwpV4AddrMask,
+            0x101 => Self::FwpV6AddrMask,
+            0x102 => Self::FwpRangeType,
+            0x103 => Self::FwpDataTypeMax,
+            _ => return None,
+        };
+        Some(value_type)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -27,6 +27,11 @@ type KextFile struct {
 
 	buffer     []byte
 	read_slice []byte
+	// pipe is set when the file is the simulation named pipe (OpenPipe) rather
+	// than the kernel device. The pipe has no IOCTL channel (see ReadVersion),
+	// and a server-side disconnect is reported as end-of-file (see
+	// runOverlapped) so callers see the same errors as from the device.
+	pipe bool
 }
 
 // Read reads the next chunk of data from the kext.
@@ -154,6 +159,11 @@ func (f *KextFile) runOverlapped(issue func(handle windows.Handle, overlapped *w
 		err = windows.GetOverlappedResult(handle, overlapped, &done, true)
 	}
 	if err != nil {
+		if f.pipe && (errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_PIPE_NOT_CONNECTED)) {
+			// The mock driver went away: report it the way the device reports its
+			// event queue running down.
+			err = windows.ERROR_HANDLE_EOF
+		}
 		return done, err
 	}
 

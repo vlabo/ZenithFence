@@ -105,6 +105,10 @@ func SendClearCacheCommand(writer io.Writer) error {
 	return err
 }
 
+// SendGetConnectionsUpdateCommand asks the kext to report the connections that
+// saw traffic since the previous update. timestamp is the Timestamp of that
+// update's ConnectionUpdateEnd, passed back unchanged (0 for the first request).
+// It is on the kext's clock: store it, don't interpret it.
 func SendGetConnectionsUpdateCommand(writer io.Writer, timestamp uint64) error {
 	req := ConnectionsUpdate{
 		command:   CommandGetConnectionsUpdate,
