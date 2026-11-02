@@ -13,8 +13,7 @@ import (
 
 // OpenPipe connects to a userspace fake-driver named pipe and returns a
 // *KextFile that is interchangeable with the one KextService.OpenFile returns
-// for the kernel device. pipeName is either a full pipe path (\\.\pipe\...) or a
-// bare name, which maps to \\.\pipe\<pipeName> (see SimEndpoint). This is the
+// for the kernel device. path is the full pipe path (\\.\pipe\...). This is the
 // "different loading" path for the simulation harness; production uses
 // KextService.OpenFile instead.
 //
@@ -24,8 +23,7 @@ import (
 // is what the event parser (RecvInfo) expects, so message boundaries on the
 // command direction don't affect event reassembly. CreateFile is retried while
 // the server is still coming up, so server-first ordering is not required.
-func OpenPipe(pipeName string, readBufferSize int) (*KextFile, error) {
-	path := SimEndpoint(pipeName)
+func OpenPipe(path string, readBufferSize int) (*KextFile, error) {
 	pathU16, err := syscall.UTF16FromString(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert pipe name to UTF16 string: %w", err)

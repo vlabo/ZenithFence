@@ -53,7 +53,7 @@ import os
 from zfsim import Flow, Sim, wait_verdict
 
 with Sim() as sim:                      # loads the driver; one Sim per process
-    sim.serve("ZenithFence")            # the agent's named pipe
+    sim.serve(r"\\.\pipe\ZenithFence")  # full path of the agent's pipe (Unix: a socket path)
     assert sim.wait_agent(timeout=60)   # now start the agent
     flow = Flow("tcp", "10.0.0.5", 50000, "1.1.1.1", 443)
     assert sim.ale_connect(flow, pid=os.getpid()).absorb  # the OS starts a connection; it pends

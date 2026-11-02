@@ -8,29 +8,15 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
-// SimEndpoint returns the Unix socket path for the logical endpoint name.
-func SimEndpoint(name string) string {
-	if strings.Contains(name, "/") {
-		return name
-	}
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return strings.TrimRight(dir, "/") + "/" + name + ".sock"
-	}
-	return "/tmp/" + name + ".sock"
-}
-
-// openSimConn dials the mock driver's Unix socket, retrying while the server has not
+// openSimConn dials the mock driver's Unix socket at path, retrying while the server has not
 // created it yet (ENOENT) or is not accepting yet (ECONNREFUSED). The read
 // buffer size is unused: the socket buffers in the kernel.
-func openSimConn(name string, _ int) (SimConn, error) {
-	path := SimEndpoint(name)
+func openSimConn(path string, _ int) (SimConn, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		conn, err := net.Dial("unix", path)

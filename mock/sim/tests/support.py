@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import itertools
 import os
+import sys
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -19,8 +21,11 @@ _names = itertools.count()
 
 
 def endpoint_name() -> str:
-    """A logical endpoint name no other test (or test run) uses."""
-    return f"zfsim-test-{os.getpid()}-{next(_names)}"
+    """A full endpoint path no other test (or test run) uses."""
+    name = f"zfsim-test-{os.getpid()}-{next(_names)}"
+    if sys.platform == "win32":
+        return rf"\\.\pipe\{name}"
+    return os.path.join(tempfile.gettempdir(), f"{name}.sock")
 
 
 def accept_all(event: Event) -> int | None:

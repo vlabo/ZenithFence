@@ -3,7 +3,7 @@
     from zfsim import Sim, Flow, Verdict
 
     with Sim() as sim:
-        sim.serve("ZenithFence")                  # the agent's named pipe
+        sim.serve(r"\\.\pipe\ZenithFence")        # full path of the agent's pipe
         assert sim.wait_agent(timeout=60)         # start the agent now
         flow = Flow("tcp", "10.0.0.5", 50000, "1.1.1.1", 443)
         sim.ale_connect(flow, pid=1234)           # the "OS" starts a connection

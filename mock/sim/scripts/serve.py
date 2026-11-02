@@ -2,7 +2,7 @@
 
     python mock/sim/scripts/serve.py
 
-Waits for an agent on \\\\.\\pipe\\ZenithFence (Unix: the ZenithFence socket).
+Waits for an agent on \\\\.\\pipe\\ZenithFence (Unix: /tmp/ZenithFence.sock).
 Then, every second, this process "browses" to the next site in SITES:
 
   1. DNS: a real lookup against the machine's resolver. The query rides the
@@ -29,7 +29,7 @@ from zfsim import Flow, Sim, Verdict, payloads
 from zfsim.dns import answer_ip, default_resolver
 from zfsim.traffic import replay_injected, wait_verdict
 
-PIPE = "ZenithFence"
+PIPE = r"\\.\pipe\ZenithFence" if sys.platform == "win32" else "/tmp/ZenithFence.sock"
 SITES = ["example.com", "wikipedia.org", "github.com", "cloudflare.com", "python.org", "nexufend.com"]
 VERDICT_TIMEOUT = 10.0
 PID = os.getpid()

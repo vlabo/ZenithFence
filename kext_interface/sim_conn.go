@@ -7,16 +7,13 @@ import "io"
 // fills the whole buffer from the event stream, and each Write delivers exactly
 // one command to the driver.
 //
-// The endpoint is addressed by a logical name (ZF_SIM_PIPE), mapped
-// per OS by SimEndpoint. The rule must match `endpoint` in mock/sim/src/pipe/mod.rs:
-//   - Windows: <name> itself if it is a full \\.\pipe\ path, else the named
-//     pipe \\.\pipe\<name>
-//   - Unix:    <name> itself if it contains '/', else $XDG_RUNTIME_DIR/<name>.sock,
-//     falling back to /tmp/<name>.sock
+// The endpoint is a full path (ZF_SIM_PIPE), used verbatim and set to the same
+// value as the script's `Sim.serve(path)`: \\.\pipe\<name> on Windows, a socket
+// file path on Unix.
 type SimConn = io.ReadWriteCloser
 
-// OpenSimConn connects to the mock driver endpoint for name, retrying while the
+// OpenSimConn connects to the mock driver endpoint at path, retrying while the
 // script is still coming up, so script-first ordering is not required.
-func OpenSimConn(name string, readBufferSize int) (SimConn, error) {
-	return openSimConn(name, readBufferSize)
+func OpenSimConn(path string, readBufferSize int) (SimConn, error) {
+	return openSimConn(path, readBufferSize)
 }

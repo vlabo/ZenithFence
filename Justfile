@@ -132,9 +132,9 @@ mock-docker *args:
 [windows]
 sim-attach: sim-build-agent
 	#!pwsh.exe -File
-	$env:ZF_SIM_PIPE = "ZenithFence"
+	$env:ZF_SIM_PIPE = "\\.\pipe\ZenithFence"
 	& "./kext_tester.exe"
 
 [unix]
 sim-attach: sim-build-agent
-	ZF_SIM_PIPE=ZenithFence ./kext_tester/kext_tester
+	ZF_SIM_PIPE=/tmp/ZenithFence.sock ./kext_tester/kext_tester

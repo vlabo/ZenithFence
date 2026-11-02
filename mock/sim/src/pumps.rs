@@ -17,9 +17,6 @@ use mock_wdk::kernel_types::{STATUS_END_OF_FILE, STATUS_SUCCESS};
 
 use crate::pipe::PipeServer;
 
-/// Default logical endpoint name; mapped per OS by [`crate::pipe::endpoint`].
-pub const DEFAULT_PIPE_NAME: &str = "ZenithFence";
-
 /// One observation made by a pump.
 pub enum TapMessage {
     /// A whole event frame the driver sent towards the agent.

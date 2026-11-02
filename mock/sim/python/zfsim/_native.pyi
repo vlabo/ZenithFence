@@ -244,11 +244,17 @@ class Sim:
 
     # ---- The agent -----------------------------------------------------------
 
-    def serve(self, name: str | None = None) -> str:
-        """Expose the driver on an agent endpoint: a logical name (default
-        `"ZenithFence"`, the agent's `ZF_SIM_PIPE`) or a full path. Returns the
-        OS endpoint at once; the agent may connect later (see `wait_agent`).
-        One agent per `serve()`."""
+    def serve(self, path: str) -> str:
+        """Expose the driver on an agent endpoint, a full path used verbatim,
+        the same one as the agent's `ZF_SIM_PIPE`. Returns it at once; the
+        agent may connect later (see `wait_agent`). One agent per `serve()`.
+
+        Windows: the path must begin with `\\\\.\\pipe\\` (e.g.
+        `\\\\.\\pipe\\ZenithFence`); named pipes only exist under that prefix,
+        and a path without it is not a pipe and fails to be created.
+
+        Unix: a socket file path, anywhere you can create a file. It must fit
+        in `sun_path` (about 104-108 bytes)."""
     def wait_agent(self, timeout: float | None = None) -> bool:
         """Wait until an agent connects to the `serve()` endpoint. Returns
         whether it did within `timeout` seconds (`None`: wait forever)."""

@@ -809,13 +809,19 @@ impl Sim {
 
     // ---- Real agent attached ---------------------------------------------
 
-    /// Expose the driver on an agent endpoint: a logical name (default
-    /// `ZenithFence`, the agent's `ZF_SIM_PIPE`) or a full path. Returns the OS
+    /// Expose the driver on an agent endpoint, given as a full path used
+    /// verbatim; the agent's `ZF_SIM_PIPE` is the same path. Returns the
     /// endpoint. Returns immediately; the agent may connect later (see
     /// `wait_agent`). Events the agent receives and commands it sends land in
     /// `next_event()` / `next_command()`. One agent per `serve()`.
-    #[pyo3(signature = (name=None))]
-    fn serve(&self, name: Option<String>) -> PyResult<String> {
+    ///
+    /// Windows: the path must begin with `\\.\pipe\` (e.g.
+    /// `\\.\pipe\ZenithFence`); named pipes only exist under that prefix, and a
+    /// path without it is not a pipe and fails to be created.
+    ///
+    /// Unix: a socket file path, anywhere you can create a file. It must fit in
+    /// `sun_path` (about 104-108 bytes).
+    fn serve(&self, path: String) -> PyResult<String> {
         let mut inner = self.inner.lock().unwrap();
         if inner.owner.is_none() {
             return Err(not_open());
@@ -823,8 +829,7 @@ impl Sim {
         if inner.serving.is_some() {
             return Err(PyRuntimeError::new_err("serve() was already called"));
         }
-        let name = name.unwrap_or_else(|| pumps::DEFAULT_PIPE_NAME.into());
-        let endpoint = pipe::endpoint(&name);
+        let endpoint = path;
         let server = Arc::new(
             PipeServer::create(&endpoint)
                 .map_err(|e| PyRuntimeError::new_err(format!("creating {endpoint}: {e}")))?,

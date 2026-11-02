@@ -29,9 +29,9 @@ var protocols = map[int]string{
 // owns the driver's lifecycle and the traffic; this only attaches, answers events
 // with the verdict policy below, and returns once the script closes the endpoint.
 // Returns the process exit code.
-func runSimulation(pipeName string) int {
-	log.Printf("sim: attaching to mock driver %s", kext_interface.SimEndpoint(pipeName))
-	file, err := kext_interface.OpenSimConn(pipeName, 1024)
+func runSimulation(pipePath string) int {
+	log.Printf("sim: attaching to mock driver %s", pipePath)
+	file, err := kext_interface.OpenSimConn(pipePath, 1024)
 	if err != nil {
 		log.Panicf("sim: failed to open driver endpoint: %s", err)
 	}

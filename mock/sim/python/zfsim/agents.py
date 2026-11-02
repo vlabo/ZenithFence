@@ -126,13 +126,13 @@ def kext_tester_path() -> Path | None:
     return Path(found) if found else None
 
 
-def start_kext_tester(name: str, path: Path | str | None = None, **popen_args: Any) -> subprocess.Popen:
-    """Start the Go test agent attached to the endpoint `Sim.serve(name)`
-    opened (`name` is the logical name). Its policy: outbound to 1.1.1.1 is
-    PERMANENT_BLOCK, everything else PERMANENT_ACCEPT. It exits on its own once
-    the sim closes the endpoint."""
+def start_kext_tester(endpoint: str, path: Path | str | None = None, **popen_args: Any) -> subprocess.Popen:
+    """Start the Go test agent attached to `endpoint`, the full path given to
+    `Sim.serve`. Its policy: outbound to 1.1.1.1 is PERMANENT_BLOCK, everything
+    else PERMANENT_ACCEPT. It exits on its own once the sim closes the
+    endpoint."""
     path = path or kext_tester_path()
     if path is None:
         raise FileNotFoundError("kext_tester is not built (just sim-build-agent)")
-    env = dict(os.environ, ZF_SIM_PIPE=name)
+    env = dict(os.environ, ZF_SIM_PIPE=endpoint)
     return subprocess.Popen([str(path)], env=env, **popen_args)
