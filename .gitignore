@@ -407,3 +407,5 @@ release/config.json
 # parsers — see protocol-test.yml).
 kext_interface/go_command_test.bin
 protocol/rust_info_test.bin
+kext_interface/go_command_diff.bin
+protocol/info_diff.bin
