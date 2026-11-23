@@ -26,9 +26,21 @@ pub fn check_ntstatus(status: i32) -> Result<(), String> {
     return Err(ntstatus_name(status));
 }
 
-pub fn get_system_timestamp_ms() -> u64 {
-    // 100 nano seconds units -> device by 10 -> micro seconds -> divide by 1000 -> milliseconds
-    unsafe { ffi::pm_QuerySystemTime() / 10_000 }
+/// Address of `KUSER_SHARED_DATA.InterruptTime` (64-bit kernel: `KI_USER_SHARED_DATA` + 0x8).
+const SHARED_INTERRUPT_TIME: *const u64 = 0xFFFF_F780_0000_0008 as *const u64;
+
+/// Milliseconds since boot, including time spent in sleep and hibernation.
+///
+/// Monotonic: unlike the system (wall-clock) time it is not moved by NTP or by the user setting the
+/// clock, so differences and comparisons between two readings are always meaningful. It is not a
+/// date; never send it to user space as one.
+pub fn get_monotonic_ms() -> u64 {
+    // This is `KeQueryInterruptTime`, which the WDK headers define inline on 64-bit targets (it is
+    // not exported): a single aligned 64-bit load of the interrupt time the kernel keeps in the
+    // shared user data page. Callable at any IRQL.
+    let interrupt_time = unsafe { core::ptr::read_volatile(SHARED_INTERRUPT_TIME) };
+    // 100-nanosecond units -> milliseconds.
+    interrupt_time / HUNDRED_NANOS_PER_MILLISECOND as u64
 }
 
 /// Blocks the calling thread for at least `milliseconds`, giving the rest of the system a chance

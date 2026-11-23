@@ -5,13 +5,13 @@
 extern crate alloc;
 
 mod ale_callouts;
-mod array_holder;
-pub mod mpsc_queue;
+mod pending_event;
 mod callouts;
 mod common;
 mod connection;
 mod connection_cache;
-mod rcu_port;
+mod event;
+mod port_connections;
 mod device;
 mod entry;
 mod filter_reset_queue;

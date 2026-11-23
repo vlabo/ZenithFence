@@ -1,3 +1,4 @@
+use crate::event::Event;
 use alloc::string::{String, ToString};
 use core::{
     fmt::{Debug, Display},
@@ -5,6 +6,7 @@ use core::{
 };
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
+use protocol::info::{ConnectionEndV4, ConnectionEndV6, ConnectionUpdateV4, ConnectionUpdateV6};
 use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Address, Ipv6Address};
 
 pub static PM_DNS_PORT: u16 = 53;
@@ -91,6 +93,16 @@ impl Debug for Direction {
 }
 
 pub trait Connection {
+    /// What tells apart the connections on one local port (the cache slot already fixes the
+    /// protocol and the local port). The cache keeps it inline, next to the pointer to the
+    /// connection, so a lookup scans contiguous memory and only dereferences the match.
+    type CompactKey: Copy + PartialEq;
+
+    /// The compact key of this connection.
+    fn compact_key(&self) -> Self::CompactKey;
+    /// The compact key of `key`, or `None` if `key` is of the other IP version.
+    fn compact_key_of(key: &Key) -> Option<Self::CompactKey>;
+
     fn redirect_info(&self) -> Option<RedirectInfo> {
         let redirect_address = if self.is_ipv6() {
             IpAddress::Ipv6(Ipv6Address::LOCALHOST)
@@ -119,21 +131,6 @@ pub trait Connection {
         }
     }
 
-    /// Builds the [`Key`] that identifies this connection (protocol, local and
-    /// remote address/port). Relies on the address/port accessors, so it works
-    /// for both IPv4 and IPv6 connections without per-type duplication.
-    fn get_key(&self) -> Key {
-        Key {
-            protocol: self.get_protocol(),
-            local_address: self.get_local_address(),
-            local_port: self.get_local_port(),
-            remote_address: self.get_remote_address(),
-            remote_port: self.get_remote_port(),
-        }
-    }
-
-    /// Returns true if the connection is equal to the given key.
-    fn equals(&self, key: &Key) -> bool;
     /// Returns true if the connection is equal to the given key for redirecting. The key is considered equal if the remote port and address are equal.
     fn redirect_equals(&self, key: &Key) -> bool;
     /// Returns the protocol of the connection.
@@ -167,8 +164,15 @@ pub trait Connection {
     /// Sets the timestamp when the connection was last accessed.
     fn set_last_accessed_time(&self, timestamp: u64);
     fn set_verdict(&self, verdict: Verdict);
+    /// Sets the verdict to `new` only if it is `current`. Returns whether it did.
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool;
 
     fn get_bandwidth_usage(&self) -> &BandwidthUsage;
+
+    /// The event that tells user space the connection ended, with its final counters.
+    fn end_info(&self, process_id: u64) -> Event;
+    /// The event that reports the connection's counters (GetConnectionsUpdate).
+    fn update_info(&self) -> Event;
 
     fn update_bandwidth_data(&self, bytes: u64, direction: Direction) {
         // Update bandwidth usage.
@@ -256,6 +260,22 @@ pub struct ConnectionV6 {
     pub(crate) direction: Direction,
 }
 
+/// `Connection::CompactKey` of an IPv4 connection.
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV4 {
+    local_address: Ipv4Address,
+    remote_address: Ipv4Address,
+    remote_port: u16,
+}
+
+/// `Connection::CompactKey` of an IPv6 connection.
+#[derive(Copy, Clone, PartialEq)]
+pub struct CompactKeyV6 {
+    local_address: Ipv6Address,
+    remote_address: Ipv6Address,
+    remote_port: u16,
+}
+
 #[derive(Debug)]
 pub struct RedirectInfo {
     pub(crate) local_address: IpAddress,
@@ -277,7 +297,7 @@ impl ConnectionV4 {
             return Err("wrong ip address version".to_string());
         };
 
-        let timestamp = wdk::utils::get_system_timestamp_ms();
+        let timestamp = wdk::utils::get_monotonic_ms();
 
         Ok(Self {
             protocol: key.protocol,
@@ -301,22 +321,27 @@ impl ConnectionV4 {
 }
 
 impl Connection for ConnectionV4 {
-    fn equals(&self, key: &Key) -> bool {
-        if self.remote_port != key.remote_port {
-            return false;
+    type CompactKey = CompactKeyV4;
+
+    fn compact_key(&self) -> CompactKeyV4 {
+        CompactKeyV4 {
+            local_address: self.local_address,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
         }
-        if self.local_port != key.local_port {
-            return false;
-        }
-        if let IpAddress::Ipv4(local_address) = &key.local_address {
-            if !self.local_address.eq(local_address) {
-                return false;
+    }
+
+    fn compact_key_of(key: &Key) -> Option<CompactKeyV4> {
+        match (key.local_address, key.remote_address) {
+            (IpAddress::Ipv4(local_address), IpAddress::Ipv4(remote_address)) => {
+                Some(CompactKeyV4 {
+                    local_address,
+                    remote_address,
+                    remote_port: key.remote_port,
+                })
             }
+            _ => None,
         }
-        if let IpAddress::Ipv4(remote_address) = &key.remote_address {
-            return self.remote_address.eq(remote_address);
-        }
-        false
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -399,8 +424,46 @@ impl Connection for ConnectionV4 {
         self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool {
+        self.verdict
+            .compare_exchange(current as u8, new as u8, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
         &self.bandwidth_usage
+    }
+
+    fn end_info(&self, process_id: u64) -> Event {
+        let bandwidth = &self.bandwidth_usage;
+        Event::EndV4(ConnectionEndV4 {
+            process_id,
+            direction: self.direction as u8,
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
+    }
+
+    fn update_info(&self) -> Event {
+        let bandwidth = &self.bandwidth_usage;
+        Event::UpdateV4(ConnectionUpdateV4 {
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 }
 
@@ -434,7 +497,7 @@ impl ConnectionV6 {
         let IpAddress::Ipv6(remote_address) = key.remote_address else {
             return Err("wrong ip address version".to_string());
         };
-        let timestamp = wdk::utils::get_system_timestamp_ms();
+        let timestamp = wdk::utils::get_monotonic_ms();
 
         Ok(Self {
             protocol: key.protocol,
@@ -458,22 +521,27 @@ impl ConnectionV6 {
 }
 
 impl Connection for ConnectionV6 {
-    fn equals(&self, key: &Key) -> bool {
-        if self.remote_port != key.remote_port {
-            return false;
+    type CompactKey = CompactKeyV6;
+
+    fn compact_key(&self) -> CompactKeyV6 {
+        CompactKeyV6 {
+            local_address: self.local_address,
+            remote_address: self.remote_address,
+            remote_port: self.remote_port,
         }
-        if self.local_port != key.local_port {
-            return false;
-        }
-        if let IpAddress::Ipv6(local_address) = &key.local_address {
-            if !self.local_address.eq(local_address) {
-                return false;
+    }
+
+    fn compact_key_of(key: &Key) -> Option<CompactKeyV6> {
+        match (key.local_address, key.remote_address) {
+            (IpAddress::Ipv6(local_address), IpAddress::Ipv6(remote_address)) => {
+                Some(CompactKeyV6 {
+                    local_address,
+                    remote_address,
+                    remote_port: key.remote_port,
+                })
             }
+            _ => None,
         }
-        if let IpAddress::Ipv6(remote_address) = &key.remote_address {
-            return self.remote_address.eq(remote_address);
-        }
-        false
     }
 
     fn redirect_equals(&self, key: &Key) -> bool {
@@ -556,8 +624,46 @@ impl Connection for ConnectionV6 {
         self.verdict.store(verdict as u8, Ordering::SeqCst);
     }
 
+    fn replace_verdict(&self, current: Verdict, new: Verdict) -> bool {
+        self.verdict
+            .compare_exchange(current as u8, new as u8, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     fn get_bandwidth_usage(&self) -> &BandwidthUsage {
         &self.bandwidth_usage
+    }
+
+    fn end_info(&self, process_id: u64) -> Event {
+        let bandwidth = &self.bandwidth_usage;
+        Event::EndV6(ConnectionEndV6 {
+            process_id,
+            direction: self.direction as u8,
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
+    }
+
+    fn update_info(&self) -> Event {
+        let bandwidth = &self.bandwidth_usage;
+        Event::UpdateV6(ConnectionUpdateV6 {
+            protocol: self.protocol.into(),
+            local_ip: self.local_address.octets(),
+            remote_ip: self.remote_address.octets(),
+            local_port: self.local_port,
+            remote_port: self.remote_port,
+            rx_bytes: bandwidth.rx_bytes.load(Ordering::SeqCst),
+            rx_packets: bandwidth.rx_packets.load(Ordering::SeqCst),
+            tx_bytes: bandwidth.tx_bytes.load(Ordering::SeqCst),
+            tx_packets: bandwidth.tx_packets.load(Ordering::SeqCst),
+        })
     }
 }
 

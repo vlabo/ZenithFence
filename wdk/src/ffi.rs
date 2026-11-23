@@ -1,10 +1,10 @@
 use core::ffi::c_void;
 
 use windows_sys::{
-    core::{GUID, PCWSTR},
-    Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, MDL},
+    core::GUID,
+    Wdk::Foundation::{DEVICE_OBJECT, DRIVER_OBJECT, MDL, OBJECT_ATTRIBUTES},
     Win32::{
-        Foundation::{HANDLE, NTSTATUS, UNICODE_STRING},
+        Foundation::{BOOLEAN, HANDLE, NTSTATUS, UNICODE_STRING},
         NetworkManagement::WindowsFilteringPlatform::{
             FWPM_PROVIDER_CONTEXT2, FWP_CONDITION_VALUE0, FWP_MATCH_TYPE, FWP_VALUE0,
         },
@@ -56,27 +56,6 @@ pub(crate) struct FWPS_FILTER_CONDITION0 {
     matchType: FWP_MATCH_TYPE,
     conditionValue: FWP_CONDITION_VALUE0,
 }
-
-/// The WdfExecutionLevel enumeration type specifies the maximum IRQL at which the framework will call the event callback functions that a driver has supplied for a framework object.
-#[repr(C)]
-enum WdfExecutionLevel {
-    Invalid = 0,
-    InheritFromParent,
-    Passive,
-    Dispatch,
-}
-
-/// The WDF_SYNCHRONIZATION_SCOPE enumeration type specifies how the framework will synchronize execution of an object's event callback functions.
-#[repr(C)]
-enum WdfSynchronizationScope {
-    Invalid = 0x00,
-    InheritFromParent,
-    Device,
-    Queue,
-    None,
-}
-
-unsafe impl Sync for WdfObjectContextTypeInfo {}
 
 /// The FWPS_FILTER2 structure defines a run-time filter in the filter engine.
 #[allow(non_camel_case_types, non_snake_case)]
@@ -152,8 +131,14 @@ pub(crate) struct NBListHeader {
     pub(crate) first_net_buffer: *mut NET_BUFFER,
 }
 
+/// A field aligned to MEMORY_ALLOCATION_ALIGNMENT (16 bytes on 64-bit), the
+/// `DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT)` of the NDIS headers.
+#[repr(C, align(16))]
+pub(crate) struct Aligned16<T>(pub(crate) T);
+
 /// The NET_BUFFER_LIST structure specifies a linked list of NET_BUFFER structures.
 /// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
+/// Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
 pub struct NET_BUFFER_LIST {
@@ -161,9 +146,9 @@ pub struct NET_BUFFER_LIST {
     pub(crate) Context: *mut c_void,
     pub(crate) ParentNetBufferList: *mut NET_BUFFER_LIST,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 4],
-    pub(crate) MiniportReserved: [*mut c_void; 2],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 4]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 2]>,
     pub(crate) Scratch: *mut c_void,
     pub(crate) SourceHandle: NDIS_HANDLE,
     pub(crate) NblFlags: u32,
@@ -182,6 +167,7 @@ pub union NBSize {
 
 /// This is internal struct should never be allocated from the driver. Use provided functions by microsoft.
 /// The NET_BUFFER structure specifies data that is transmitted or received over the network.
+/// Layout checked against km/ndis/nbl.h (WDK 10.0.26100) by the assertions below.
 #[allow(non_camel_case_types, non_snake_case)]
 #[repr(C)]
 pub struct NET_BUFFER {
@@ -191,15 +177,43 @@ pub struct NET_BUFFER {
     pub(crate) nbSize: NBSize,
     pub(crate) MdlChain: *mut MDL,
     pub(crate) DataOffset: u32,
+    // The fields above are a NET_BUFFER_HEADER, a union with an SLIST_HEADER, which pads them to
+    // 48 bytes.
+    _HeaderPadding: u32,
     pub(crate) ChecksumBias: u16,
     pub(crate) Reserved: u16,
     pub(crate) NdisPoolHandle: NDIS_HANDLE,
-    pub(crate) NdisReserved: [*mut c_void; 2],
-    pub(crate) ProtocolReserved: [*mut c_void; 6],
-    pub(crate) MiniportReserved: [*mut c_void; 4],
+    pub(crate) NdisReserved: Aligned16<[*mut c_void; 2]>,
+    pub(crate) ProtocolReserved: Aligned16<[*mut c_void; 6]>,
+    pub(crate) MiniportReserved: Aligned16<[*mut c_void; 4]>,
     pub(crate) DataPhysicalAddress: u64,
     pub(crate) SharedMemoryInfo: *mut c_void,
 }
+
+// Offsets of the NDIS structures as the WDK headers lay them out (x64). A mismatch means a field
+// is read from the wrong place, so check it at compile time.
+#[cfg(target_arch = "x86_64")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(offset_of!(NET_BUFFER_LIST, Context) == 16);
+    assert!(offset_of!(NET_BUFFER_LIST, NdisReserved) == 48);
+    assert!(offset_of!(NET_BUFFER_LIST, ProtocolReserved) == 64);
+    assert!(offset_of!(NET_BUFFER_LIST, MiniportReserved) == 96);
+    assert!(offset_of!(NET_BUFFER_LIST, Scratch) == 112);
+    assert!(offset_of!(NET_BUFFER_LIST, NblFlags) == 128);
+    assert!(offset_of!(NET_BUFFER_LIST, Status) == 140);
+    assert!(offset_of!(NET_BUFFER_LIST, NetBufferListInfo) == 144);
+
+    assert!(offset_of!(NET_BUFFER, MdlChain) == 32);
+    assert!(offset_of!(NET_BUFFER, DataOffset) == 40);
+    assert!(offset_of!(NET_BUFFER, ChecksumBias) == 48);
+    assert!(offset_of!(NET_BUFFER, NdisPoolHandle) == 56);
+    assert!(offset_of!(NET_BUFFER, NdisReserved) == 64);
+    assert!(offset_of!(NET_BUFFER, ProtocolReserved) == 80);
+    assert!(offset_of!(NET_BUFFER, MiniportReserved) == 128);
+    assert!(offset_of!(NET_BUFFER, DataPhysicalAddress) == 160);
+    assert!(size_of::<NET_BUFFER>() == 176);
+};
 
 /// This data type is used as the generic handle type in NDIS function calls.
 #[allow(non_camel_case_types)]
@@ -230,75 +244,10 @@ pub(crate) struct NET_BUFFER_LIST_POOL_PARAMETERS {
     pub(crate) DataSize: u32,
     pub(crate) Flags: u32,
 }
-/// WdfObjectContextTypeInfo is a description of the device context.
-#[repr(C)]
-pub struct WdfObjectContextTypeInfo {
-    size: u32,
-    context_name: *const u8,
-    context_size: usize,
-    unique_type: *const WdfObjectContextTypeInfo,
-    _evt_driver_get_unique_context_type: *const c_void, // Internal use
-}
-
-impl WdfObjectContextTypeInfo {
-    pub const fn default(null_terminated_name: &'static str) -> Self {
-        Self {
-            size: core::mem::size_of::<WdfObjectContextTypeInfo>() as u32,
-            context_name: null_terminated_name.as_ptr(),
-            context_size: 0,
-            unique_type: core::ptr::null(),
-            _evt_driver_get_unique_context_type: core::ptr::null(),
-        }
-    }
-}
-
-/// WdfObjectAttributes contains attributes for the device context.
-#[repr(C)]
-pub struct WdfObjectAttributes {
-    size: u32,
-    evt_cleanup_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
-    evt_destroy_callback: Option<extern "system" fn(wdf_object: HANDLE)>,
-    execution_level: WdfExecutionLevel,
-    synchronization_scope: WdfSynchronizationScope,
-    parent_object: HANDLE,
-    context_size_override: usize,
-    context_type_info: *const WdfObjectContextTypeInfo,
-}
-
-impl WdfObjectAttributes {
-    pub fn new() -> Self {
-        Self {
-            size: core::mem::size_of::<WdfObjectAttributes>() as u32,
-            evt_cleanup_callback: None,
-            evt_destroy_callback: None,
-            execution_level: WdfExecutionLevel::InheritFromParent,
-            synchronization_scope: WdfSynchronizationScope::InheritFromParent,
-            parent_object: 0,
-            context_size_override: 0,
-            context_type_info: core::ptr::null(),
-        }
-    }
-
-    pub fn add_context<T>(&mut self, context_info: &'static mut WdfObjectContextTypeInfo) {
-        context_info.context_size = core::mem::size_of::<T>();
-        context_info.unique_type = context_info;
-        self.context_size_override = 0;
-        self.context_type_info = context_info.unique_type;
-    }
-
-    pub fn set_cleanup_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE)) {
-        self.evt_cleanup_callback = Some(callback);
-    }
-
-    pub fn set_destroy_fn(&mut self, callback: extern "system" fn(wdf_object: HANDLE)) {
-        self.evt_destroy_callback = Some(callback);
-    }
-}
-
 #[link(name = "Fwpkclnt", kind = "static")]
 #[link(name = "Fwpuclnt", kind = "static")]
-#[link(name = "WdfDriverEntry", kind = "static")]
-#[link(name = "WdfLdr", kind = "static")]
+// GsDriverEntry, the image entry point (link.exe /ENTRY): initializes the stack cookie and calls
+// DriverEntry.
 #[link(name = "BufferOverflowK", kind = "static")]
 #[link(name = "uuid", kind = "static")]
 #[link(name = "wdmsec", kind = "static")]
@@ -306,7 +255,6 @@ impl WdfObjectAttributes {
 #[link(name = "NtosKrnl", kind = "static")]
 #[link(name = "ndis", kind = "static")]
 #[link(name = "hal", kind = "static")]
-#[link(name = "c_helper", kind = "static")]
 extern "C" {
     /// The FwpsCalloutUnregisterById0 function unregisters a callout from the filter engine.
     pub(crate) fn FwpsCalloutUnregisterById0(id: u32) -> NTSTATUS;
@@ -371,26 +319,23 @@ extern "C" {
         flags: u32,
     );
 
-    /// pm_InitDriverObject initialize driver object. This function initializes requerd memory for the device context.
-    pub(crate) fn pm_InitDriverObject(
+    /// The IoCreateDeviceSecure routine creates a named device object and applies the specified security settings.
+    /// It is a macro for this function in wdmsec.h; the implementation is in wdmsec.lib.
+    pub(crate) fn WdmlibIoCreateDeviceSecure(
         driver_object: *mut DRIVER_OBJECT,
-        registry_path: *mut UNICODE_STRING,
-        wdf_driver: *mut HANDLE,
-        wdf_device: *mut HANDLE,
-        win_driver_path: PCWSTR,
-        dos_driver_path: PCWSTR,
-        object_attributes: *mut WdfObjectAttributes,
-        wdf_driver_unload: extern "C" fn(HANDLE),
+        device_extension_size: u32,
+        device_name: *const UNICODE_STRING,
+        device_type: u32,
+        device_characteristics: u32,
+        exclusive: BOOLEAN,
+        default_sddl_string: *const UNICODE_STRING,
+        device_class_guid: *const GUID,
+        device_object: *mut *mut DEVICE_OBJECT,
     ) -> NTSTATUS;
 
-    /// pm_WdfObjectGetTypedContextWerker 1to1 reference to the WdfObjectGetTypedContextWorker macro. The WdfObjectGetTypedContext macro returns a pointer to an object's context space.
-    pub(crate) fn pm_WdfObjectGetTypedContextWorker(
-        wdf_object: HANDLE,
-        type_info: *const WdfObjectContextTypeInfo,
-    ) -> *mut c_void;
-
-    /// WdfObjectGetTypedContext 1to1 reference to WdfDeviceWdmGetDeviceObject. The WdfDeviceWdmGetDeviceObject method returns the Windows Driver Model (WDM) device object that is associated with a specified framework device object.
-    pub(crate) fn pm_GetDeviceObject(wdf_device: HANDLE) -> *mut DEVICE_OBJECT;
+    /// Security descriptor that gives the system and administrators full access, and nobody else any.
+    /// Defined in wdmsec.lib as "D:P(A;;GA;;;SY)(A;;GA;;;BA)".
+    pub(crate) static SDDL_DEVOBJ_SYS_ALL_ADM_ALL: UNICODE_STRING;
 
     /// The FwpsInjectNetworkSendAsync0 function injects packet data into the send data path.
     pub(crate) fn FwpsInjectNetworkSendAsync0(
@@ -536,16 +481,28 @@ extern "C" {
         FreeMdlHandler: *mut c_void,
     );
 
-    /// The KeQuerySystemTime routine obtains the current system time.
-    /// System time is a count of 100-nanosecond intervals since January 1, 1601. System time is typically updated approximately every ten milliseconds. This value is computed for the GMT time zone.
-    pub(crate) fn pm_QuerySystemTime() -> u64;
-
     /// The KeQueryPerformanceCounter routine retrieves the current value and frequency of the performance counter.
     /// Use KeQueryPerformanceCounter to acquire high resolution (<1µs) time stamps for time interval measurements.
     pub(crate) fn KeQueryPerformanceCounter(frequency: *mut i64) -> i64;
 
     /// The KeGetCurrentIrql routine returns the current IRQL.
     pub(crate) fn KeGetCurrentIrql() -> u8;
+
+    /// The PsCreateSystemThread routine creates a system thread that executes in kernel mode.
+    /// Declared here because windows-sys types the start routine without its context argument.
+    pub(crate) fn PsCreateSystemThread(
+        thread_handle: *mut HANDLE,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        process_handle: HANDLE,
+        client_id: *mut c_void,
+        start_routine: unsafe extern "system" fn(start_context: *mut c_void),
+        start_context: *mut c_void,
+    ) -> NTSTATUS;
+
+    /// The ZwClose routine closes an object handle. Declared here because windows-sys links it
+    /// against ntdll.dll.
+    pub(crate) fn ZwClose(handle: HANDLE) -> NTSTATUS;
 
     /// The KeDelayExecutionThread routine puts the current thread into an alertable or
     /// nonalertable wait state for a given interval.

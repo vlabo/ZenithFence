@@ -72,9 +72,9 @@ try {
         & link.exe /OUT:$outSys /RELEASE /DEBUG /NOLOGO /NXCOMPAT `
             /NODEFAULTLIB /SUBSYSTEM:NATIVE /DRIVER /DYNAMICBASE /MANIFEST:NO `
             "/PDBALTPATH:$outPdb" /MACHINE:X64 /OPT:REF,ICF /SUBSYSTEM:NATIVE,6.01 `
-            /ENTRY:FxDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" `
+            /ENTRY:GsDriverEntry "/MERGE:.edata=.rdata;_TEXT=.text;_PAGE=PAGE" `
             /MERGE:.rustc=.data /INTEGRITYCHECK `
-            /LIBPATH:libs/x64 /LIBPATH:c_helper/x64 $Lib
+            /LIBPATH:libs/x64 $Lib
         if ($LASTEXITCODE -ne 0) { throw "link.exe failed ($LASTEXITCODE)." }
     }
     else {

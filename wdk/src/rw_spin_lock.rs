@@ -47,7 +47,8 @@ pub struct Mutex<T> {
     data: UnsafeCell<T>,
 }
 
-unsafe impl<T: Send> Sync for Mutex<T> {}
+// Readers share `&T` across threads, so T must be Sync too.
+unsafe impl<T: Send + Sync> Sync for Mutex<T> {}
 unsafe impl<T: Send> Send for Mutex<T> {}
 
 impl<T> Mutex<T> {

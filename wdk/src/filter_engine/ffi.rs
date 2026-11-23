@@ -114,6 +114,9 @@ pub(crate) fn register_callout(
         check_ntstatus(status)?;
 
         if let Err(err) = callout_add(filter_engine_handle, guid, layer, name, description) {
+            // The registration above is not part of the transaction, so it is not undone when the
+            // transaction aborts. Undo it here, or it outlives the driver.
+            _ = FwpsCalloutUnregisterById0(callout_id);
             return Err(err);
         }
 
