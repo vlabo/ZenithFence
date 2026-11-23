@@ -21,6 +21,19 @@ link arg="":
 rebrand name: link
 	./scripts/rebrand-driver.ps1 -Name {{name}} -Sign
 
+# Tag HEAD with the version from kext_interface/version.txt
+tag:
+	#!powershell.exe -File
+	$ErrorActionPreference = "Stop"
+	if (git status --porcelain ./kext_interface/version.txt) {
+		Write-Error "kext_interface/version.txt has uncommitted changes; commit the version bump first"
+	}
+	$Parts = (Get-Content ./kext_interface/version.txt -Raw).Trim().Trim("[", "]").Split(",") | ForEach-Object { [int]$_.Trim() }
+	$Version = "v$($Parts[0]).$($Parts[1]).$($Parts[2])"
+	git tag -a $Version -m $Version
+	if ($LASTEXITCODE -ne 0) { exit 1 }
+	Write-Host "Created tag $Version"
+
 generate-cert:
 	MakeCert -r -pe -ss PrivateCertStore -n "CN=DriverCertificate" DriverCertificate.cer
 

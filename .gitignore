@@ -407,6 +407,8 @@ release/config.json
 # parsers; `just test` regenerates them first, locally and in PR checks).
 kext_interface/go_command_test.bin
 protocol/rust_info_test.bin
+kext_interface/go_command_diff.bin
+protocol/info_diff.bin
 
 # Unix build of the Go agent (`just sim-build`); the Windows one is covered by *.exe.
 /kext_tester/kext_tester
