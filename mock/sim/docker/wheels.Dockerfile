@@ -25,7 +25,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv clang lld llvm \
  && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/tools \
- && /opt/tools/bin/pip install --no-cache-dir "maturin==1.8.3" "ziglang==0.13.0" "cargo-xwin==0.18.4"
+ && /opt/tools/bin/pip install --no-cache-dir "maturin==1.16.0" "ziglang==0.13.0" "cargo-xwin==0.23.1"
 ENV PATH=/opt/tools/bin:$PATH
 RUN rustup target add \
         x86_64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-apple-darwin \
@@ -35,7 +35,7 @@ RUN rustup target add \
 # any sources, so a code change keeps it; CI keeps it in the GitHub Actions
 # cache). The download from Microsoft is slow (minutes) and its connection
 # sometimes drops, so it is retried; a retry skips the files already fetched.
-# The pip cargo-xwin is the version maturin 1.8.3 bundles (0.18.4), so maturin
+# The pip cargo-xwin is the version maturin 1.16.0 bundles (0.23.1), so maturin
 # finds the DONE mark in XWIN_CACHE_DIR and downloads nothing. Both
 # architectures, for the x86_64 and arm64 wheels.
 ENV XWIN_CACHE_DIR=/opt/xwin XWIN_ARCH=x86_64,aarch64
