@@ -15,16 +15,18 @@ python script ── import zfsim ──▶ _native (PyO3, src/lib.rs) ─▶ mo
 ## Install
 
 Every GitHub release carries a wheel per platform (Windows, Linux and macOS,
-x86_64), for any CPython 3.9+. Install the one for your OS:
+each for x86_64 and arm64), for any CPython 3.9+. Install the one for your
+OS and CPU:
 
 ```bash
 pip install https://github.com/vlabo/ZenithFence/releases/download/v2.0.3/zfsim-2.0.3-cp39-abi3-win_amd64.whl
 ```
 
 The file names are `zfsim-<version>-cp39-abi3-<platform>.whl` with platform
-`win_amd64`, `manylinux_2_17_x86_64.manylinux2014_x86_64` or
-`macosx_10_12_x86_64`. Nothing else is needed: the driver, the mock kernel and
-the harness are compiled into the wheel.
+`win_amd64`, `win_arm64`, `manylinux_2_17_x86_64.manylinux2014_x86_64`,
+`manylinux_2_17_aarch64.manylinux2014_aarch64`, `macosx_10_12_x86_64` or
+`macosx_11_0_arm64` (Apple silicon). Nothing else is needed: the driver, the
+mock kernel and the harness are compiled into the wheel.
 
 To try a pull request before it is released: download the `zfsim-wheels`
 artifact from the PR's "zfsim wheels" CI run (version `<driver>.dev<run>`),
