@@ -85,7 +85,7 @@ sim-build *args:
 # release. `version` defaults to the driver version (kext_interface/version.txt).
 #   just sim-wheels
 #   just sim-wheels 2.0.3rc1
-# Build the zfsim wheels for Windows, Linux and macOS (x86_64) into mock/sim/dist/.
+# Build the zfsim wheels for Windows, Linux and macOS (x86_64 and arm64) into mock/sim/dist/.
 sim-wheels version=`python ./mock/sim/build.py --version`:
 	docker build -f ./mock/sim/docker/wheels.Dockerfile --build-arg VERSION={{version}} --target wheels --output type=local,dest=./mock/sim/dist .
 

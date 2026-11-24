@@ -1,12 +1,12 @@
 name: zfsim wheels
 
-# Builds the zfsim wheels (Windows, Linux and macOS x86_64) in the same
-# container as `just sim-wheels`, installs the Windows and Linux ones into a
-# clean Python and runs the scenario tests against them (the only CI run of
-# mock/sim/tests). Every run keeps the wheels as its `zfsim-wheels` artifact
-# (download it from the run's summary page, e.g. the PR's checks); on a
-# published release they are also attached to the release. Pull requests,
-# pushes to main and manual runs make no release.
+# Builds the zfsim wheels (Windows, Linux and macOS, each for x86_64 and arm64)
+# in the same container as `just sim-wheels`, installs them into a clean Python
+# on a runner of each OS and CPU and runs the scenario tests against them (the
+# only CI run of mock/sim/tests). Every run keeps the wheels as its
+# `zfsim-wheels` artifact (download it from the run's summary page, e.g. the
+# PR's checks); on a published release they are also attached to the release.
+# Pull requests, pushes to main and manual runs make no release.
 
 on:
   release:
@@ -65,13 +65,22 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # The image layers go to the GitHub Actions cache (mode=max: the build
+      # stage's too), above all the one with the MSVC CRT and Windows SDK, so
+      # runs after the first skip that download. Pull requests and releases
+      # read main's cache. A failed cache upload doesn't fail the build.
       - name: Build wheels (mock/sim/docker/wheels.Dockerfile)
+        uses: docker/build-push-action@v6
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: >-
-          docker buildx build -f mock/sim/docker/wheels.Dockerfile
-          --build-arg "VERSION=$VERSION"
-          --target wheels --output type=local,dest=mock/sim/dist .
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: mock/sim/docker/wheels.Dockerfile
+          target: wheels
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          outputs: type=local,dest=mock/sim/dist
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -79,15 +88,16 @@ jobs:
           path: mock/sim/dist/*.whl
           if-no-files-found: error
 
-  # The macOS wheel is built but not run here: the hosted macOS runners are
-  # arm64, and an arm64 Python can't load an x86_64 extension.
+  # One runner per wheel, except macOS x86_64: GitHub's macOS runners are all
+  # Apple silicon now, and an arm64 Python can't load an x86_64 extension. The
+  # arm64 runners (ubuntu-24.04-arm, windows-11-arm) are free for public repos.
   test:
     name: Test wheel (${{ matrix.os }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, windows-11-arm, ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
