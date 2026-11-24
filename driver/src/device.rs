@@ -57,7 +57,7 @@ pub enum Packet {
 /// filter and callout (un)registration) must run at PASSIVE_LEVEL. A kernel mutex keeps the IRQL
 /// where it is, so the teardown (`shutdown`) and the filter resets (`reset_filters_and_inject`)
 /// take turns, and a reset sees the filters the teardown removed instead of adding them back.
-pub(crate) struct FilterEngineCell {
+pub struct FilterEngineCell {
     inner: KMutex<FilterEngine>,
 }
 
@@ -70,7 +70,7 @@ impl FilterEngineCell {
 
     /// Runs `f` with exclusive access to the filter engine. Must only be called at PASSIVE_LEVEL,
     /// and never from within `f`.
-    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
+    pub fn with<R>(&self, f: impl FnOnce(&mut FilterEngine) -> R) -> R {
         let mut filter_engine = self.inner.lock();
         f(&mut filter_engine)
     }
@@ -81,12 +81,12 @@ pub struct Device {
     // The device-facing API is `&self` (see `get_device`) so producer (callout)
     // and consumer (read) threads can share one `&Device` soundly. Every field
     // is interior-mutable; the filter engine through `FilterEngineCell`.
-    pub(crate) filter_engine: FilterEngineCell,
+    pub filter_engine: FilterEngineCell,
     pub(crate) pending_event: PendingEvent,
     pub(crate) event_queue: IOQueue<Event>,
-    pub(crate) packet_cache: IdCache,
-    pub(crate) connection_cache: ConnectionCache,
-    pub(crate) injector: Injector,
+    pub packet_cache: IdCache,
+    pub connection_cache: ConnectionCache,
+    pub injector: Injector,
     pub(crate) network_allocator: NetworkAllocator,
     /// Connections that were deferred without a completion handle and are waiting for the filter
     /// reset that releases them. See `reset_filters_and_inject`.

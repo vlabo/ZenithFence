@@ -71,7 +71,7 @@ impl Redirect for Packet {
 /// It also updates the checksums for the IP and transport layer headers.
 /// If the `unify` parameter is true, it sets the source and destination addresses to be the same.
 /// If the remote address is a loopback address, it sets the source address to the loopback address.
-fn redirect_outbound_packet(
+pub fn redirect_outbound_packet(
     packet: &mut [u8],
     remote_address: IpAddress,
     remote_port: u16,
@@ -153,7 +153,7 @@ fn redirect_outbound_packet(
 /// * `original_remote_address` - The original remote IP address of the packet.
 /// * `original_remote_port` - The original remote port of the packet.
 ///
-fn redirect_inbound_packet(
+pub fn redirect_inbound_packet(
     packet: &mut [u8],
     local_address: IpAddress,
     original_remote_address: IpAddress,

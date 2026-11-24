@@ -116,6 +116,12 @@ impl IdCache {
         return values.len();
     }
 
+    /// Ids of the packets currently waiting for a verdict, oldest first.
+    pub fn pending_ids(&self) -> Vec<u64> {
+        let values = self.values.read_lock();
+        return values.iter().map(|entry| entry.id).collect();
+    }
+
     /// Takes out every packet pushed at or before `cutoff_ms` (`get_monotonic_ms`).
     pub fn pop_expired(&self, cutoff_ms: u64) -> Vec<(Key, Packet)> {
         let mut expired = Vec::new();
@@ -144,6 +150,12 @@ impl IdCache {
         mem::swap(&mut *values, &mut new_values);
 
         return new_values;
+    }
+}
+
+impl Default for IdCache {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
