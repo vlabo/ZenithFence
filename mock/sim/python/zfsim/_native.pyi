@@ -321,6 +321,10 @@ class Sim:
     def reset(self) -> None:
         """Drop every tracked connection and pended packet and discard recorded
         injects, keeping the driver loaded."""
+    def advance_clock(self, ms: int) -> None:
+        """Move the driver's clock forward by `ms`, as if that much time had
+        passed. It keeps running from there and stays ahead for the rest of the
+        process (run such a test in a process of its own)."""
     def filter_engine(self) -> _FilterEngine:
         """Filter-engine registration: `{"committed": bool, "callouts":
         [(name, layer, filter_id), ...]}`."""

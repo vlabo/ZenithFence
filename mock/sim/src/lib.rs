@@ -1103,6 +1103,15 @@ impl Sim {
         Ok(())
     }
 
+    /// Move the driver's clock (`get_monotonic_ms`) forward by `ms`, as if that
+    /// much time had passed. It keeps running from there, and stays ahead for
+    /// the rest of the process: there is no turning it back.
+    fn advance_clock(&self, ms: u64) -> PyResult<()> {
+        self.require_open()?;
+        mock_wdk::utils::advance_mock_time_ms(ms);
+        Ok(())
+    }
+
     /// Filter-engine registration: `{"committed": bool, "callouts": [(name,
     /// layer, filter_id), ...]}`.
     fn filter_engine<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
