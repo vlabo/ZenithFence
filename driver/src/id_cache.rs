@@ -122,14 +122,16 @@ impl IdCache {
         return values.iter().map(|entry| entry.id).collect();
     }
 
-    /// Takes out every packet pushed at or before `cutoff_ms` (`get_monotonic_ms`).
+    /// Takes out every packet pushed before `cutoff_ms` (`get_monotonic_ms`). A cutoff of 0, which
+    /// a caller's saturating subtraction gives while the clock is younger than its window, takes
+    /// out nothing: no timestamp is below it, so a packet pushed at clock 0 is not old enough.
     pub fn pop_expired(&self, cutoff_ms: u64) -> Vec<(Key, Packet)> {
         let mut expired = Vec::new();
         let mut values = self.values.write_lock();
         // The oldest entries are at the front.
         while values
             .front()
-            .is_some_and(|entry| entry.queued_at_ms <= cutoff_ms)
+            .is_some_and(|entry| entry.queued_at_ms < cutoff_ms)
         {
             if let Some(entry) = values.pop_front() {
                 expired.push(entry.value);

@@ -190,6 +190,9 @@ impl Device {
     /// Blocks the packets that have waited `PACKET_VERDICT_TIMEOUT_MS` for a verdict.
     /// PASSIVE_LEVEL only.
     fn expire_unanswered_packets(&self) {
+        // The clock counts from boot, so it can be below the timeout when the driver loads early.
+        // Saturating makes the cutoff 0, which no timestamp is below (pop_expired): nothing is old
+        // enough yet.
         let cutoff = wdk::utils::get_monotonic_ms().saturating_sub(PACKET_VERDICT_TIMEOUT_MS);
         let expired = self.packet_cache.pop_expired(cutoff);
         if expired.is_empty() {
